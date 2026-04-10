@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="EMPTY_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/capy-toolkit/colorybara/pdf-color-separation/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/capy-toolkit/compressybara/pdf-compressor/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/capy-toolkit/hashybara/pdf-file-hashing/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/capy-toolkit/renderybara/pdf-fast-renderer/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/src/capy-toolkit/sizeybara/pdf-resizer/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/rbara/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/rbv/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/rustybara/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/rustybara/tests" isTestSource="true" />
+      <excludeFolder url="file://$MODULE_DIR$/src/capy-toolkit/colorybara/pdf-color-separation/target" />
+      <excludeFolder url="file://$MODULE_DIR$/src/capy-toolkit/compressybara/pdf-compressor/target" />
+      <excludeFolder url="file://$MODULE_DIR$/src/capy-toolkit/hashybara/pdf-file-hashing/target" />
+      <excludeFolder url="file://$MODULE_DIR$/src/capy-toolkit/renderybara/pdf-fast-renderer/target" />
+      <excludeFolder url="file://$MODULE_DIR$/src/capy-toolkit/sizeybara/pdf-resizer/target" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>

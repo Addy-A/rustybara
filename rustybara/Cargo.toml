@@ -1,0 +1,20 @@
+[package]
+name = "rustybara"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Prepress-focused PDF manipulation library for graphic designers and print operators"
+repository = "https://github.com/Addy-A/rustybara"
+
+[dependencies]
+lopdf = "0.40.0"
+pdfium-render = { version = "0.9.0", features = ["thread_safe"] }
+image = { version = "0.25.10", features = ["jpeg", "tiff", "png", "webp"] }
+webp = "0.3.1"
+rayon = "1.11.0"
+
+[features]
+color = [] # stubbed, planned for color/icc module
+
+[dev-dependencies]
+# test-only deps here as needed
