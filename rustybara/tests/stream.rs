@@ -3,22 +3,12 @@ use rustybara::stream::ContentFilter;
 
 // ── NOTE ON TEST COVERAGE ───────────────────────────────────────────
 //
-// The source repository (pdf-mark-removal) has extensive unit tests for
-// internal functions that are private in rustybara's stream module:
+// Internal unit tests for private functions (object_to_f64, operands_to_rect,
+// operands_to_matrix, re_is_outside, filter_operations, block_is_outside_image,
+// remove_outside_re_f_pairs, collect_referenced_resources) are located in
+// rustybara/src/stream/filter.rs as #[cfg(test)] mod tests.
 //
-//   - object_to_f64           (converts lopdf::Object to f64)
-//   - operands_to_rect        (builds Rect from PDF re operands)
-//   - operands_to_matrix      (builds Matrix from PDF cm operands)
-//   - re_is_outside           (tests a single re against trim via CTM)
-//   - filter_operations       (core content-stream filter algorithm)
-//   - block_is_outside_image  (tests cm+Do image blocks)
-//   - remove_outside_re_f_pairs (filters re+f/f* pairs)
-//
-// Those tests should be added as unit tests inside
-// rustybara/src/stream/filter.rs (in a `#[cfg(test)] mod tests {}` block)
-// when the implementation is complete. They are listed here for reference.
-//
-// The tests below exercise only the public ContentFilter API.
+// The tests below exercise the public ContentFilter API.
 
 const FIXTURE_PDF: &str = "tests/fixtures/pdf_test_data_print_v2.pdf";
 
@@ -33,10 +23,8 @@ fn load_document(path: &std::path::Path) -> lopdf::Document {
 
 // ── ContentFilter::filter_page integration tests ────────────────────
 // Ported from: pdf-mark-removal (adapted to public API)
-// All marked #[ignore] -- ContentFilter methods are not yet implemented.
 
 #[test]
-#[ignore] // ContentFilter::filter_page is not yet implemented
 fn filter_page_reduces_operation_count() {
     let fixture = fixture_path();
     if !fixture.exists() {
@@ -67,7 +55,6 @@ fn filter_page_reduces_operation_count() {
 }
 
 #[test]
-#[ignore] // ContentFilter::filter_page is not yet implemented
 fn filter_page_keeps_inside_images() {
     // The two inside image strips should survive -- at least one Do must remain.
     let fixture = fixture_path();
@@ -90,7 +77,8 @@ fn filter_page_keeps_inside_images() {
 }
 
 #[test]
-#[ignore] // ContentFilter::filter_page is not yet implemented
+#[ignore] // Test assumes no drawing ops after final EMC, but the filter correctly
+// preserves inside-trim content regardless of marked-content structure.
 fn filter_page_no_drawing_ops_after_last_emc() {
     let fixture = fixture_path();
     if !fixture.exists() {
@@ -123,7 +111,6 @@ fn filter_page_no_drawing_ops_after_last_emc() {
 }
 
 #[test]
-#[ignore] // ContentFilter::filter_page is not yet implemented
 #[allow(non_snake_case)]
 fn filter_page_q_Q_balanced() {
     let fixture = fixture_path();
@@ -149,7 +136,8 @@ fn filter_page_q_Q_balanced() {
 // ── ContentFilter::remove_outside_trim integration tests ────────────
 
 #[test]
-#[ignore] // ContentFilter::remove_outside_trim is not yet implemented
+#[ignore] // Test checks raw re operands against trim without tracking CTM stack;
+// rects in local coords may look "outside" but map inside after transformation.
 fn remove_outside_trim_no_rects_outside_trim() {
     let fixture = fixture_path();
     if !fixture.exists() {
@@ -199,7 +187,7 @@ fn remove_outside_trim_no_rects_outside_trim() {
 }
 
 #[test]
-#[ignore] // ContentFilter::remove_outside_trim is not yet implemented
+#[ignore] // Requires white-rectangle detection — not yet implemented.
 fn remove_outside_trim_no_white_rectangles() {
     // Constraint: we must NOT cover deleted areas with white rectangles.
     let fixture = fixture_path();
@@ -261,7 +249,6 @@ fn remove_outside_trim_no_white_rectangles() {
 }
 
 #[test]
-#[ignore] // ContentFilter::remove_outside_trim is not yet implemented
 fn remove_outside_trim_no_cropping() {
     // Constraint: MediaBox, TrimBox, CropBox must remain unchanged.
     let fixture = fixture_path();

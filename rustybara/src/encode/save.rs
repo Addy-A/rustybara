@@ -16,7 +16,8 @@ use std::path::Path;
 ///
 /// # Example
 ///
-/// ```rust
+/// ```
+/// use rustybara::encode::OutputFormat;
 /// let format = OutputFormat::Png;
 /// match format {
 ///     OutputFormat::Png => println!("Saving as PNG"),
@@ -70,19 +71,14 @@ impl OutputFormat {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```no_test
 /// use std::path::Path;
-/// use image::{DynamicImage, ImageFormat};
-/// use your_crate::{save, OutputFormat};
+/// use rustybara::encode::{save, OutputFormat};
 ///
-/// let image = DynamicImage::new_rgb8(100, 100);
+/// let image = image::DynamicImage::new_rgb8(100, 100);
 /// let path = Path::new("output.png");
 /// let format = OutputFormat::Png;
-///
-/// match save(&image, &path, &format) {
-///     Ok(()) => println!("Image saved successfully"),
-///     Err(e) => eprintln!("Failed to save image: {}", e),
-/// }
+/// save(&image, &path, &format).unwrap();
 /// ```
 pub fn save(image: &DynamicImage, path: &Path, format: &OutputFormat) -> image::ImageResult<()> {
     image.save_with_format(path, format.image_format())

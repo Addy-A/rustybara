@@ -23,21 +23,10 @@ pub trait PageRenderer {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// // Assuming `renderer` is a PdfRenderer instance
-    /// let config = RenderConfig::new()
-    ///     .set_scale_factor(2.0)
-    ///     .set_rotate_if_landscape(RotateValue::Degrees90);
-    ///
-    /// match renderer.render(&page, &config) {
-    ///     Ok(image) => {
-    ///         // Use the rendered image
-    ///         println!("Rendered image dimensions: {}x{}", image.width(), image.height());
-    ///     }
-    ///     Err(e) => {
-    ///         eprintln!("Failed to render page: {}", e);
-    ///     }
-    /// }
+    /// ```no_test
+    /// let config = RenderConfig::default();
+    /// let image = renderer.render(&page, &config)?;
+    /// println!("Rendered image dimensions: {}x{}", image.width(), image.height());
     /// ```
     ///
     /// # Note

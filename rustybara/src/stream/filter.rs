@@ -1,8 +1,9 @@
 use crate::geometry::{Matrix, Rect};
 use crate::pages::PageBoxes;
 use crate::pages::boxes::object_to_f64;
-use lopdf::Document;
 use lopdf::content::{Content, Operation};
+use lopdf::{Document, Object};
+use std::collections::HashSet;
 
 /// A filter for processing and filtering content based on specified criteria.
 ///
@@ -46,7 +47,7 @@ impl ContentFilter {
     /// defines the full page size including bleed area.
     pub fn remove_outside_trim(doc: &mut Document) -> Result<(), lopdf::Error> {
         let pages = doc.get_pages();
-        for (_, &page_id) in &pages {
+        for &page_id in pages.values() {
             let trim = PageBoxes::read(doc, page_id);
             Self::filter_page(doc, page_id, trim?.trim_or_media())?;
         }
@@ -96,15 +97,37 @@ impl ContentFilter {
     ) -> Result<(), lopdf::Error> {
         let content = doc.get_and_decode_page_content(page_id)?;
         let stream_ids = doc.get_page_contents(page_id);
-        let stream_id = stream_ids[0];
-        let filtered = filter_operations(&content.operations, Some(trim.clone()));
+        let filtered = filter_operations(&content.operations, Some(*trim));
         let new_content = Content {
             operations: filtered,
         };
         let bytes = new_content.encode()?;
-        if let Ok(lopdf::Object::Stream(stream)) = doc.get_object_mut(stream_id) {
+
+        // Write filtered content to the first stream
+        let stream_id = stream_ids[0];
+        if let Ok(Object::Stream(stream)) = doc.get_object_mut(stream_id) {
             stream.set_plain_content(bytes);
         }
+
+        // If the page had multiple content streams, clear the extras and
+        // collapse the Contents entry to a single reference so that
+        // re-decoding doesn't re-append the old (unfiltered) streams.
+        if stream_ids.len() > 1 {
+            for &extra_id in &stream_ids[1..] {
+                if let Ok(Object::Stream(s)) = doc.get_object_mut(extra_id) {
+                    s.set_plain_content(Vec::new());
+                }
+            }
+            // Replace the Contents array with a single reference
+            if let Ok(page_obj) = doc.get_object_mut(page_id)
+                && let Ok(dict) = page_obj.as_dict_mut()
+            {
+                dict.set("Contents", Object::Reference(stream_id));
+            }
+        }
+
+        let referenced = collect_referenced_resources(&new_content.operations);
+        prune_page_resources(doc, page_id, &referenced)?;
         Ok(())
     }
 }
@@ -181,7 +204,7 @@ fn subpath_bbox_is_outside(points: &[(f64, f64)], ctm: &Matrix, trim: &Rect) -> 
 /// # Panics
 ///
 /// May panic if there are fewer than 6 operands or if operand conversion fails
-fn operands_to_matrix(operands: &[lopdf::Object]) -> Matrix {
+pub fn operands_to_matrix(operands: &[lopdf::Object]) -> Matrix {
     let value: Vec<f64> = operands.iter().map(object_to_f64).collect();
     Matrix::from_values(value[0], value[1], value[2], value[3], value[4], value[5])
 }
@@ -209,7 +232,7 @@ fn operands_to_matrix(operands: &[lopdf::Object]) -> Matrix {
 /// # Panics
 ///
 /// Panics if the operands slice contains fewer than 4 elements or if object_to_f64 conversion fails.
-fn operands_to_rect(operands: &[lopdf::Object]) -> Rect {
+pub fn operands_to_rect(operands: &[lopdf::Object]) -> Rect {
     let value: Vec<f64> = operands.iter().map(object_to_f64).collect();
     Rect::from_corners(value[0], value[1], value[0] + value[2], value[1] + value[3])
 }
@@ -246,7 +269,7 @@ fn re_is_outside(operands: &[lopdf::Object], ctm: &Matrix, trim: &Rect) -> bool 
 ///
 /// * `operations` - A slice of `Operation` structs representing PDF graphics operations
 /// * `trim` - An optional `Rect` that defines the visible area. Operations outside this
-///            rectangle will be filtered out. If `None`, no filtering is applied.
+///   rectangle will be filtered out. If `None`, no filtering is applied.
 ///
 /// # Returns
 ///
@@ -352,9 +375,9 @@ fn filter_operations(operations: &[Operation], trim: Option<Rect>) -> Vec<Operat
 ///
 /// * `block` - A vector of `Operation` structs representing the operations to filter
 /// * `trim` - An optional reference to a `Rect` that defines the trimming boundaries.
-///            If `None`, no trimming is applied based on rectangle bounds.
+///   If `None`, no trimming is applied based on rectangle bounds.
 /// * `ctm_stack` - A slice of `Matrix` elements representing the current transformation matrix stack.
-///                 The last element is used as the base CTM for filtering decisions.
+///   The last element is used as the base CTM for filtering decisions.
 ///
 /// # Returns
 ///
@@ -415,7 +438,7 @@ fn filter_block(
 /// and the resulting transform has a large enough scale factor (determinant > 2.0), it
 /// transforms a unit rectangle and checks if it falls outside the trim area.
 fn block_is_outside_image(block: &[Operation], base_ctm: &Matrix, trim: Option<&Rect>) -> bool {
-    let mut ctm_stack: Vec<Matrix> = vec![base_ctm.clone()];
+    let mut ctm_stack: Vec<Matrix> = vec![*base_ctm];
     let mut has_cm_stack: Vec<bool> = vec![false];
 
     for operation in block {
@@ -444,16 +467,16 @@ fn block_is_outside_image(block: &[Operation], base_ctm: &Matrix, trim: Option<&
             }
             "Do" => {
                 let has_ctm = has_cm_stack.last().copied().unwrap_or(false);
-                if has_ctm {
-                    if let Some(trim) = trim {
-                        let ctm = ctm_stack.last().copied().unwrap_or(Matrix::identity());
-                        let det = (ctm.a * ctm.d - ctm.b * ctm.c).abs();
-                        if det > 2.0 {
-                            let unit_rect = Rect::new(0.0, 0.0, 1.0, 1.0);
-                            let page_rect = ctm.transform_rect(&unit_rect);
-                            if page_rect.is_outside(trim) {
-                                return true;
-                            }
+                if has_ctm
+                    && let Some(trim) = trim
+                {
+                    let ctm = ctm_stack.last().copied().unwrap_or(Matrix::identity());
+                    let det = (ctm.a * ctm.d - ctm.b * ctm.c).abs();
+                    if det > 2.0 {
+                        let unit_rect = Rect::new(0.0, 0.0, 1.0, 1.0);
+                        let page_rect = ctm.transform_rect(&unit_rect);
+                        if page_rect.is_outside(trim) {
+                            return true;
                         }
                     }
                 }
@@ -503,6 +526,7 @@ fn remove_outside_re_f_pairs(
     let mut i = 0;
 
     let mut in_path = false;
+    #[allow(clippy::type_complexity)]
     let mut subpaths: Vec<(Vec<Operation>, Vec<(f64, f64)>)> = Vec::new();
     let mut current_operation: Vec<Operation> = Vec::new();
     let mut current_points: Vec<(f64, f64)> = Vec::new();
@@ -588,7 +612,7 @@ fn remove_outside_re_f_pairs(
                         let mut kept: Vec<Operation> = Vec::new();
                         for (sub_ops, sub_pts) in subpaths.drain(..) {
                             let outside =
-                                trim.map_or(false, |t| subpath_bbox_is_outside(&sub_pts, &ctm, t));
+                                trim.is_some_and(|t| subpath_bbox_is_outside(&sub_pts, &ctm, t));
                             if !outside {
                                 kept.extend(sub_ops);
                             }
@@ -601,11 +625,11 @@ fn remove_outside_re_f_pairs(
                             });
                         }
                     } else {
-                        let all_outside = trim.map_or(false, |t| {
+                        let all_outside = trim.is_some_and(|t| {
                             !subpaths.is_empty()
                                 && subpaths
                                     .iter()
-                                    .all(|(_, pts)| subpath_bbox_is_outside(&pts, &ctm, t))
+                                    .all(|(_, pts)| subpath_bbox_is_outside(pts, &ctm, t))
                         });
                         if !all_outside {
                             for (ops, _) in subpaths.drain(..) {
@@ -701,4 +725,630 @@ fn remove_outside_re_f_pairs(
         }
     }
     result
+}
+
+fn collect_referenced_resources(operations: &[Operation]) -> HashSet<Vec<u8>> {
+    let mut names = HashSet::new();
+    for operation in operations {
+        match operation.operator.as_str() {
+            "gs" | "Do" | "cs" | "CS" | "scn" | "SCN" | "sh" => {
+                if let Some(lopdf::Object::Name(n)) = operation.operands.first() {
+                    names.insert(n.clone());
+                }
+            }
+            "Tf" => {
+                if let Some(lopdf::Object::Name(n)) = operation.operands.first() {
+                    names.insert(n.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+fn prune_page_resources(
+    document: &mut lopdf::Document,
+    page_id: lopdf::ObjectId,
+    referenced: &HashSet<Vec<u8>>,
+) -> lopdf::Result<()> {
+    let page = document.get_dictionary(page_id)?;
+    let resources_obj = page.get(b"Resources")?;
+
+    // Resources can be an indirect reference or an inline dictionary.
+    let resources_id = match resources_obj {
+        Object::Reference(id) => *id,
+        Object::Dictionary(_) => {
+            // Inline dict — it lives inside the page object itself.
+            // We need the page object's id to mutate it later.
+            page_id
+        }
+        _ => return Ok(()),
+    };
+    let is_inline = resources_id == page_id;
+
+    // Pass 1: collect indirect sub-dict ObjectIds and inline keys (immutable borrow)
+    let mut indirect_subs: Vec<lopdf::ObjectId> = Vec::new();
+    let mut inline_keys: Vec<Vec<u8>> = Vec::new();
+    {
+        let resources = if is_inline {
+            let page_dict = document.get_dictionary(page_id)?;
+            page_dict.get(b"Resources")?.as_dict()?
+        } else {
+            document.get_dictionary(resources_id)?
+        };
+        for key in &[b"ExtGState" as &[u8], b"Font", b"XObject", b"ColorSpace"] {
+            match resources.get(key) {
+                Ok(Object::Reference(sub_id)) => indirect_subs.push(*sub_id),
+                Ok(Object::Dictionary(_)) => inline_keys.push(key.to_vec()),
+                _ => {}
+            }
+        }
+    }
+
+    // Pass 2a: prune indirect sub-dictionaries
+    for sub_id in indirect_subs {
+        if let Ok(sub_dict) = document.get_object_mut(sub_id)?.as_dict_mut() {
+            let to_remove: Vec<Vec<u8>> = sub_dict
+                .iter()
+                .filter(|(name, _)| !referenced.contains(*name))
+                .map(|(name, _)| name.clone())
+                .collect();
+            for name in to_remove {
+                sub_dict.remove(&name);
+            }
+        }
+    }
+
+    // Pass 2b: prune inline sub-dictionaries
+    let resources_dict = if is_inline {
+        let page_dict = document.get_object_mut(page_id)?.as_dict_mut()?;
+        page_dict.get_mut(b"Resources")?.as_dict_mut()?
+    } else {
+        document.get_object_mut(resources_id)?.as_dict_mut()?
+    };
+    for key in &inline_keys {
+        if let Ok(Object::Dictionary(sub_dict)) = resources_dict.get_mut(key.as_slice()) {
+            let to_remove: Vec<Vec<u8>> = sub_dict
+                .iter()
+                .filter(|(name, _)| !referenced.contains(*name))
+                .map(|(name, _)| name.clone())
+                .collect();
+            for name in to_remove {
+                sub_dict.remove(&name);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pages::boxes::object_to_f64;
+    use lopdf::content::Operation;
+    use lopdf::Object;
+
+    // ── object_to_f64 ───────────────────────────────────────────────
+
+    #[test]
+    fn object_to_f64_integer() {
+        assert!((object_to_f64(&Object::Integer(42)) - 42.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn object_to_f64_real() {
+        assert!((object_to_f64(&Object::Real(3.14)) - 3.14 as f64).abs() < 0.01);
+    }
+
+    #[test]
+    fn object_to_f64_negative() {
+        assert!((object_to_f64(&Object::Integer(-7)) - (-7.0)).abs() < 1e-10);
+        assert!((object_to_f64(&Object::Real(-2.5)) - (-2.5 as f64)).abs() < 0.01);
+    }
+
+    // ── operands_to_rect ────────────────────────────────────────────
+
+    #[test]
+    fn operands_to_rect_basic() {
+        let ops = vec![
+            Object::Real(10.0),
+            Object::Real(20.0),
+            Object::Real(100.0),
+            Object::Real(50.0),
+        ];
+        let r = operands_to_rect(&ops);
+        assert!((r.x - 10.0).abs() < 1e-10);
+        assert!((r.y - 20.0).abs() < 1e-10);
+        // from_corners(10, 20, 110, 70) → width=100, height=50
+        assert!((r.width - 100.0).abs() < 1e-10);
+        assert!((r.height - 50.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn operands_to_rect_integers() {
+        let ops = vec![
+            Object::Integer(0),
+            Object::Integer(0),
+            Object::Integer(612),
+            Object::Integer(792),
+        ];
+        let r = operands_to_rect(&ops);
+        assert!((r.x - 0.0).abs() < 1e-10);
+        assert!((r.y - 0.0).abs() < 1e-10);
+        assert!((r.width - 612.0).abs() < 1e-10);
+        assert!((r.height - 792.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn operands_to_rect_negative_dims() {
+        // Negative width/height (common in PDF: re with negative w or h)
+        let ops = vec![
+            Object::Real(100.0),
+            Object::Real(200.0),
+            Object::Real(-50.0),
+            Object::Real(-30.0),
+        ];
+        let r = operands_to_rect(&ops);
+        // from_corners(100, 200, 50, 170) → normalised: x=50, y=170, w=50, h=30
+        assert!((r.x - 50.0).abs() < 1e-10);
+        assert!((r.y - 170.0).abs() < 1e-10);
+        assert!((r.width - 50.0).abs() < 1e-10);
+        assert!((r.height - 30.0).abs() < 1e-10);
+    }
+
+    // ── operands_to_matrix ──────────────────────────────────────────
+
+    #[test]
+    fn operands_to_matrix_identity() {
+        let ops = vec![
+            Object::Real(1.0),
+            Object::Real(0.0),
+            Object::Real(0.0),
+            Object::Real(1.0),
+            Object::Real(0.0),
+            Object::Real(0.0),
+        ];
+        let m = operands_to_matrix(&ops);
+        let (x, y) = m.transform_point(5.0, 7.0);
+        assert!((x - 5.0).abs() < 1e-10);
+        assert!((y - 7.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn operands_to_matrix_translation() {
+        let ops = vec![
+            Object::Real(1.0),
+            Object::Real(0.0),
+            Object::Real(0.0),
+            Object::Real(1.0),
+            Object::Real(100.0),
+            Object::Real(200.0),
+        ];
+        let m = operands_to_matrix(&ops);
+        let (x, y) = m.transform_point(0.0, 0.0);
+        assert!((x - 100.0).abs() < 1e-10);
+        assert!((y - 200.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn operands_to_matrix_known_ctm() {
+        // The actual CTM from the test PDF's PlacedPDF block
+        let ops = vec![
+            Object::Real(1.02883),
+            Object::Real(0.0),
+            Object::Real(0.0),
+            Object::Real(-1.03942),
+            Object::Real(336.0),
+            Object::Real(426.0),
+        ];
+        let m = operands_to_matrix(&ops);
+        assert!((m.a - 1.02883).abs() < 1e-5);
+        assert!((m.d - (-1.03942)).abs() < 1e-5);
+        assert!((m.e - 336.0).abs() < 1e-5);
+        assert!((m.f - 426.0).abs() < 1e-5);
+    }
+
+    // ── re_is_outside ───────────────────────────────────────────────
+
+    #[test]
+    fn re_is_outside_identity_ctm_inside() {
+        let ctm = Matrix::identity();
+        let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
+        // Rect fully inside
+        let ops = vec![
+            Object::Real(100.0),
+            Object::Real(100.0),
+            Object::Real(50.0),
+            Object::Real(50.0),
+        ];
+        assert!(!re_is_outside(&ops, &ctm, &trim));
+    }
+
+    #[test]
+    fn re_is_outside_identity_ctm_outside() {
+        let ctm = Matrix::identity();
+        let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
+        // Rect fully outside (right)
+        let ops = vec![
+            Object::Real(650.0),
+            Object::Real(100.0),
+            Object::Real(50.0),
+            Object::Real(50.0),
+        ];
+        assert!(re_is_outside(&ops, &ctm, &trim));
+    }
+
+    #[test]
+    fn re_is_outside_straddling() {
+        let ctm = Matrix::identity();
+        let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
+        // Straddling right edge
+        let ops = vec![
+            Object::Real(635.0),
+            Object::Real(100.0),
+            Object::Real(20.0),
+            Object::Real(10.0),
+        ];
+        assert!(!re_is_outside(&ops, &ctm, &trim));
+    }
+
+    #[test]
+    fn re_is_outside_with_ctm_transform() {
+        // CTM that translates +700 in x → pushes rect outside
+        let ctm = Matrix::from_values(1.0, 0.0, 0.0, 1.0, 700.0, 0.0);
+        let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
+        let ops = vec![
+            Object::Real(0.0),
+            Object::Real(100.0),
+            Object::Real(50.0),
+            Object::Real(50.0),
+        ];
+        assert!(re_is_outside(&ops, &ctm, &trim));
+    }
+
+    // ── subpath_bbox_is_outside ─────────────────────────────────────
+
+    #[test]
+    fn subpath_empty_is_not_outside() {
+        let ctm = Matrix::identity();
+        let trim = Rect::from_corners(0.0, 0.0, 100.0, 100.0);
+        assert!(!subpath_bbox_is_outside(&[], &ctm, &trim));
+    }
+
+    #[test]
+    fn subpath_inside() {
+        let ctm = Matrix::identity();
+        let trim = Rect::from_corners(0.0, 0.0, 100.0, 100.0);
+        let pts = vec![(10.0, 10.0), (50.0, 50.0), (30.0, 70.0)];
+        assert!(!subpath_bbox_is_outside(&pts, &ctm, &trim));
+    }
+
+    #[test]
+    fn subpath_outside() {
+        let ctm = Matrix::identity();
+        let trim = Rect::from_corners(0.0, 0.0, 100.0, 100.0);
+        let pts = vec![(200.0, 200.0), (300.0, 300.0)];
+        assert!(subpath_bbox_is_outside(&pts, &ctm, &trim));
+    }
+
+    #[test]
+    fn subpath_with_ctm_moves_inside_outside() {
+        // Points are at (10, 10) which is inside (0,0,100,100)
+        // But CTM translates by +200 → (210, 210) which is outside
+        let ctm = Matrix::from_values(1.0, 0.0, 0.0, 1.0, 200.0, 200.0);
+        let trim = Rect::from_corners(0.0, 0.0, 100.0, 100.0);
+        let pts = vec![(10.0, 10.0)];
+        assert!(subpath_bbox_is_outside(&pts, &ctm, &trim));
+    }
+
+    // ── filter_operations ───────────────────────────────────────────
+
+    fn op(operator: &str, operands: Vec<Object>) -> Operation {
+        Operation {
+            operator: operator.to_string(),
+            operands,
+        }
+    }
+
+    #[test]
+    fn filter_operations_no_trim_passes_all() {
+        let ops = vec![
+            op("q", vec![]),
+            op("re", vec![Object::Real(0.0), Object::Real(0.0), Object::Real(10.0), Object::Real(10.0)]),
+            op("f", vec![]),
+            op("Q", vec![]),
+        ];
+        let result = filter_operations(&ops, None);
+        assert_eq!(result.len(), ops.len());
+    }
+
+    #[test]
+    fn filter_operations_removes_outside_re_f() {
+        let trim = Some(Rect::from_corners(30.0, 30.0, 642.0, 822.0));
+        // A re+f completely outside the trim (x=700, way past right edge 642),
+        // wrapped in q/Q since filter_operations only filters inside blocks.
+        let ops = vec![
+            op("q", vec![]),
+            op("re", vec![Object::Real(700.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op("f", vec![]),
+            op("Q", vec![]),
+        ];
+        let result = filter_operations(&ops, trim);
+        // Should only contain balanced q/Q with the outside re+f removed
+        let non_q: Vec<_> = result.iter().filter(|o| o.operator != "q" && o.operator != "Q").collect();
+        assert!(non_q.is_empty(), "outside re+f should be removed, got {:?}", non_q.iter().map(|o| &o.operator).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn filter_operations_keeps_inside_re_f() {
+        let trim = Some(Rect::from_corners(30.0, 30.0, 642.0, 822.0));
+        let ops = vec![
+            op("re", vec![Object::Real(100.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op("f", vec![]),
+        ];
+        let result = filter_operations(&ops, trim);
+        assert_eq!(result.len(), 2, "inside re+f should be kept");
+    }
+
+    #[test]
+    fn filter_operations_block_all_outside_dropped() {
+        let trim = Some(Rect::from_corners(30.0, 30.0, 642.0, 822.0));
+        // q block with cm that moves things far outside + Do
+        let ops = vec![
+            op("q", vec![]),
+            op("cm", vec![
+                Object::Real(100.0), Object::Real(0.0),
+                Object::Real(0.0), Object::Real(100.0),
+                Object::Real(1000.0), Object::Real(1000.0),
+            ]),
+            op("Do", vec![Object::Name(b"Im1".to_vec())]),
+            op("Q", vec![]),
+        ];
+        let result = filter_operations(&ops, trim);
+        // Entire block should be dropped since the image is outside
+        assert!(
+            result.is_empty() || !result.iter().any(|o| o.operator == "Do"),
+            "outside image block should be dropped"
+        );
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn filter_operations_preserves_q_Q_balance() {
+        let trim = Some(Rect::from_corners(30.0, 30.0, 642.0, 822.0));
+        let ops = vec![
+            op("q", vec![]),
+            op("re", vec![Object::Real(100.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op("f", vec![]),
+            op("Q", vec![]),
+            op("q", vec![]),
+            op("re", vec![Object::Real(700.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op("f", vec![]),
+            op("Q", vec![]),
+        ];
+        let result = filter_operations(&ops, trim);
+        let q_count = result.iter().filter(|o| o.operator == "q").count();
+        let big_q_count = result.iter().filter(|o| o.operator == "Q").count();
+        assert_eq!(q_count, big_q_count, "q/Q must be balanced");
+    }
+
+    // ── block_is_outside_image ──────────────────────────────────────
+
+    #[test]
+    fn block_no_do_is_not_outside() {
+        let ctm = Matrix::identity();
+        let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
+        let block = vec![
+            op("q", vec![]),
+            op("re", vec![Object::Real(100.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op("f", vec![]),
+            op("Q", vec![]),
+        ];
+        assert!(!block_is_outside_image(&block, &ctm, Some(&trim)));
+    }
+
+    #[test]
+    fn block_image_outside_trim_detected() {
+        let ctm = Matrix::identity();
+        let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
+        // cm places a large image way outside
+        let block = vec![
+            op("q", vec![]),
+            op("cm", vec![
+                Object::Real(500.0), Object::Real(0.0),
+                Object::Real(0.0), Object::Real(500.0),
+                Object::Real(2000.0), Object::Real(2000.0),
+            ]),
+            op("Do", vec![Object::Name(b"Im1".to_vec())]),
+            op("Q", vec![]),
+        ];
+        assert!(block_is_outside_image(&block, &ctm, Some(&trim)));
+    }
+
+    #[test]
+    fn block_image_inside_trim_not_detected() {
+        let ctm = Matrix::identity();
+        let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
+        // cm places image inside trim
+        let block = vec![
+            op("q", vec![]),
+            op("cm", vec![
+                Object::Real(100.0), Object::Real(0.0),
+                Object::Real(0.0), Object::Real(100.0),
+                Object::Real(100.0), Object::Real(100.0),
+            ]),
+            op("Do", vec![Object::Name(b"Im1".to_vec())]),
+            op("Q", vec![]),
+        ];
+        assert!(!block_is_outside_image(&block, &ctm, Some(&trim)));
+    }
+
+    #[test]
+    fn block_no_trim_always_false() {
+        let ctm = Matrix::identity();
+        let block = vec![
+            op("q", vec![]),
+            op("cm", vec![
+                Object::Real(500.0), Object::Real(0.0),
+                Object::Real(0.0), Object::Real(500.0),
+                Object::Real(2000.0), Object::Real(2000.0),
+            ]),
+            op("Do", vec![Object::Name(b"Im1".to_vec())]),
+            op("Q", vec![]),
+        ];
+        assert!(!block_is_outside_image(&block, &ctm, None));
+    }
+
+    // ── collect_referenced_resources ────────────────────────────────
+
+    #[test]
+    fn collects_do_names() {
+        let ops = vec![
+            op("Do", vec![Object::Name(b"Im1".to_vec())]),
+            op("Do", vec![Object::Name(b"Im2".to_vec())]),
+        ];
+        let refs = collect_referenced_resources(&ops);
+        assert!(refs.contains(&b"Im1".to_vec()));
+        assert!(refs.contains(&b"Im2".to_vec()));
+        assert_eq!(refs.len(), 2);
+    }
+
+    #[test]
+    fn collects_gs_and_tf_names() {
+        let ops = vec![
+            op("gs", vec![Object::Name(b"GS0".to_vec())]),
+            op("Tf", vec![Object::Name(b"F1".to_vec()), Object::Integer(12)]),
+        ];
+        let refs = collect_referenced_resources(&ops);
+        assert!(refs.contains(&b"GS0".to_vec()));
+        assert!(refs.contains(&b"F1".to_vec()));
+    }
+
+    #[test]
+    fn collects_colorspace_names() {
+        let ops = vec![
+            op("cs", vec![Object::Name(b"CS0".to_vec())]),
+            op("CS", vec![Object::Name(b"CS1".to_vec())]),
+            op("scn", vec![Object::Name(b"P0".to_vec())]),
+            op("sh", vec![Object::Name(b"Sh0".to_vec())]),
+        ];
+        let refs = collect_referenced_resources(&ops);
+        assert!(refs.contains(&b"CS0".to_vec()));
+        assert!(refs.contains(&b"CS1".to_vec()));
+        assert!(refs.contains(&b"P0".to_vec()));
+        assert!(refs.contains(&b"Sh0".to_vec()));
+    }
+
+    #[test]
+    fn ignores_non_resource_ops() {
+        let ops = vec![
+            op("q", vec![]),
+            op("re", vec![Object::Real(0.0), Object::Real(0.0), Object::Real(10.0), Object::Real(10.0)]),
+            op("f", vec![]),
+            op("Q", vec![]),
+        ];
+        let refs = collect_referenced_resources(&ops);
+        assert!(refs.is_empty());
+    }
+
+    // ── remove_outside_re_f_pairs ───────────────────────────────────
+
+    #[test]
+    fn removes_outside_re_f_pair() {
+        let ctm = Matrix::identity();
+        let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
+        let block = vec![
+            op("q", vec![]),
+            op("re", vec![Object::Real(700.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op("f", vec![]),
+            op("Q", vec![]),
+        ];
+        let result = remove_outside_re_f_pairs(block, &ctm, Some(&trim));
+        // q/Q stay, but re+f should be removed
+        let has_re = result.iter().any(|o| o.operator == "re");
+        assert!(!has_re, "outside re should be removed");
+    }
+
+    #[test]
+    fn keeps_inside_re_f_pair() {
+        let ctm = Matrix::identity();
+        let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
+        let block = vec![
+            op("q", vec![]),
+            op("re", vec![Object::Real(100.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op("f", vec![]),
+            op("Q", vec![]),
+        ];
+        let result = remove_outside_re_f_pairs(block, &ctm, Some(&trim));
+        let has_re = result.iter().any(|o| o.operator == "re");
+        assert!(has_re, "inside re should be kept");
+    }
+
+    #[test]
+    fn preserves_clipping_paths() {
+        let ctm = Matrix::identity();
+        let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
+        // Even though rect is outside, W (clip) must force keeping it
+        let block = vec![
+            op("q", vec![]),
+            op("re", vec![Object::Real(700.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op("W", vec![]),
+            op("n", vec![]),
+            op("Q", vec![]),
+        ];
+        let result = remove_outside_re_f_pairs(block, &ctm, Some(&trim));
+        let has_w = result.iter().any(|o| o.operator == "W");
+        assert!(has_w, "clipping path must be preserved even if outside");
+    }
+
+    #[test]
+    fn no_trim_keeps_everything() {
+        let ctm = Matrix::identity();
+        let block = vec![
+            op("q", vec![]),
+            op("re", vec![Object::Real(700.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op("f", vec![]),
+            op("Q", vec![]),
+        ];
+        let result = remove_outside_re_f_pairs(block.clone(), &ctm, None);
+        assert_eq!(result.len(), block.len());
+    }
+
+    // ── filter_page (via fixture) ───────────────────────────────────
+
+    fn fixture() -> Option<(lopdf::Document, lopdf::ObjectId)> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/pdf_test_data_print_v2.pdf");
+        if !path.exists() {
+            return None;
+        }
+        let file = std::fs::File::open(&path).ok()?;
+        let doc = lopdf::Document::load_from(file).ok()?;
+        let page_id = doc.get_pages()[&1];
+        Some((doc, page_id))
+    }
+
+    #[test]
+    fn filter_page_reduces_operations() {
+        let Some((mut doc, page_id)) = fixture() else { return };
+        let before = doc.get_and_decode_page_content(page_id).unwrap().operations.len();
+
+        let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
+        ContentFilter::filter_page(&mut doc, page_id, &trim).unwrap();
+
+        let after = doc.get_and_decode_page_content(page_id).unwrap().operations.len();
+        assert!(after < before, "before={before}, after={after}");
+    }
+
+    #[test]
+    fn filter_page_keeps_at_least_one_do() {
+        let Some((mut doc, page_id)) = fixture() else { return };
+        let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
+        ContentFilter::filter_page(&mut doc, page_id, &trim).unwrap();
+
+        let content = doc.get_and_decode_page_content(page_id).unwrap();
+        let do_count = content.operations.iter().filter(|o| o.operator == "Do").count();
+        assert!(do_count >= 1, "at least one Do should survive");
+    }
 }

@@ -48,7 +48,6 @@ fn bleed_rect_expands_trim() {
 }
 
 // ── PageBoxes::read integration tests (require PDF fixture) ─────────
-// PageBoxes::read is not yet implemented (todo!()).
 // Ported from: pdf-mark-removal (TrimBox checkpoint)
 
 const FIXTURE_PDF: &str = "tests/fixtures/pdf_test_data_print_v2.pdf";
@@ -58,7 +57,6 @@ fn fixture_path() -> std::path::PathBuf {
 }
 
 #[test]
-#[ignore] // PageBoxes::read is not yet implemented
 fn page_boxes_read_trim_box_values() {
     let fixture = fixture_path();
     if !fixture.exists() {
@@ -86,7 +84,6 @@ fn page_boxes_read_trim_box_values() {
 }
 
 #[test]
-#[ignore] // PageBoxes::read is not yet implemented
 fn page_boxes_read_has_media_box() {
     let fixture = fixture_path();
     if !fixture.exists() {

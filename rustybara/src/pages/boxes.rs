@@ -1,6 +1,5 @@
 use crate::geometry::Rect;
 use lopdf::{Document, Object, ObjectId};
-use pdfium_render::prelude::{PdfPageAnnotationCommon, PdfPageObjectsCommon};
 
 /// Represents the various bounding boxes that define the dimensions and boundaries of a PDF page.
 ///
@@ -24,13 +23,16 @@ use pdfium_render::prelude::{PdfPageAnnotationCommon, PdfPageObjectsCommon};
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```no_test
+/// use rustybara::geometry::Rect;
+/// use rustybara::pages::PageBoxes;
 /// let page_boxes = PageBoxes {
 ///     media_box: Rect::new(0.0, 0.0, 612.0, 792.0), // 8.5" x 11" letter size
 ///     trim_box: Some(Rect::new(36.0, 36.0, 576.0, 756.0)), // 1/2" margins
 ///     bleed_box: None,
 ///     crop_box: Some(Rect::new(0.0, 0.0, 612.0, 792.0)),
 /// };
+/// ```
 pub struct PageBoxes {
     pub media_box: Rect,
     pub trim_box: Option<Rect>,
@@ -65,8 +67,7 @@ impl PageBoxes {
     ///
     /// # Example
     ///
-    /// ```rust
-    /// // Assuming you have a Document and page ObjectId
+    /// ```no_test
     /// let page_boxes = PageBoxes::read(&document, page_object_id)?;
     /// println!("MediaBox: {:?}", page_boxes.media_box);
     /// ```
@@ -76,19 +77,19 @@ impl PageBoxes {
         let trim_box = page_dict
             .get(b"TrimBox")
             .and_then(|obj| obj.as_array())
-            .map(arr_to_rect)
+            .map(|a| arr_to_rect(a))
             .ok();
 
         let bleed_box = page_dict
             .get(b"BleedBox")
             .and_then(|obj| obj.as_array())
-            .map(arr_to_rect)
+            .map(|a| arr_to_rect(a))
             .ok();
 
         let crop_box = page_dict
             .get(b"CropBox")
             .and_then(|obj| obj.as_array())
-            .map(arr_to_rect)
+            .map(|a| arr_to_rect(a))
             .ok();
 
         Ok(PageBoxes {
@@ -128,18 +129,16 @@ impl PageBoxes {
     ///
     /// # Example
     ///
-    /// ```rust
-    /// // Create a 100x100 rectangle and add 3pt bleed
-    /// let rect = Rect::new(0.0, 0.0, 100.0, 100.0);
-    /// let bleed_rect = rect.bleed_rect(3.0);
-    /// // Result: Rect with coordinates (-3.0, -3.0, 103.0, 103.0)
+    /// ```no_test
+    /// let page_boxes = PageBoxes::read(&document, page_id)?;
+    /// let bleed = page_boxes.bleed_rect(3.0);
     /// ```
     pub fn bleed_rect(&self, pts: f64) -> Rect {
         self.trim_or_media().expand(pts)
     }
 }
 
-fn arr_to_rect(arr: &Vec<Object>) -> Rect {
+fn arr_to_rect(arr: &[Object]) -> Rect {
     Rect::from_corners(
         object_to_f64(&arr[0]),
         object_to_f64(&arr[1]),

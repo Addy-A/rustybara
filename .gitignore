@@ -1,1 +1,3 @@
 /target
+/rustybara/tests/fixtures/secret_fixture
+.env

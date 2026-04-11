@@ -84,11 +84,28 @@ fn rect_expand_positive_bleed() {
     assert!((expanded.height - 810.0).abs() < 0.001); // 792 + 18
 }
 
-// NOTE: Rect::to_pdf_array does not exist in rustybara.
-// The following tests from pdf-trim-or-bleed-resizer are skipped:
-//   - test_to_pdf_array
-//   - test_to_pdf_array_matches_expand
-// If to_pdf_array is added, port these tests.
+#[test]
+fn test_to_pdf_array() {
+    let r = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
+    let arr = r.to_pdf_array();
+    assert_eq!(arr.len(), 4);
+    assert!((arr[0] - 30.0).abs() < 0.01);
+    assert!((arr[1] - 30.0).abs() < 0.01);
+    assert!((arr[2] - 642.0).abs() < 0.01);
+    assert!((arr[3] - 822.0).abs() < 0.01);
+}
+
+#[test]
+fn test_to_pdf_array_matches_expand() {
+    let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
+    let bleed_pts = 9.0;
+    let expanded = trim.expand(bleed_pts);
+    let arr = expanded.to_pdf_array();
+    assert!((arr[0] - 21.0).abs() < 0.01); // 30 - 9
+    assert!((arr[1] - 21.0).abs() < 0.01);
+    assert!((arr[2] - 651.0).abs() < 0.01); // 642 + 9
+    assert!((arr[3] - 831.0).abs() < 0.01); // 822 + 9
+}
 
 // ── Matrix unit tests ───────────────────────────────────────────────
 // Ported from: pdf-2-image, pdf-mark-removal

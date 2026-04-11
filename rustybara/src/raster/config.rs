@@ -6,6 +6,7 @@
 /// # Examples
 ///
 /// ```
+/// use rustybara::raster::RenderConfig;
 /// let config = RenderConfig {
 ///     dpi: 300,
 ///     render_annotations: true,
@@ -31,7 +32,7 @@ impl Default for RenderConfig {
 impl RenderConfig {
     /// Creates a new configuration preset optimized for prepress workflows.
     ///
-    /// This preset sets the DPI to 600, which is the standard resolution for high-quality
+    /// This preset sets the DPI to 300, which is a standard resolution for high-quality
     /// print production. All other configuration values fall back to their default settings.
     ///
     /// # Returns
@@ -40,13 +41,14 @@ impl RenderConfig {
     ///
     /// # Example
     ///
-    /// ```rust
-    /// let config = Config::prepress();
+    /// ```
+    /// use rustybara::raster::RenderConfig;
+    /// let config = RenderConfig::prepress();
     /// assert_eq!(config.dpi, 300);
     /// ```
     pub fn prepress() -> Self {
         Self {
-            dpi: 600,
+            dpi: 300,
             ..Self::default()
         }
     }

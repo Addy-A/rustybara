@@ -15,6 +15,7 @@ rayon = "1.11.0"
 
 [features]
 color = [] # stubbed, planned for color/icc module
+gpu = []   # stubbed, planned for GPU renderer
 
 [dev-dependencies]
 # test-only deps here as needed

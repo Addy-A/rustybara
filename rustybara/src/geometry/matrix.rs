@@ -27,6 +27,7 @@ use crate::geometry::rect::Rect;
 /// # Examples
 ///
 /// ```
+/// use rustybara::geometry::Matrix;
 /// let matrix = Matrix { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: 10.0, f: 20.0 };
 /// // This represents a translation by (10, 20)
 /// ```
@@ -130,8 +131,9 @@ impl Matrix {
     ///
     /// # Example
     ///
-    /// ```rust
-    /// // Assuming `transform` is a valid transformation object
+    /// ```
+    /// use rustybara::geometry::{Matrix, Rect};
+    /// let transform = Matrix::identity();
     /// let original_rect = Rect { x: 0.0, y: 0.0, width: 10.0, height: 5.0 };
     /// let transformed_rect = transform.transform_rect(&original_rect);
     /// ```
