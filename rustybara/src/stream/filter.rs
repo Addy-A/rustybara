@@ -31,7 +31,7 @@ impl ContentFilter {
     /// # Returns
     ///
     /// * `Ok(())` if the operation completes successfully
-    /// * `Err(lopdf::Error)` if there is an error reading or modifying the document
+    /// * `Err(Error)` if there is an error reading or modifying the document
     ///
     /// # Process
     ///
@@ -45,7 +45,7 @@ impl ContentFilter {
     /// This operation modifies the document in-place and cannot be undone.
     /// The trim box defines the finished page size after trimming, while the media box
     /// defines the full page size including bleed area.
-    pub fn remove_outside_trim(doc: &mut Document) -> Result<(), lopdf::Error> {
+    pub fn remove_outside_trim(doc: &mut Document) -> crate::Result<()> {
         let pages = doc.get_pages();
         for &page_id in pages.values() {
             let trim = PageBoxes::read(doc, page_id);
@@ -71,7 +71,7 @@ impl ContentFilter {
     /// # Returns
     ///
     /// * `Ok(())` if the filtering was successful
-    /// * `Err(lopdf::Error)` if there was an error accessing or modifying the PDF content
+    /// * `Err(Error)` if there was an error accessing or modifying the PDF content
     ///
     /// # Example
     ///
@@ -94,7 +94,7 @@ impl ContentFilter {
         doc: &mut Document,
         page_id: lopdf::ObjectId,
         trim: &Rect,
-    ) -> Result<(), lopdf::Error> {
+    ) -> crate::Result<()> {
         let content = doc.get_and_decode_page_content(page_id)?;
         let stream_ids = doc.get_page_contents(page_id);
         let filtered = filter_operations(&content.operations, Some(*trim));

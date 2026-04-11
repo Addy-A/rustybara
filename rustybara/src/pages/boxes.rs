@@ -54,9 +54,9 @@ impl PageBoxes {
     ///
     /// # Returns
     ///
-    /// Returns a `Result<PageBoxes, lopdf::Error>` where:
+    /// Returns a `Result<PageBoxes>` where:
     /// * `Ok(PageBoxes)` - Contains the extracted box information
-    /// * `Err(lopdf::Error)` - If the page cannot be found or parsed
+    /// * `Err(Error)` - If the page cannot be found or parsed
     ///
     /// # Box Types
     ///
@@ -71,7 +71,7 @@ impl PageBoxes {
     /// let page_boxes = PageBoxes::read(&document, page_object_id)?;
     /// println!("MediaBox: {:?}", page_boxes.media_box);
     /// ```
-    pub fn read(doc: &Document, page_id: ObjectId) -> Result<Self, lopdf::Error> {
+    pub fn read(doc: &Document, page_id: ObjectId) -> crate::Result<Self> {
         let page_dict = doc.get_dictionary(page_id)?;
         let media_box = arr_to_rect(page_dict.get(b"MediaBox")?.as_array()?);
         let trim_box = page_dict

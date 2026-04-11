@@ -18,7 +18,7 @@ pub trait PageRenderer {
     /// # Returns
     ///
     /// * `Ok(DynamicImage)` - The rendered page as a dynamic image on success
-    /// * `Err(PdfiumError)` - An error if the rendering process fails, such as invalid
+    /// * `Err(Error)` - An error if the rendering process fails, such as invalid
     ///   page data, unsupported configuration, or internal PDFium rendering errors
     ///
     /// # Examples
@@ -33,7 +33,7 @@ pub trait PageRenderer {
     ///
     /// The quality and performance of rendering may depend on the PDFium library version
     /// and the complexity of the PDF content being rendered.
-    fn render(&self, page: &PdfPage, config: &RenderConfig) -> Result<DynamicImage, PdfiumError>;
+    fn render(&self, page: &PdfPage, config: &RenderConfig) -> crate::Result<DynamicImage>;
 }
 
 /// A CPU-based renderer for generating images without GPU acceleration.
@@ -73,7 +73,7 @@ pub struct CpuRenderer;
 pub struct GpuRenderer; // Stubbed
 
 impl PageRenderer for CpuRenderer {
-    fn render(&self, page: &PdfPage, config: &RenderConfig) -> Result<DynamicImage, PdfiumError> {
+    fn render(&self, page: &PdfPage, config: &RenderConfig) -> crate::Result<DynamicImage> {
         let w = (page.width().value * config.dpi as f32 / 72.0) as i32;
         let h = (page.height().value * config.dpi as f32 / 72.0) as i32;
 
@@ -83,8 +83,8 @@ impl PageRenderer for CpuRenderer {
             .render_annotations(config.render_annotations)
             .render_form_data(config.render_form_data);
 
-        page.render_with_config(&render_cfg)
-            .and_then(|bitmap| bitmap.as_image())
+        Ok(page.render_with_config(&render_cfg)
+            .and_then(|bitmap| bitmap.as_image())?)
     }
 }
 
@@ -103,7 +103,7 @@ impl PageRenderer for CpuRenderer {
 /// # Returns
 ///
 /// * `Ok(DynamicImage)` - The rendered page as a dynamic image on success
-/// * `Err(PdfiumError)` - A `PdfiumError` if rendering fails
+/// * `Err(Error)` - An `Error` if rendering fails
 ///
 /// # Example
 ///
@@ -118,6 +118,6 @@ impl PageRenderer for CpuRenderer {
 ///
 /// let image = render_page(&page, &config)?;
 /// ```
-pub fn render_page(page: &PdfPage, config: &RenderConfig) -> Result<DynamicImage, PdfiumError> {
+pub fn render_page(page: &PdfPage, config: &RenderConfig) -> crate::Result<DynamicImage> {
     CpuRenderer.render(page, config)
 }

@@ -65,9 +65,9 @@ impl OutputFormat {
 ///
 /// # Returns
 ///
-/// Returns an `image::ImageResult<()>` which is:
+/// Returns a `Result<()>` which is:
 /// * `Ok(())` if the image was successfully saved
-/// * `Err(image::ImageError)` if there was an error during the save operation
+/// * `Err(Error)` if there was an error during the save operation
 ///
 /// # Examples
 ///
@@ -80,6 +80,7 @@ impl OutputFormat {
 /// let format = OutputFormat::Png;
 /// save(&image, &path, &format).unwrap();
 /// ```
-pub fn save(image: &DynamicImage, path: &Path, format: &OutputFormat) -> image::ImageResult<()> {
-    image.save_with_format(path, format.image_format())
+pub fn save(image: &DynamicImage, path: &Path, format: &OutputFormat) -> crate::Result<()> {
+    image.save_with_format(path, format.image_format())?;
+    Ok(())
 }
