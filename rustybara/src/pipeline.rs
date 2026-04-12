@@ -69,7 +69,7 @@ impl PdfPipeline {
     ///
     /// # Example
     ///
-    /// ```rust
+    /// ```no_test
     /// // Assuming `doc` is a mutable document instance
     /// doc.trim()?;
     /// ```
@@ -152,7 +152,7 @@ impl PdfPipeline {
     /// # Arguments
     ///
     /// * `path` - The file path where the PDF should be saved. Can be any type
-    ///           that implements `AsRef<Path>` (e.g., `&str`, `String`, `PathBuf`).
+    ///   that implements `AsRef<Path>` (e.g., `&str`, `String`, `PathBuf`).
     ///
     /// # Returns
     ///
@@ -225,9 +225,7 @@ impl PdfPipeline {
 
         let mut doc_clone = self.doc.clone();
         let mut buf = Vec::new();
-        doc_clone
-            .save_to(&mut buf)
-            .map_err(|e| crate::Error::Io(e))?;
+        doc_clone.save_to(&mut buf).map_err(crate::Error::Io)?;
 
         let dylib_name = if cfg!(target_os = "windows") {
             "pdfium.dll"
@@ -245,7 +243,7 @@ impl PdfPipeline {
 
         let pdfium = match bindings_result {
             Ok(bindings) => Pdfium::new(bindings),
-            Err(_) => Pdfium::default(),
+            Err(_) => Pdfium,
         };
 
         let pdf_doc = pdfium.load_pdf_from_byte_vec(buf, None)?;

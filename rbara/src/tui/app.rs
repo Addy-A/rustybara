@@ -23,8 +23,8 @@ pub struct ActionParams {
     pub export_dpi: u32,
 }
 
-impl ActionParams {
-    pub fn new() -> Self {
+impl Default for ActionParams {
+    fn default() -> Self {
         Self {
             bleed_pts: 9.0,
             export_format: "jpg".into(),
@@ -47,6 +47,12 @@ pub struct App {
     pub result_message: String,
 }
 
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl App {
     pub fn new() -> Self {
         Self {
@@ -54,7 +60,7 @@ impl App {
             running: true,
             menu_index: 0,
             selected_action: 0,
-            params: ActionParams::new(),
+            params: ActionParams::default(),
             overwrite: false,
             status_message: None,
             file_paths: Vec::new(),
@@ -98,7 +104,8 @@ impl App {
             }
             2 => {
                 self.selected_action = 2;
-                self.input_buffer = format!("{},{}", self.params.export_format, self.params.export_dpi);
+                self.input_buffer =
+                    format!("{},{}", self.params.export_format, self.params.export_dpi);
                 self.navigate(Screen::ParamInput);
             }
             3 => {

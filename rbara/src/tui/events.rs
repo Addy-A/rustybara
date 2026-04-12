@@ -14,12 +14,9 @@ pub fn handle_events(app: &mut App) -> io::Result<()> {
             return Ok(());
         }
 
-        match key.code {
-            KeyCode::Char('?') => {
-                app.toggle_help();
-                return Ok(());
-            }
-            _ => {}
+        if let KeyCode::Char('?') = key.code {
+            app.toggle_help();
+            return Ok(());
         }
 
         if app.show_help {
@@ -116,10 +113,10 @@ pub fn handle_events(app: &mut App) -> io::Result<()> {
                                     app.params.export_format = fmt;
                                 }
                             }
-                            if let Some(&dpi_str) = parts.get(1) {
-                                if let Ok(val) = dpi_str.trim().parse::<u32>() {
-                                    app.params.export_dpi = val;
-                                }
+                            if let Some(&dpi_str) = parts.get(1)
+                                && let Ok(val) = dpi_str.trim().parse::<u32>()
+                            {
+                                app.params.export_dpi = val;
                             }
                         }
                         _ => {}
@@ -132,14 +129,16 @@ pub fn handle_events(app: &mut App) -> io::Result<()> {
                 }
                 _ => {}
             },
-            Screen::Processing => match key.code {
-                KeyCode::Esc => app.navigate(Screen::Main),
-                _ => {}
-            },
-            Screen::Result => match key.code {
-                KeyCode::Enter | KeyCode::Esc => app.navigate(Screen::Main),
-                _ => {}
-            },
+            Screen::Processing => {
+                if key.code == KeyCode::Esc {
+                    app.navigate(Screen::Main)
+                };
+            }
+            Screen::Result => {
+                if key.code == KeyCode::Enter || key.code == KeyCode::Esc {
+                    app.navigate(Screen::Main)
+                };
+            }
         }
     }
 

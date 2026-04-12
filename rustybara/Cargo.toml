@@ -2,9 +2,14 @@
 name = "rustybara"
 version = "0.1.0"
 edition = "2024"
-license = "Apache-2.0"
+rust-version = "1.85"
+license = "LGPL-3.0-only"
 description = "Prepress-focused PDF manipulation library for graphic designers and print operators"
 repository = "https://github.com/Addy-A/rustybara"
+readme = "../README.md"
+keywords = ["pdf", "prepress", "trim", "bleed", "rasterize"]
+categories = ["multimedia::images"]
+exclude = ["tests/fixtures/"]
 
 [dependencies]
 lopdf = "0.40.0"

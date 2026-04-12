@@ -81,6 +81,17 @@ impl OutputFormat {
 /// save(&image, &path, &format).unwrap();
 /// ```
 pub fn save(image: &DynamicImage, path: &Path, format: &OutputFormat) -> crate::Result<()> {
-    image.save_with_format(path, format.image_format())?;
-    Ok(())
+    match format {
+        OutputFormat::WebP => {
+            let encoder = webp::Encoder::from_image(image)
+                .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
+            let memory = encoder.encode(75.0);
+            std::fs::write(path, &*memory)?;
+            Ok(())
+        }
+        _ => {
+            image.save_with_format(path, format.image_format())?;
+            Ok(())
+        }
+    }
 }

@@ -151,7 +151,7 @@ fn draw_result(frame: &mut Frame, app: &App) {
     let area = centered_rect(50, 7, frame.area());
     frame.render_widget(text, area);
 }
-fn draw_processing(frame: &mut Frame, app: &App) {
+fn draw_processing(frame: &mut Frame, _app: &App) {
     let text = Paragraph::new("Processing...")
         .alignment(Alignment::Center)
         .block(Block::default().borders(Borders::ALL).title(" Working "));

@@ -98,7 +98,7 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>)> {
                 let out = if overwrite {
                     path.clone()
                 } else {
-                    output_path(&path, &None, None)
+                    output_path(path, &None, None)
                 };
                 PdfPipeline::open(path)?
                     .resize(app.params.bleed_pts)?
