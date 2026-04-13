@@ -78,8 +78,7 @@ impl PageRenderer for CpuRenderer {
         let h = (page.height().value * config.dpi as f32 / 72.0) as i32;
 
         let render_cfg = PdfRenderConfig::new()
-            .set_target_width(w)
-            .set_target_height(h)
+            .set_target_size(w, h)
             .render_annotations(config.render_annotations)
             .render_form_data(config.render_form_data);
 

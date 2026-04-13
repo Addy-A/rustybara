@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 pub fn output_path(input: &Path, output_dir: &Option<PathBuf>, new_ext: Option<&str>) -> PathBuf {
     let dir = output_dir
         .as_deref()
-        .unwrap_or_else(|| input.parent().unwrap_or(Path::new(".")));
+        .unwrap_or_else(|| match input.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => Path::new("."),
+        });
     let stem = input.file_stem().unwrap_or_default();
     let ext =
         new_ext.unwrap_or_else(|| input.extension().and_then(|e| e.to_str()).unwrap_or("pdf"));

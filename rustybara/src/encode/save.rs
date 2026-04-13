@@ -80,17 +80,42 @@ impl OutputFormat {
 /// let format = OutputFormat::Png;
 /// save(&image, &path, &format).unwrap();
 /// ```
-pub fn save(image: &DynamicImage, path: &Path, format: &OutputFormat) -> crate::Result<()> {
+pub fn save(
+    image: &DynamicImage,
+    path: &Path,
+    format: &OutputFormat,
+    dpi: u32,
+) -> crate::Result<()> {
     match format {
+        OutputFormat::Jpg => {
+            let mut buf = std::io::BufWriter::new(std::fs::File::create(path)?);
+            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 90);
+            encoder.set_pixel_density(image::codecs::jpeg::PixelDensity {
+                density: (dpi as u16, dpi as u16),
+                unit: image::codecs::jpeg::PixelDensityUnit::Inches,
+            });
+            encoder.encode_image(image)?;
+            Ok(())
+        }
+        OutputFormat::Png => {
+            let mut buf = std::io::BufWriter::new(std::fs::File::create(path)?);
+            let encoder = image::codecs::png::PngEncoder::new_with_quality(
+                &mut buf,
+                image::codecs::png::CompressionType::Default,
+                image::codecs::png::FilterType::Adaptive,
+            );
+            image.write_with_encoder(encoder)?;
+            Ok(())
+        }
+        OutputFormat::Tiff => {
+            image.save_with_format(path, format.image_format())?;
+            Ok(())
+        }
         OutputFormat::WebP => {
             let encoder = webp::Encoder::from_image(image)
                 .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
             let memory = encoder.encode(75.0);
             std::fs::write(path, &*memory)?;
-            Ok(())
-        }
-        _ => {
-            image.save_with_format(path, format.image_format())?;
             Ok(())
         }
     }
