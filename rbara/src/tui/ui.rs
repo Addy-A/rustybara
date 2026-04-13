@@ -145,9 +145,23 @@ fn draw_param_input(frame: &mut Frame, app: &App) {
     frame.render_widget(hint, chunks[2]);
 }
 fn draw_result(frame: &mut Frame, app: &App) {
+    let (title, style) = if app.last_result_ok {
+        (
+            " Done ",
+            Style::default().fg(AppColor::PrimaryOrange.into()),
+        )
+    } else {
+        (" Error ", Style::default().fg(Color::Red))
+    };
+
     let text = Paragraph::new(format!("{}\n\nPress Enter to continue", app.result_message))
         .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).title(" Done "));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .style(style),
+        );
     let area = centered_rect(50, 7, frame.area());
     frame.render_widget(text, area);
 }

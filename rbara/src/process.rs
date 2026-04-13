@@ -2,7 +2,15 @@ use crate::tui::App;
 use rustybara::PdfPipeline;
 use std::path::{Path, PathBuf};
 
-pub fn output_path(input: &Path, output_dir: &Option<PathBuf>, new_ext: Option<&str>) -> PathBuf {
+pub fn output_path(
+    input: &Path,
+    output_dir: &Option<PathBuf>,
+    new_ext: Option<&str>,
+    overwrite: bool,
+) -> PathBuf {
+    if overwrite {
+        return input.to_path_buf();
+    }
     let dir = output_dir
         .as_deref()
         .unwrap_or_else(|| match input.parent() {
@@ -12,12 +20,16 @@ pub fn output_path(input: &Path, output_dir: &Option<PathBuf>, new_ext: Option<&
     let stem = input.file_stem().unwrap_or_default();
     let ext =
         new_ext.unwrap_or_else(|| input.extension().and_then(|e| e.to_str()).unwrap_or("pdf"));
-    dir.join(format!("{}_out.{}", (stem).to_string_lossy(), ext))
+    dir.join(format!("{}_processed.{}", (stem).to_string_lossy(), ext))
 }
 
-pub fn run_trim(input: Vec<PathBuf>, output: Option<PathBuf>) -> rustybara::Result<()> {
+pub fn run_trim(
+    input: Vec<PathBuf>,
+    output: Option<PathBuf>,
+    overwrite: bool,
+) -> rustybara::Result<()> {
     for path in &input {
-        let out = output_path(path, &output, None);
+        let out = output_path(path, &output, None, overwrite);
         PdfPipeline::open(path)?.trim()?.save_pdf(&out)?;
         println!("{} → {}", path.display(), out.display());
     }
@@ -28,9 +40,10 @@ pub fn run_resize(
     input: Vec<PathBuf>,
     bleed: f64,
     output: Option<PathBuf>,
+    overwrite: bool,
 ) -> rustybara::Result<()> {
     for path in &input {
-        let out = output_path(path, &output, None);
+        let out = output_path(path, &output, None, overwrite);
         PdfPipeline::open(path)?.resize(bleed)?.save_pdf(&out)?;
         println!("{} → {}", path.display(), out.display());
     }
@@ -42,6 +55,7 @@ pub fn run_image(
     output: Option<PathBuf>,
     format: Option<String>,
     dpi: u32,
+    overwrite: bool,
 ) -> rustybara::Result<()> {
     use rustybara::encode::OutputFormat;
     use rustybara::raster::RenderConfig;
@@ -62,7 +76,7 @@ pub fn run_image(
     for path in &input {
         let pipeline = PdfPipeline::open(path)?;
         for page in 0..pipeline.page_count() as u32 {
-            let out = output_path(path, &output, Some(fmt.extension()));
+            let out = output_path(path, &output, Some(fmt.extension()), overwrite);
             let out = if pipeline.page_count() > 1 {
                 let stem = out.file_stem().unwrap_or_default().to_string_lossy();
                 out.with_file_name(format!("{}_{}.{}", stem, page + 1, fmt.extension()))
@@ -88,7 +102,7 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>)> {
                 let out = if overwrite {
                     path.clone()
                 } else {
-                    output_path(path, &None, None)
+                    output_path(path, &None, None, false)
                 };
                 PdfPipeline::open(path)?.trim()?.save_pdf(&out)?;
                 out_paths.push(out);
@@ -101,7 +115,7 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>)> {
                 let out = if overwrite {
                     path.clone()
                 } else {
-                    output_path(path, &None, None)
+                    output_path(path, &None, None, false)
                 };
                 PdfPipeline::open(path)?
                     .resize(app.params.bleed_pts)?
@@ -136,7 +150,7 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>)> {
             for path in &input {
                 let pipeline = PdfPipeline::open(path)?;
                 for page in 0..pipeline.page_count() as u32 {
-                    let out = output_path(path, &None, Some(fmt.extension()));
+                    let out = output_path(path, &None, Some(fmt.extension()), false);
                     let out = if pipeline.page_count() > 1 {
                         let stem = out.file_stem().unwrap_or_default().to_string_lossy();
                         out.with_file_name(format!("{}_{}.{}", stem, page + 1, fmt.extension()))

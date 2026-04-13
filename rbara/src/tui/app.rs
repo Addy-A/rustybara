@@ -45,6 +45,7 @@ pub struct App {
     pub show_help: bool,
     pub input_buffer: String,
     pub result_message: String,
+    pub last_result_ok: bool,
 }
 
 impl Default for App {
@@ -67,6 +68,7 @@ impl App {
             show_help: false,
             input_buffer: String::new(),
             result_message: String::new(),
+            last_result_ok: false,
         }
     }
     pub fn tick(&mut self) {
@@ -123,19 +125,62 @@ impl App {
     }
 
     pub fn execute_action(&mut self) {
+        if self.file_paths.is_empty() {
+            self.result_message = "No files loaded. Press [c] to select files.".into();
+            self.navigate(Screen::FileSelect);
+            return;
+        }
+        let missing: Vec<_> = self.file_paths.iter().filter(|p| !p.exists()).collect();
+        if !missing.is_empty() {
+            self.result_message = format!(
+                "File not found:\n{}",
+                missing
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            self.navigate(Screen::FileSelect);
+            return;
+        }
+
         match run_tui_action(self) {
             Ok((msg, new_paths)) => {
                 self.result_message = msg;
+                self.last_result_ok = true;
                 if !new_paths.is_empty() {
                     self.file_paths = new_paths;
                 }
             }
-            Err(e) => self.result_message = format!("Error: {e}"),
+            Err(e) => {
+                self.result_message = friendly_error(e);
+                self.last_result_ok = false;
+            }
         }
         self.navigate(Screen::Result);
     }
 
     pub fn menu_items() -> &'static [&'static str] {
         MENU_ITEMS
+    }
+}
+
+fn friendly_error(e: rustybara::Error) -> String {
+    match &e {
+        rustybara::Error::Io(ioe) => match ioe.kind() {
+            std::io::ErrorKind::NotFound => format!("File not found: {e}"),
+            std::io::ErrorKind::PermissionDenied => format!("Permission denied: {e}"),
+            _ => format!("I/O error: {e}"),
+        },
+        rustybara::Error::Render(_) => format!(
+            "Render failed - Pdfium library not found or failed to initialize.\n\
+            Place pdfium.dll (or MAC OS: libpdfium.dylib) in the executable directory.\n\
+            Details: {e}"
+        ),
+        rustybara::Error::Pdf(_) => format!(
+            "Failed to parse PDF — the file may be corrupted or password-protected.\n\n\
+             Details: {e}"
+        ),
+        rustybara::Error::Image(_) => format!("Image encoding failed: {e}"),
     }
 }

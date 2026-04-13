@@ -28,18 +28,24 @@ fn main() {
 
 fn run_command(command: Command) {
     let result = match command {
-        Command::Trim { input, output } => run_trim(input, output),
+        Command::Trim {
+            input,
+            output,
+            overwrite,
+        } => run_trim(input, output, overwrite),
         Command::Resize {
             input,
             bleed,
             output,
-        } => run_resize(input, bleed, output),
+            overwrite,
+        } => run_resize(input, bleed, output, overwrite),
         Command::Image {
             input,
             output,
             format,
             dpi,
-        } => run_image(input, output, format, dpi),
+            overwrite,
+        } => run_image(input, output, format, dpi, overwrite),
     };
 
     if let Err(e) = result {

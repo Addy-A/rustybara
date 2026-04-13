@@ -80,17 +80,29 @@ pub fn handle_events(app: &mut App) -> io::Result<()> {
                                         .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
                                 })
                                 .collect();
-                        } else {
+                            if app.file_paths.is_empty() {
+                                app.status_message =
+                                    Some(format!("No PDF files found in directory").into());
+                            } else {
+                                let count = app.file_paths.len();
+                                app.status_message = Some(format!("{count} file(s) loaded"));
+                                app.input_buffer.clear();
+                                app.navigate(Screen::Main);
+                            }
+                        } else if !path.exists() {
+                            app.status_message =
+                                Some(format!("Path not found: {}", path.display()));
+                        } else if path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+                        {
                             app.file_paths = vec![path];
-                        }
-
-                        if app.file_paths.is_empty() {
-                            app.status_message = Some("No PDF files found".into());
-                        } else {
-                            let count = app.file_paths.len();
-                            app.status_message = Some(format!("{count} file(s) loaded"));
+                            app.status_message = Some("1 file(s) loaded".into());
                             app.input_buffer.clear();
                             app.navigate(Screen::Main);
+                        } else {
+                            app.status_message = Some("Not a PDF file".into());
                         }
                     }
                 }

@@ -147,7 +147,7 @@ fn arr_to_rect(arr: &[Object]) -> Rect {
     )
 }
 
-pub fn object_to_f64(obj: &lopdf::Object) -> f64 {
+pub(crate) fn object_to_f64(obj: &lopdf::Object) -> f64 {
     match obj {
         lopdf::Object::Integer(i) => *i as f64,
         lopdf::Object::Real(r) => *r as f64,
