@@ -68,12 +68,17 @@ pub fn handle_events(app: &mut App) -> io::Result<()> {
                 KeyCode::Enter => {
                     if !app.input_buffer.is_empty() {
                         let trimmed = app.input_buffer.trim().trim_matches('"');
-                        let path = PathBuf::from(trimmed);
+                        let unescaped = trimmed.replace("\\ ", " ");
+                        let path = PathBuf::from(&unescaped);
                         if path.is_dir() {
                             app.file_paths = std::fs::read_dir(&path)?
                                 .filter_map(|e| e.ok())
                                 .map(|e| e.path())
-                                .filter(|p| p.extension().is_some_and(|ext| ext == "pdf"))
+                                .filter(|p| {
+                                    p.extension()
+                                        .and_then(|e| e.to_str())
+                                        .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+                                })
                                 .collect();
                         } else {
                             app.file_paths = vec![path];

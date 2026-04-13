@@ -28,7 +28,7 @@ pub enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        #[arg(long, default_value_t = 9.0)]
+        #[arg(short, long, default_value_t = 9.0)]
         bleed: f64,
     },
     Image {

@@ -294,7 +294,7 @@ impl PdfPipeline {
         config: &RenderConfig,
     ) -> crate::Result<()> {
         let image = self.render_page(page_num, config)?;
-        crate::encode::save(&image, path.as_ref(), format)?;
+        crate::encode::save(&image, path.as_ref(), format, config.dpi)?;
         Ok(())
     }
 }
