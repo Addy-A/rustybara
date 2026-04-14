@@ -359,6 +359,7 @@ fn filter_operations(operations: &[Operation], trim: Option<Rect>) -> Vec<Operat
             }
         }
     }
+    let output = remove_outside_re_f_pairs(output, &Matrix::identity(), trim.as_ref());
 
     output
 }
@@ -467,9 +468,7 @@ fn block_is_outside_image(block: &[Operation], base_ctm: &Matrix, trim: Option<&
             }
             "Do" => {
                 let has_ctm = has_cm_stack.last().copied().unwrap_or(false);
-                if has_ctm
-                    && let Some(trim) = trim
-                {
+                if has_ctm && let Some(trim) = trim {
                     let ctm = ctm_stack.last().copied().unwrap_or(Matrix::identity());
                     let det = (ctm.a * ctm.d - ctm.b * ctm.c).abs();
                     if det > 2.0 {
@@ -826,8 +825,8 @@ fn prune_page_resources(
 mod tests {
     use super::*;
     use crate::pages::boxes::object_to_f64;
-    use lopdf::content::Operation;
     use lopdf::Object;
+    use lopdf::content::Operation;
 
     // ── object_to_f64 ───────────────────────────────────────────────
 
@@ -1055,7 +1054,15 @@ mod tests {
     fn filter_operations_no_trim_passes_all() {
         let ops = vec![
             op("q", vec![]),
-            op("re", vec![Object::Real(0.0), Object::Real(0.0), Object::Real(10.0), Object::Real(10.0)]),
+            op(
+                "re",
+                vec![
+                    Object::Real(0.0),
+                    Object::Real(0.0),
+                    Object::Real(10.0),
+                    Object::Real(10.0),
+                ],
+            ),
             op("f", vec![]),
             op("Q", vec![]),
         ];
@@ -1070,21 +1077,44 @@ mod tests {
         // wrapped in q/Q since filter_operations only filters inside blocks.
         let ops = vec![
             op("q", vec![]),
-            op("re", vec![Object::Real(700.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op(
+                "re",
+                vec![
+                    Object::Real(700.0),
+                    Object::Real(100.0),
+                    Object::Real(50.0),
+                    Object::Real(50.0),
+                ],
+            ),
             op("f", vec![]),
             op("Q", vec![]),
         ];
         let result = filter_operations(&ops, trim);
         // Should only contain balanced q/Q with the outside re+f removed
-        let non_q: Vec<_> = result.iter().filter(|o| o.operator != "q" && o.operator != "Q").collect();
-        assert!(non_q.is_empty(), "outside re+f should be removed, got {:?}", non_q.iter().map(|o| &o.operator).collect::<Vec<_>>());
+        let non_q: Vec<_> = result
+            .iter()
+            .filter(|o| o.operator != "q" && o.operator != "Q")
+            .collect();
+        assert!(
+            non_q.is_empty(),
+            "outside re+f should be removed, got {:?}",
+            non_q.iter().map(|o| &o.operator).collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn filter_operations_keeps_inside_re_f() {
         let trim = Some(Rect::from_corners(30.0, 30.0, 642.0, 822.0));
         let ops = vec![
-            op("re", vec![Object::Real(100.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op(
+                "re",
+                vec![
+                    Object::Real(100.0),
+                    Object::Real(100.0),
+                    Object::Real(50.0),
+                    Object::Real(50.0),
+                ],
+            ),
             op("f", vec![]),
         ];
         let result = filter_operations(&ops, trim);
@@ -1097,11 +1127,17 @@ mod tests {
         // q block with cm that moves things far outside + Do
         let ops = vec![
             op("q", vec![]),
-            op("cm", vec![
-                Object::Real(100.0), Object::Real(0.0),
-                Object::Real(0.0), Object::Real(100.0),
-                Object::Real(1000.0), Object::Real(1000.0),
-            ]),
+            op(
+                "cm",
+                vec![
+                    Object::Real(100.0),
+                    Object::Real(0.0),
+                    Object::Real(0.0),
+                    Object::Real(100.0),
+                    Object::Real(1000.0),
+                    Object::Real(1000.0),
+                ],
+            ),
             op("Do", vec![Object::Name(b"Im1".to_vec())]),
             op("Q", vec![]),
         ];
@@ -1119,11 +1155,27 @@ mod tests {
         let trim = Some(Rect::from_corners(30.0, 30.0, 642.0, 822.0));
         let ops = vec![
             op("q", vec![]),
-            op("re", vec![Object::Real(100.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op(
+                "re",
+                vec![
+                    Object::Real(100.0),
+                    Object::Real(100.0),
+                    Object::Real(50.0),
+                    Object::Real(50.0),
+                ],
+            ),
             op("f", vec![]),
             op("Q", vec![]),
             op("q", vec![]),
-            op("re", vec![Object::Real(700.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op(
+                "re",
+                vec![
+                    Object::Real(700.0),
+                    Object::Real(100.0),
+                    Object::Real(50.0),
+                    Object::Real(50.0),
+                ],
+            ),
             op("f", vec![]),
             op("Q", vec![]),
         ];
@@ -1141,7 +1193,15 @@ mod tests {
         let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
         let block = vec![
             op("q", vec![]),
-            op("re", vec![Object::Real(100.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op(
+                "re",
+                vec![
+                    Object::Real(100.0),
+                    Object::Real(100.0),
+                    Object::Real(50.0),
+                    Object::Real(50.0),
+                ],
+            ),
             op("f", vec![]),
             op("Q", vec![]),
         ];
@@ -1155,11 +1215,17 @@ mod tests {
         // cm places a large image way outside
         let block = vec![
             op("q", vec![]),
-            op("cm", vec![
-                Object::Real(500.0), Object::Real(0.0),
-                Object::Real(0.0), Object::Real(500.0),
-                Object::Real(2000.0), Object::Real(2000.0),
-            ]),
+            op(
+                "cm",
+                vec![
+                    Object::Real(500.0),
+                    Object::Real(0.0),
+                    Object::Real(0.0),
+                    Object::Real(500.0),
+                    Object::Real(2000.0),
+                    Object::Real(2000.0),
+                ],
+            ),
             op("Do", vec![Object::Name(b"Im1".to_vec())]),
             op("Q", vec![]),
         ];
@@ -1173,11 +1239,17 @@ mod tests {
         // cm places image inside trim
         let block = vec![
             op("q", vec![]),
-            op("cm", vec![
-                Object::Real(100.0), Object::Real(0.0),
-                Object::Real(0.0), Object::Real(100.0),
-                Object::Real(100.0), Object::Real(100.0),
-            ]),
+            op(
+                "cm",
+                vec![
+                    Object::Real(100.0),
+                    Object::Real(0.0),
+                    Object::Real(0.0),
+                    Object::Real(100.0),
+                    Object::Real(100.0),
+                    Object::Real(100.0),
+                ],
+            ),
             op("Do", vec![Object::Name(b"Im1".to_vec())]),
             op("Q", vec![]),
         ];
@@ -1189,11 +1261,17 @@ mod tests {
         let ctm = Matrix::identity();
         let block = vec![
             op("q", vec![]),
-            op("cm", vec![
-                Object::Real(500.0), Object::Real(0.0),
-                Object::Real(0.0), Object::Real(500.0),
-                Object::Real(2000.0), Object::Real(2000.0),
-            ]),
+            op(
+                "cm",
+                vec![
+                    Object::Real(500.0),
+                    Object::Real(0.0),
+                    Object::Real(0.0),
+                    Object::Real(500.0),
+                    Object::Real(2000.0),
+                    Object::Real(2000.0),
+                ],
+            ),
             op("Do", vec![Object::Name(b"Im1".to_vec())]),
             op("Q", vec![]),
         ];
@@ -1218,7 +1296,10 @@ mod tests {
     fn collects_gs_and_tf_names() {
         let ops = vec![
             op("gs", vec![Object::Name(b"GS0".to_vec())]),
-            op("Tf", vec![Object::Name(b"F1".to_vec()), Object::Integer(12)]),
+            op(
+                "Tf",
+                vec![Object::Name(b"F1".to_vec()), Object::Integer(12)],
+            ),
         ];
         let refs = collect_referenced_resources(&ops);
         assert!(refs.contains(&b"GS0".to_vec()));
@@ -1244,7 +1325,15 @@ mod tests {
     fn ignores_non_resource_ops() {
         let ops = vec![
             op("q", vec![]),
-            op("re", vec![Object::Real(0.0), Object::Real(0.0), Object::Real(10.0), Object::Real(10.0)]),
+            op(
+                "re",
+                vec![
+                    Object::Real(0.0),
+                    Object::Real(0.0),
+                    Object::Real(10.0),
+                    Object::Real(10.0),
+                ],
+            ),
             op("f", vec![]),
             op("Q", vec![]),
         ];
@@ -1260,7 +1349,15 @@ mod tests {
         let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
         let block = vec![
             op("q", vec![]),
-            op("re", vec![Object::Real(700.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op(
+                "re",
+                vec![
+                    Object::Real(700.0),
+                    Object::Real(100.0),
+                    Object::Real(50.0),
+                    Object::Real(50.0),
+                ],
+            ),
             op("f", vec![]),
             op("Q", vec![]),
         ];
@@ -1276,7 +1373,15 @@ mod tests {
         let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
         let block = vec![
             op("q", vec![]),
-            op("re", vec![Object::Real(100.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op(
+                "re",
+                vec![
+                    Object::Real(100.0),
+                    Object::Real(100.0),
+                    Object::Real(50.0),
+                    Object::Real(50.0),
+                ],
+            ),
             op("f", vec![]),
             op("Q", vec![]),
         ];
@@ -1292,7 +1397,15 @@ mod tests {
         // Even though rect is outside, W (clip) must force keeping it
         let block = vec![
             op("q", vec![]),
-            op("re", vec![Object::Real(700.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op(
+                "re",
+                vec![
+                    Object::Real(700.0),
+                    Object::Real(100.0),
+                    Object::Real(50.0),
+                    Object::Real(50.0),
+                ],
+            ),
             op("W", vec![]),
             op("n", vec![]),
             op("Q", vec![]),
@@ -1307,7 +1420,15 @@ mod tests {
         let ctm = Matrix::identity();
         let block = vec![
             op("q", vec![]),
-            op("re", vec![Object::Real(700.0), Object::Real(100.0), Object::Real(50.0), Object::Real(50.0)]),
+            op(
+                "re",
+                vec![
+                    Object::Real(700.0),
+                    Object::Real(100.0),
+                    Object::Real(50.0),
+                    Object::Real(50.0),
+                ],
+            ),
             op("f", vec![]),
             op("Q", vec![]),
         ];
@@ -1331,24 +1452,40 @@ mod tests {
 
     #[test]
     fn filter_page_reduces_operations() {
-        let Some((mut doc, page_id)) = fixture() else { return };
-        let before = doc.get_and_decode_page_content(page_id).unwrap().operations.len();
+        let Some((mut doc, page_id)) = fixture() else {
+            return;
+        };
+        let before = doc
+            .get_and_decode_page_content(page_id)
+            .unwrap()
+            .operations
+            .len();
 
         let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
         ContentFilter::filter_page(&mut doc, page_id, &trim).unwrap();
 
-        let after = doc.get_and_decode_page_content(page_id).unwrap().operations.len();
+        let after = doc
+            .get_and_decode_page_content(page_id)
+            .unwrap()
+            .operations
+            .len();
         assert!(after < before, "before={before}, after={after}");
     }
 
     #[test]
     fn filter_page_keeps_at_least_one_do() {
-        let Some((mut doc, page_id)) = fixture() else { return };
+        let Some((mut doc, page_id)) = fixture() else {
+            return;
+        };
         let trim = Rect::from_corners(30.0, 30.0, 642.0, 822.0);
         ContentFilter::filter_page(&mut doc, page_id, &trim).unwrap();
 
         let content = doc.get_and_decode_page_content(page_id).unwrap();
-        let do_count = content.operations.iter().filter(|o| o.operator == "Do").count();
+        let do_count = content
+            .operations
+            .iter()
+            .filter(|o| o.operator == "Do")
+            .count();
         assert!(do_count >= 1, "at least one Do should survive");
     }
 }
