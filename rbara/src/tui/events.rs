@@ -1,4 +1,4 @@
-use crate::tui::app::MenuAction;
+use crate::tui::app::{MenuAction, OutputChoice};
 use crate::tui::{App, Screen};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use std::io;
@@ -96,6 +96,48 @@ pub fn handle_events(app: &mut App) -> io::Result<()> {
                 KeyCode::Backspace => {
                     app.input_buffer.pop();
                 }
+                _ => {}
+            },
+            Screen::OutputSelect => match key.code {
+                KeyCode::Up | KeyCode::Down => {
+                    app.output_choice = match app.output_choice {
+                        OutputChoice::Same => OutputChoice::New,
+                        OutputChoice::New => OutputChoice::Same,
+                    }
+                }
+                KeyCode::Enter => {
+                    match app.output_choice {
+                        OutputChoice::Same => {
+                            app.output_dir = None;
+                            app.status_message = Some("Output: same location".into());
+                        }
+                        OutputChoice::New => {
+                            let trimmed = app.input_buffer.trim().trim_matches('"');
+                            let path = PathBuf::from(&trimmed);
+                            if path.is_dir() {
+                                app.status_message = Some(format!("Output: {}", path.display()));
+                                app.output_dir = Some(path);
+                            } else {
+                                app.status_message =
+                                    Some(format!("{} is not a directory", path.display()));
+                                return Ok(());
+                            }
+                        }
+                    }
+                    app.input_buffer.clear();
+                    app.navigate(Screen::Main);
+                }
+                KeyCode::Char(c) => {
+                    if matches!(app.output_choice, OutputChoice::New) {
+                        app.input_buffer.push(c);
+                    }
+                }
+                KeyCode::Backspace => {
+                    if matches!(app.output_choice, OutputChoice::New) {
+                        app.input_buffer.pop();
+                    }
+                }
+                KeyCode::Esc => app.navigate(Screen::Main),
                 _ => {}
             },
             Screen::ParamInput => match key.code {

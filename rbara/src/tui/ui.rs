@@ -34,6 +34,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     match app.screen {
         Screen::Main => draw_main(frame, app),
         Screen::FileSelect => draw_file_select(frame, app),
+        Screen::OutputSelect => draw_output_input(frame, app),
         Screen::ParamInput => draw_param_input(frame, app),
         Screen::Processing => draw_processing(frame, app),
         Screen::Result => draw_result(frame, app),
@@ -115,6 +116,67 @@ fn draw_file_select(frame: &mut Frame, app: &App) {
         " Enter to confirm • Esc to go back"
     };
     let hint = Paragraph::new(hint_text).style(Style::default().fg(Color::DarkGray));
+    frame.render_widget(hint, chunks[2]);
+}
+fn draw_output_input(frame: &mut Frame, app: &App) {
+    use crate::tui::app::OutputChoice;
+
+    let chunks = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .split(frame.area());
+
+    let title = Paragraph::new(" Output Location")
+        .style(Style::default().fg(AppColor::PrimaryOrange.into()).bold())
+        .block(Block::default().borders(Borders::BOTTOM));
+    frame.render_widget(title, chunks[0]);
+
+    let same_style = if matches!(app.output_choice, OutputChoice::Same) {
+        Style::default()
+            .fg(Color::Black)
+            .bg(AppColor::PrimaryOrange.into())
+            .bold()
+    } else {
+        Style::default()
+    };
+    let new_style = if matches!(app.output_choice, OutputChoice::New) {
+        Style::default()
+            .fg(Color::Black)
+            .bg(AppColor::PrimaryOrange.into())
+            .bold()
+    } else {
+        Style::default()
+    };
+
+    let current = app
+        .output_dir
+        .as_ref()
+        .map(|p| format!(" (current: {})", p.display()))
+        .unwrap_or_default();
+
+    let items = vec![
+        ListItem::new(format!(" Same location (_processed suffix){current}")).style(same_style),
+        ListItem::new(" New location").style(new_style),
+    ];
+    let mut list_area = chunks[1];
+
+    // If "New" is selected, split the content area for list + path input
+    if matches!(app.output_choice, OutputChoice::New) {
+        let inner = Layout::vertical([Constraint::Length(3), Constraint::Min(0)]).split(chunks[1]);
+        list_area = inner[0];
+
+        let path_input = Paragraph::new(format!("   Path: {}", app.input_buffer))
+            .block(Block::default().padding(Padding::top(1)));
+        frame.render_widget(path_input, inner[1]);
+    }
+
+    let menu = List::new(items).block(Block::default().padding(Padding::top(1)));
+    frame.render_widget(menu, list_area);
+
+    let hint = Paragraph::new(" ↑/↓ to choose • Enter to confirm • Esc to cancel")
+        .style(Style::default().fg(Color::DarkGray));
     frame.render_widget(hint, chunks[2]);
 }
 fn draw_param_input(frame: &mut Frame, app: &App) {

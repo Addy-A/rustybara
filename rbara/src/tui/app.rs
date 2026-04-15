@@ -9,10 +9,23 @@ pub enum MenuAction {
     RemapColors,
     PreviewPage,
     ToggleOverwrite,
+    OutputPath,
     ChangeFiles,
     Quit,
 }
 
+pub enum Screen {
+    Main,
+    FileSelect,
+    OutputSelect,
+    ParamInput,
+    Processing,
+    Result,
+}
+pub enum OutputChoice {
+    Same,
+    New,
+}
 impl MenuAction {
     pub const ALL: &[MenuAction] = &[
         Self::TrimMarks,
@@ -21,6 +34,7 @@ impl MenuAction {
         Self::RemapColors,
         Self::PreviewPage,
         Self::ToggleOverwrite,
+        Self::OutputPath,
         Self::ChangeFiles,
         Self::Quit,
     ];
@@ -33,6 +47,7 @@ impl MenuAction {
             Self::RemapColors => "Remap Colors",
             Self::PreviewPage => "Preview Page",
             Self::ToggleOverwrite => "Toggle Overwrite",
+            Self::OutputPath => "Output Path",
             Self::ChangeFiles => "Change Files",
             Self::Quit => "Quit",
         }
@@ -46,6 +61,7 @@ impl MenuAction {
             Self::RemapColors => Some('m'),
             Self::PreviewPage => Some('p'),
             Self::ToggleOverwrite => Some('o'),
+            Self::OutputPath => Some('/'),
             Self::ChangeFiles => Some('f'),
             Self::Quit => Some('q'),
         }
@@ -58,15 +74,6 @@ impl MenuAction {
         )
     }
 }
-
-pub enum Screen {
-    Main,
-    FileSelect,
-    ParamInput,
-    Processing,
-    Result,
-}
-
 pub struct ActionParams {
     pub bleed_pts: f64,
     pub export_format: String,
@@ -96,6 +103,8 @@ pub struct App {
     pub selected_action: MenuAction,
     pub params: ActionParams,
     pub overwrite: bool,
+    pub output_dir: Option<PathBuf>,
+    pub output_choice: OutputChoice,
     pub status_message: Option<String>,
     pub file_paths: Vec<PathBuf>,
     pub show_help: bool,
@@ -119,6 +128,8 @@ impl App {
             selected_action: MenuAction::ChangeFiles,
             params: ActionParams::default(),
             overwrite: false,
+            output_dir: None,
+            output_choice: OutputChoice::Same,
             status_message: None,
             file_paths: Vec::new(),
             show_help: false,
@@ -155,6 +166,14 @@ impl App {
 
         match action {
             MenuAction::ToggleOverwrite => self.overwrite = !self.overwrite,
+            MenuAction::OutputPath => {
+                self.input_buffer = self
+                    .output_dir
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                self.navigate(Screen::OutputSelect);
+            }
             MenuAction::ChangeFiles => {
                 self.input_buffer.clear();
                 self.navigate(Screen::FileSelect);
@@ -245,7 +264,6 @@ fn friendly_error(e: rustybara::Error) -> String {
              Details: {e}"
         ),
         rustybara::Error::Image(_) => format!("Image encoding failed: {e}"),
-        #[cfg(feature = "color")]
         rustybara::Error::Color(_) => format!("Color conversion failed: {e}"),
         _ => format!("Unknown error: {e}"),
     }

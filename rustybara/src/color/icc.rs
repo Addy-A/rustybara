@@ -1,4 +1,3 @@
-use std::io::Bytes;
 use std::path::Path;
 
 /// Represents different color space models used in digital imaging and printing.

@@ -1,7 +1,5 @@
-use crate::cli::Command::ColorRemap;
 use crate::tui::App;
 use crate::tui::app::MenuAction;
-use clap::arg;
 use rustybara::PdfPipeline;
 use std::path::{Path, PathBuf};
 
@@ -119,6 +117,7 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>)> {
     let input: Vec<PathBuf> = app.file_paths.to_vec();
     let count = input.len();
     let overwrite = app.overwrite;
+    let output_dir = &app.output_dir;
 
     match app.selected_action {
         MenuAction::TrimMarks => {
@@ -127,7 +126,7 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>)> {
                 let out = if overwrite {
                     path.clone()
                 } else {
-                    output_path(path, &None, None, false)
+                    output_path(path, output_dir, None, false)
                 };
                 PdfPipeline::open(path)?.trim()?.save_pdf(&out)?;
                 out_paths.push(out);
@@ -140,7 +139,7 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>)> {
                 let out = if overwrite {
                     path.clone()
                 } else {
-                    output_path(path, &None, None, false)
+                    output_path(path, output_dir, None, false)
                 };
                 PdfPipeline::open(path)?
                     .resize(app.params.bleed_pts)?
@@ -175,7 +174,7 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>)> {
             for path in &input {
                 let pipeline = PdfPipeline::open(path)?;
                 for page in 0..pipeline.page_count() as u32 {
-                    let out = output_path(path, &None, Some(fmt.extension()), false);
+                    let out = output_path(path, output_dir, Some(fmt.extension()), false);
                     let out = if pipeline.page_count() > 1 {
                         let stem = out.file_stem().unwrap_or_default().to_string_lossy();
                         out.with_file_name(format!("{}_{}.{}", stem, page + 1, fmt.extension()))
@@ -200,7 +199,7 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>)> {
                 let out = if overwrite {
                     path.clone()
                 } else {
-                    output_path(path, &None, None, false)
+                    output_path(path, output_dir, None, false)
                 };
                 PdfPipeline::open(path)?
                     .remap_color(
