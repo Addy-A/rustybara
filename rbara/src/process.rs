@@ -1,4 +1,7 @@
+use crate::cli::Command::ColorRemap;
 use crate::tui::App;
+use crate::tui::app::MenuAction;
+use clap::arg;
 use rustybara::PdfPipeline;
 use std::path::{Path, PathBuf};
 
@@ -50,6 +53,28 @@ pub fn run_resize(
     Ok(())
 }
 
+pub fn run_remap_color(
+    input: Vec<PathBuf>,
+    output: Option<PathBuf>,
+    from_vec: Vec<f64>,
+    to_vec: Vec<f64>,
+    tolerance: f64,
+    overwrite: bool,
+) -> rustybara::Result<()> {
+    let from: [f64; 4] = from_vec
+        .try_into()
+        .expect("--from requires exactly 4 values");
+    let to: [f64; 4] = to_vec.try_into().expect("--to requires exactly 4 values");
+    for path in &input {
+        let out = output_path(path, &output, None, overwrite);
+        PdfPipeline::open(path)?
+            .remap_color(from, to, tolerance)?
+            .save_pdf(&out)?;
+        println!("{} → {}", path.display(), out.display());
+    }
+    Ok(())
+}
+
 pub fn run_image(
     input: Vec<PathBuf>,
     output: Option<PathBuf>,
@@ -96,7 +121,7 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>)> {
     let overwrite = app.overwrite;
 
     match app.selected_action {
-        0 => {
+        MenuAction::TrimMarks => {
             let mut out_paths = Vec::new();
             for path in &input {
                 let out = if overwrite {
@@ -109,7 +134,7 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>)> {
             }
             Ok((format!("Trimmed {count} file(s)"), out_paths))
         }
-        1 => {
+        MenuAction::ResizeToBleed => {
             let mut out_paths = Vec::new();
             for path in &input {
                 let out = if overwrite {
@@ -130,7 +155,7 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>)> {
                 out_paths,
             ))
         }
-        2 => {
+        MenuAction::ExportImages => {
             use rustybara::encode::OutputFormat;
             use rustybara::raster::RenderConfig;
 
@@ -169,7 +194,26 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>)> {
                 Vec::new(),
             ))
         }
-        3 => Ok(("Preview not yet implemented".into(), Vec::new())),
+        MenuAction::RemapColors => {
+            let mut out_paths = Vec::new();
+            for path in &input {
+                let out = if overwrite {
+                    path.clone()
+                } else {
+                    output_path(path, &None, None, false)
+                };
+                PdfPipeline::open(path)?
+                    .remap_color(
+                        app.params.remap_from,
+                        app.params.remap_to,
+                        app.params.remap_tolerance,
+                    )?
+                    .save_pdf(&out)?;
+                out_paths.push(out);
+            }
+            Ok((format!("Remapped {count} file(s)"), out_paths))
+        }
+        MenuAction::PreviewPage => Ok(("Preview not yet implemented".into(), Vec::new())),
         _ => Ok(("Unknown action".into(), Vec::new())),
     }
 }

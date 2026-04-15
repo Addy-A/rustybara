@@ -958,6 +958,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "dunce"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+
+[[package]]
 name = "ecb"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1014,7 +1020,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1542,7 +1548,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1690,6 +1696,29 @@ name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
+name = "lcms2"
+version = "6.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b75877b724685dd49310bdbadbf973fc69b1d01992a6d4a861b928fc3943f87b"
+dependencies = [
+ "bytemuck",
+ "foreign-types",
+ "lcms2-sys",
+]
+
+[[package]]
+name = "lcms2-sys"
+version = "4.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c2604b23848ca80b2add60f0fb2270fd980e622c25029b6597fa01cfd5f8d5f"
+dependencies = [
+ "cc",
+ "dunce",
+ "libc",
+ "pkg-config",
+]
 
 [[package]]
 name = "leb128fmt"
@@ -3207,7 +3236,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3221,6 +3250,7 @@ name = "rustybara"
 version = "0.1.2"
 dependencies = [
  "image",
+ "lcms2",
  "lopdf",
  "pdfium-render",
  "rayon",
@@ -4453,7 +4483,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

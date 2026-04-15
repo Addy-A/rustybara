@@ -4,7 +4,7 @@ pub mod tui;
 
 use clap::Parser;
 use cli::{Cli, Command};
-use process::{run_image, run_resize, run_trim};
+use process::{run_image, run_remap_color, run_resize, run_trim};
 
 fn main() {
     let cli = Cli::parse();
@@ -46,6 +46,14 @@ fn run_command(command: Command) {
             dpi,
             overwrite,
         } => run_image(input, output, format, dpi, overwrite),
+        Command::ColorRemap {
+            input,
+            output,
+            from,
+            to,
+            tolerance,
+            overwrite,
+        } => run_remap_color(input, output, from, to, tolerance, overwrite),
     };
 
     if let Err(e) = result {

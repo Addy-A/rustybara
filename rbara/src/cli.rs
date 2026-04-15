@@ -53,4 +53,23 @@ pub enum Command {
         #[arg(long)]
         overwrite: bool,
     },
+    ColorRemap {
+        #[arg(required = true)]
+        input: Vec<PathBuf>,
+
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        #[arg(long, num_args = 4, value_names = ["C", "M", "Y", "K"])]
+        from: Vec<f64>,
+
+        #[arg(long, num_args = 4, value_names = ["C", "M", "Y", "K"])]
+        to: Vec<f64>,
+
+        #[arg(long)]
+        tolerance: f64,
+
+        #[arg(long)]
+        overwrite: bool,
+    },
 }

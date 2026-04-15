@@ -1,3 +1,4 @@
+use crate::tui::app::MenuAction;
 use crate::tui::{App, Screen};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use std::io;
@@ -29,30 +30,15 @@ pub fn handle_events(app: &mut App) -> io::Result<()> {
                 KeyCode::Up => app.menu_up(),
                 KeyCode::Down => app.menu_down(),
                 KeyCode::Enter => app.select_menu_item(),
-                KeyCode::Char('q') => app.quit(),
-                KeyCode::Char('m') => {
-                    app.menu_index = 0;
-                    app.select_menu_item();
-                }
-                KeyCode::Char('r') => {
-                    app.menu_index = 1;
-                    app.select_menu_item();
-                }
-                KeyCode::Char('x') => {
-                    app.menu_index = 2;
-                    app.select_menu_item();
-                }
-                KeyCode::Char('p') => {
-                    app.menu_index = 3;
-                    app.select_menu_item();
-                }
-                KeyCode::Char('o') => {
-                    app.menu_index = 4;
-                    app.select_menu_item();
-                }
-                KeyCode::Char('c') => {
-                    app.menu_index = 5;
-                    app.select_menu_item();
+                KeyCode::Char(ch) => {
+                    if ch == 'q' {
+                        app.quit();
+                        return Ok(());
+                    }
+                    if let Some(idx) = MenuAction::ALL.iter().position(|a| a.hotkey() == Some(ch)) {
+                        app.menu_index = idx;
+                        app.select_menu_item();
+                    }
                 }
                 KeyCode::Esc => app.quit(),
                 _ => {}
@@ -117,12 +103,12 @@ pub fn handle_events(app: &mut App) -> io::Result<()> {
                 KeyCode::Enter => {
                     let trimmed = app.input_buffer.trim().to_string();
                     match app.selected_action {
-                        1 => {
+                        MenuAction::ResizeToBleed => {
                             if let Ok(val) = trimmed.parse::<f64>() {
                                 app.params.bleed_pts = val;
                             }
                         }
-                        2 => {
+                        MenuAction::ExportImages => {
                             let parts: Vec<&str> = trimmed.split(',').collect();
                             if let Some(&fmt) = parts.first() {
                                 let fmt = fmt.trim().to_lowercase();
@@ -136,6 +122,33 @@ pub fn handle_events(app: &mut App) -> io::Result<()> {
                                 app.params.export_dpi = val;
                             }
                         }
+                        MenuAction::RemapColors => {
+                            let parts: Vec<&str> = trimmed.split(',').collect();
+                            if let Some(from_str) = parts.first() {
+                                let vals: Vec<f64> = from_str
+                                    .split_whitespace()
+                                    .filter_map(|v| v.parse().ok())
+                                    .collect();
+                                if vals.len() == 4 {
+                                    app.params.remap_from = [vals[0], vals[1], vals[2], vals[3]];
+                                }
+                            }
+                            if let Some(to_str) = parts.get(1) {
+                                let vals: Vec<f64> = to_str
+                                    .split_whitespace()
+                                    .filter_map(|v| v.parse().ok())
+                                    .collect();
+                                if vals.len() == 4 {
+                                    app.params.remap_to = [vals[0], vals[1], vals[2], vals[3]];
+                                }
+                            }
+                            if let Some(tol_str) = parts.get(2) {
+                                if let Ok(val) = tol_str.trim().parse::<f64>() {
+                                    app.params.remap_tolerance = val;
+                                }
+                            }
+                        }
+                        MenuAction::PreviewPage => {}
                         _ => {}
                     }
                     app.execute_action();

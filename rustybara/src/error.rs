@@ -1,4 +1,6 @@
 use image::ImageError;
+#[cfg(feature = "color")]
+use lcms2::Error as Lcms2Error;
 use lopdf::Error as LopdfError;
 use pdfium_render::prelude::PdfiumError;
 use std::fmt;
@@ -39,6 +41,8 @@ pub enum Error {
     Io(IoError),
     Pdf(LopdfError),
     Render(PdfiumError),
+    #[cfg(feature = "color")]
+    Color(Lcms2Error),
 }
 
 impl fmt::Display for Error {
@@ -48,6 +52,8 @@ impl fmt::Display for Error {
             Error::Io(e) => write!(f, "I/O error: {e}"),
             Error::Pdf(e) => write!(f, "PDF error: {e}"),
             Error::Render(e) => write!(f, "Render error: {e}"),
+            #[cfg(feature = "color")]
+            Error::Color(e) => write!(f, "Color error: {e}"),
         }
     }
 }
@@ -59,6 +65,8 @@ impl std::error::Error for Error {
             Error::Io(e) => Some(e),
             Error::Pdf(e) => Some(e),
             Error::Render(e) => Some(e),
+            #[cfg(feature = "color")]
+            Error::Color(e) => Some(e),
         }
     }
 }
@@ -84,5 +92,12 @@ impl From<LopdfError> for Error {
 impl From<PdfiumError> for Error {
     fn from(err: PdfiumError) -> Self {
         Error::Render(err)
+    }
+}
+
+#[cfg(feature = "color")]
+impl From<Lcms2Error> for Error {
+    fn from(err: Lcms2Error) -> Self {
+        Error::Color(err)
     }
 }

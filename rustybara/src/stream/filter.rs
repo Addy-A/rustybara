@@ -726,6 +726,40 @@ fn remove_outside_re_f_pairs(
     result
 }
 
+/// Collects all referenced resources from a slice of PDF operations.
+///
+/// This function iterates through the provided operations and extracts resource names
+/// that are referenced by specific PDF operators. The collected resource names are
+/// returned as a HashSet of byte vectors.
+///
+/// # Arguments
+///
+/// * `operations` - A slice of `Operation` structs to analyze for resource references
+///
+/// # Returns
+///
+/// A `HashSet<Vec<u8>>` containing the names of all referenced resources. Each resource
+/// name is stored as a cloned byte vector from the PDF name objects.
+///
+/// # Resource Types Collected
+///
+/// The function collects resources referenced by the following PDF operators:
+/// - `"gs"` - Graphics state operator
+/// - `"Do"` - XObject invocation operator
+/// - `"cs"` - Color space operator (fill)
+/// - `"CS"` - Color space operator (stroke)
+/// - `"scn"` - Color operator (fill)
+/// - `"SCN"` - Color operator (stroke)
+/// - `"sh"` - Shading pattern operator
+/// - `"Tf"` - Font selection operator
+///
+/// # Examples
+///
+/// ```no_test
+/// // Assuming operations is a Vec<Operation>
+/// let resources = collect_referenced_resources(&operations);
+/// println!("Found {} referenced resources", resources.len());
+/// ```
 fn collect_referenced_resources(operations: &[Operation]) -> HashSet<Vec<u8>> {
     let mut names = HashSet::new();
     for operation in operations {
@@ -746,6 +780,35 @@ fn collect_referenced_resources(operations: &[Operation]) -> HashSet<Vec<u8>> {
     names
 }
 
+/// Prunes unused resources from a PDF page's resource dictionary.
+///
+/// This function removes entries from the resource dictionaries (`ExtGState`, `Font`,
+/// `XObject`, `ColorSpace`) that are not referenced by the provided `referenced` set.
+/// It handles both inline and indirect resource dictionaries.
+///
+/// # Parameters
+///
+/// - `document`: A mutable reference to the PDF document being processed.
+/// - `page_id`: The object ID of the page whose resources are to be pruned.
+/// - `referenced`: A set of byte vectors representing names of resources that are still in use.
+///
+/// # Returns
+///
+/// - `Ok(())` on successful pruning.
+/// - An error if any PDF object access fails during processing.
+///
+/// # Behavior
+///
+/// 1. Retrieves the page's resource dictionary, handling both direct and indirect references.
+/// 2. Collects all indirect and inline sub-dictionary keys (`ExtGState`, `Font`, etc.).
+/// 3. Removes unreferenced entries from:
+///    - Indirect sub-dictionaries (e.g., `/ExtGState << ... >>` as separate objects)
+///    - Inline sub-dictionaries (embedded within the Resources dictionary)
+///
+/// # Note
+///
+/// This function modifies the document in place and does not return anything except
+/// a result indicating success or failure.
 fn prune_page_resources(
     document: &mut lopdf::Document,
     page_id: lopdf::ObjectId,

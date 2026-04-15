@@ -1,14 +1,64 @@
 use crate::process::run_tui_action;
 use std::path::PathBuf;
-const MENU_ITEMS: &[&str] = &[
-    "Trim Marks",
-    "Resize to Bleed",
-    "Export Images",
-    "Preview Page",
-    "Toggle Overwrite",
-    "Change Files",
-    "Quit",
-];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuAction {
+    TrimMarks,
+    ResizeToBleed,
+    ExportImages,
+    RemapColors,
+    PreviewPage,
+    ToggleOverwrite,
+    ChangeFiles,
+    Quit,
+}
+
+impl MenuAction {
+    pub const ALL: &[MenuAction] = &[
+        Self::TrimMarks,
+        Self::ResizeToBleed,
+        Self::ExportImages,
+        Self::RemapColors,
+        Self::PreviewPage,
+        Self::ToggleOverwrite,
+        Self::ChangeFiles,
+        Self::Quit,
+    ];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::TrimMarks => "Trim Marks",
+            Self::ResizeToBleed => "Resize to Bleed",
+            Self::ExportImages => "Export Images",
+            Self::RemapColors => "Remap Colors",
+            Self::PreviewPage => "Preview Page",
+            Self::ToggleOverwrite => "Toggle Overwrite",
+            Self::ChangeFiles => "Change Files",
+            Self::Quit => "Quit",
+        }
+    }
+
+    pub fn hotkey(self) -> Option<char> {
+        match self {
+            Self::TrimMarks => Some('t'),
+            Self::ResizeToBleed => Some('r'),
+            Self::ExportImages => Some('x'),
+            Self::RemapColors => Some('m'),
+            Self::PreviewPage => Some('p'),
+            Self::ToggleOverwrite => Some('o'),
+            Self::ChangeFiles => Some('f'),
+            Self::Quit => Some('q'),
+        }
+    }
+
+    pub fn needs_params(self) -> bool {
+        matches!(
+            self,
+            Self::ResizeToBleed | Self::ExportImages | Self::RemapColors
+        )
+    }
+}
+
 pub enum Screen {
     Main,
     FileSelect,
@@ -21,6 +71,9 @@ pub struct ActionParams {
     pub bleed_pts: f64,
     pub export_format: String,
     pub export_dpi: u32,
+    pub remap_from: [f64; 4],
+    pub remap_to: [f64; 4],
+    pub remap_tolerance: f64,
 }
 
 impl Default for ActionParams {
@@ -29,6 +82,9 @@ impl Default for ActionParams {
             bleed_pts: 9.0,
             export_format: "jpg".into(),
             export_dpi: 150,
+            remap_from: [1.0, 1.0, 1.0, 1.0],
+            remap_to: [0.6, 0.4, 0.2, 1.0],
+            remap_tolerance: 1.0,
         }
     }
 }
@@ -37,7 +93,7 @@ pub struct App {
     pub screen: Screen,
     pub running: bool,
     pub menu_index: usize,
-    pub selected_action: usize,
+    pub selected_action: MenuAction,
     pub params: ActionParams,
     pub overwrite: bool,
     pub status_message: Option<String>,
@@ -60,7 +116,7 @@ impl App {
             screen: Screen::FileSelect,
             running: true,
             menu_index: 0,
-            selected_action: 0,
+            selected_action: MenuAction::ChangeFiles,
             params: ActionParams::default(),
             overwrite: false,
             status_message: None,
@@ -89,38 +145,49 @@ impl App {
         }
     }
     pub fn menu_down(&mut self) {
-        if self.menu_index + 1 < MENU_ITEMS.len() {
+        if self.menu_index + 1 < MenuAction::ALL.len() {
             self.menu_index += 1;
         }
     }
     pub fn select_menu_item(&mut self) {
-        match self.menu_index {
-            0 => {
-                self.selected_action = 0;
-                self.execute_action();
-            }
-            1 => {
-                self.selected_action = 1;
-                self.input_buffer = self.params.bleed_pts.to_string();
-                self.navigate(Screen::ParamInput);
-            }
-            2 => {
-                self.selected_action = 2;
-                self.input_buffer =
-                    format!("{},{}", self.params.export_format, self.params.export_dpi);
-                self.navigate(Screen::ParamInput);
-            }
-            3 => {
-                self.selected_action = 3;
-                self.execute_action();
-            }
-            4 => self.overwrite = !self.overwrite,
-            5 => {
+        let action = MenuAction::ALL[self.menu_index];
+        self.selected_action = action;
+
+        match action {
+            MenuAction::ToggleOverwrite => self.overwrite = !self.overwrite,
+            MenuAction::ChangeFiles => {
                 self.input_buffer.clear();
                 self.navigate(Screen::FileSelect);
             }
-            6 => self.quit(),
-            _ => {}
+            MenuAction::Quit => self.quit(),
+            a if a.needs_params() => {
+                self.input_buffer = match a {
+                    MenuAction::ResizeToBleed => self.params.bleed_pts.to_string(),
+                    MenuAction::ExportImages => {
+                        format!("{},{}", self.params.export_format, self.params.export_dpi,)
+                    }
+                    MenuAction::RemapColors => {
+                        let from = self.params.remap_from;
+                        let to = self.params.remap_to;
+                        let tolerance = self.params.remap_tolerance;
+                        format!(
+                            "{} {} {} {},{} {} {} {},{}",
+                            from[0],
+                            from[1],
+                            from[2],
+                            from[3],
+                            to[0],
+                            to[1],
+                            to[2],
+                            to[3],
+                            tolerance,
+                        )
+                    }
+                    _ => String::new(),
+                };
+                self.navigate(Screen::ParamInput);
+            }
+            _ => self.execute_action(),
         }
     }
 
@@ -159,10 +226,6 @@ impl App {
         }
         self.navigate(Screen::Result);
     }
-
-    pub fn menu_items() -> &'static [&'static str] {
-        MENU_ITEMS
-    }
 }
 
 fn friendly_error(e: rustybara::Error) -> String {
@@ -182,5 +245,8 @@ fn friendly_error(e: rustybara::Error) -> String {
              Details: {e}"
         ),
         rustybara::Error::Image(_) => format!("Image encoding failed: {e}"),
+        #[cfg(feature = "color")]
+        rustybara::Error::Color(_) => format!("Color conversion failed: {e}"),
+        _ => format!("Unknown error: {e}"),
     }
 }

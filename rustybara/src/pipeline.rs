@@ -1,7 +1,7 @@
 use crate::encode::OutputFormat;
 use crate::pages::PageBoxes;
 use crate::raster::RenderConfig;
-use crate::stream::ContentFilter;
+use crate::stream::{ColorRemap, ContentFilter};
 use image::DynamicImage;
 use lopdf::Document;
 use std::path::Path;
@@ -118,6 +118,21 @@ impl PdfPipeline {
                 page_dict.set(b"CropBox", arr);
             }
         }
+        Ok(self)
+    }
+
+    pub fn remap_color(
+        &mut self,
+        from: [f64; 4],
+        to: [f64; 4],
+        tolerance: f64,
+    ) -> crate::Result<&mut Self> {
+        let remaps = ColorRemap {
+            from,
+            to,
+            tolerance,
+        };
+        ColorRemap::apply(&mut self.doc, &[remaps])?;
         Ok(self)
     }
 

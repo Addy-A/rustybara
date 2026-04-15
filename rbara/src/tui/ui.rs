@@ -1,3 +1,4 @@
+use crate::tui::app::MenuAction;
 use crate::tui::{App, Screen};
 use ratatui::prelude::*;
 use ratatui::widgets::*;
@@ -54,10 +55,10 @@ fn draw_main(frame: &mut Frame, app: &App) {
 
     // let logo = SomeRatatuiStruct
 
-    let items: Vec<ListItem> = App::menu_items()
+    let items: Vec<ListItem> = MenuAction::ALL
         .iter()
         .enumerate()
-        .map(|(i, &label)| {
+        .map(|(i, action)| {
             let style = if i == app.menu_index {
                 Style::default()
                     .fg(Color::Black)
@@ -66,7 +67,7 @@ fn draw_main(frame: &mut Frame, app: &App) {
             } else {
                 Style::default()
             };
-            ListItem::new(format!(" {label}")).style(style)
+            ListItem::new(format!(" {}", action.label())).style(style)
         })
         .collect();
     let menu = List::new(items).block(Block::default().padding(Padding::top(1)));
@@ -83,10 +84,12 @@ fn draw_main(frame: &mut Frame, app: &App) {
     let status =
         Paragraph::new(status_text).style(Style::default().fg(AppColor::PrimaryOrange.into()));
     frame.render_widget(status, chunks[2]);
-
-    let footer =
-        Paragraph::new(" [m]arks [r]esize e[x]port [p]review [o]verwrite [c]hange [q]uit [?]help")
-            .style(Style::default().fg(Color::DarkGray));
+    let footer_parts: Vec<String> = MenuAction::ALL
+        .iter()
+        .filter_map(|a| a.hotkey().map(|k| format!("[{k}]{}", &a.label()[1..])))
+        .collect();
+    let footer_text = format!(" {} [?]help", footer_parts.join(" "));
+    let footer = Paragraph::new(footer_text).style(Style::default().fg(Color::DarkGray));
     frame.render_widget(footer, chunks[3]);
 }
 fn draw_file_select(frame: &mut Frame, app: &App) {
@@ -123,8 +126,9 @@ fn draw_param_input(frame: &mut Frame, app: &App) {
     .split(frame.area());
 
     let prompt = match app.selected_action {
-        1 => " Bleed size (points)",
-        2 => " Export settings (format,dpi)",
+        MenuAction::ResizeToBleed => " Bleed size (points)",
+        MenuAction::ExportImages => " Export settings (format,dpi)",
+        MenuAction::RemapColors => " Remap colors (C M Y K)",
         _ => " Parameters",
     };
     let title = Paragraph::new(prompt)
@@ -132,8 +136,11 @@ fn draw_param_input(frame: &mut Frame, app: &App) {
         .block(Block::default().borders(Borders::BOTTOM));
     frame.render_widget(title, chunks[0]);
     let hint_label = match app.selected_action {
-        1 => " e.g. 9.0",
-        2 => " e.g. jpg,150 | formats: jpg, png, webp, tiff",
+        MenuAction::ResizeToBleed => " e.g. 9.0",
+        MenuAction::ExportImages => " e.g. jpg,150 | formats: jpg, png, webp, tiff",
+        MenuAction::RemapColors => {
+            " e.g. 1.0 1.0 1.0 1.0,0.6 0.4 0.2 1.0,1 | CMYK → CMYK (tolerance)"
+        }
         _ => "",
     };
     let input = Paragraph::new(format!(" > {}   {hint_label}", app.input_buffer))
@@ -173,27 +180,25 @@ fn draw_processing(frame: &mut Frame, _app: &App) {
     frame.render_widget(text, area);
 }
 fn draw_help(frame: &mut Frame) {
-    let help_text = vec![
-        "↑/↓    Navigate menu",
-        "Enter  Select",
-        "Esc    Back / Quit",
-        "m      Trim marks",
-        "r      Resize to bleed",
-        "o      Toggle overwrite",
-        "x      Export images",
-        "p      Preview page",
-        "c      Change files",
-        "q      Quit",
-        "?      Toggle this help",
+    let mut lines = vec![
+        "↑/↓    Navigate menu".to_string(),
+        "Enter  Select".to_string(),
+        "Esc    Back / Quit".to_string(),
     ];
-    let text = help_text.join("\n");
-    let popup = Paragraph::new(text).alignment(Alignment::Left).block(
+    for action in MenuAction::ALL {
+        if let Some(k) = action.hotkey() {
+            lines.push(format!("{k}      {}", action.label()));
+        }
+    }
+    lines.push("?      Toggle this help".to_string());
+    let help_text = lines.join("\n");
+    let popup = Paragraph::new(help_text).alignment(Alignment::Left).block(
         Block::default()
             .borders(Borders::ALL)
             .title(" Keyboard Reference ")
             .padding(Padding::uniform(1)),
     );
-    let area = centered_rect(36, 14, frame.area());
+    let area = centered_rect(36, 16, frame.area());
     frame.render_widget(Clear, area);
     frame.render_widget(popup, area);
 }

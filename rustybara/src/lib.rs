@@ -1,7 +1,7 @@
 #[cfg(feature = "color")]
 pub mod color;
 pub mod encode;
-mod error;
+pub mod error;
 pub mod geometry;
 pub mod pages;
 pub mod raster;
