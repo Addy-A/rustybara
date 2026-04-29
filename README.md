@@ -86,10 +86,10 @@ Tumbleweed. Musl distros (Alpine) need a source build. To uninstall:
 ### Docker
 
 ```sh
-docker pull ghcr.io/Addy-A/rbara:latest
+docker pull ghcr.io/addy-a/rbara:latest
 
 # CLI usage — bind-mount your working directory
-docker run --rm -v "$PWD:/work" ghcr.io/Addy-A/rbara:latest \
+docker run --rm -v "$PWD:/work" ghcr.io/addy-a/rbara:latest \
   trim /work/in.pdf -o /work/out.pdf
 ```
 
