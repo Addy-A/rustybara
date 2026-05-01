@@ -29,17 +29,30 @@ echo "     Wrapper:  $PREFIX/bin/rbara"
 echo "     Library:  $PREFIX/lib/rbara/"
 echo
 
-# PATH hint
+# PATH — auto-configure when the bin dir isn't on PATH yet
 case ":$PATH:" in
   *":$PREFIX/bin:"*)
     echo "     '$PREFIX/bin' is already on your PATH."
     ;;
   *)
-    echo "     NOTE: '$PREFIX/bin' is not on your PATH."
-    echo "     Add this line to your shell rc (~/.bashrc, ~/.zshrc, etc.):"
-    echo
-    echo "         export PATH=\"$PREFIX/bin:\$PATH\""
-    echo
+    # Pick the right rc file: prefer zshrc if running zsh, else bashrc/bash_profile
+    if [[ "$SHELL" == *zsh* ]]; then
+      RC_FILE="$HOME/.zshrc"
+    elif [[ -f "$HOME/.bash_profile" ]]; then
+      RC_FILE="$HOME/.bash_profile"
+    else
+      RC_FILE="$HOME/.bashrc"
+    fi
+
+    EXPORT_LINE="export PATH=\"$PREFIX/bin:\$PATH\""
+
+    if grep -qxF "$EXPORT_LINE" "$RC_FILE" 2>/dev/null; then
+      echo "     '$PREFIX/bin' is already configured in $RC_FILE."
+    else
+      printf '\n# rbara — added by installer\n%s\n' "$EXPORT_LINE" >> "$RC_FILE"
+      echo "     Added '$PREFIX/bin' to PATH in $RC_FILE."
+      echo "     Run 'source $RC_FILE' or open a new terminal to apply."
+    fi
     ;;
 esac
 
