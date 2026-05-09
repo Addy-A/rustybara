@@ -1,0 +1,44 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "rbara-gui",
+  "version": "0.1.0",
+  "identifier": "com.addy.rbara-gui",
+  "build": {
+    "beforeDevCommand": {
+      "cwd": "frontend",
+      "script": "npm run dev"
+    },
+    "beforeBuildCommand": {
+      "cwd": "frontend",
+      "script": "npm run build"
+    },
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "rustybara — Prepress Toolkit",
+        "label": "main",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 480,
+        "minHeight": 480,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all",
+    "icon": [],
+    "category": "GraphicsAndDesign",
+    "shortDescription": "Prepress PDF toolkit",
+    "longDescription": "Tauri v2 desktop GUI for the rustybara prepress PDF toolkit."
+  },
+  "plugins": {}
+}

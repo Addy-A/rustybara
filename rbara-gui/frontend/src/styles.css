@@ -1,0 +1,94 @@
+:root {
+  --bg: #0e0e0e;
+  --surface: #141414;
+  --panel: #1a1a1a;
+  --border: #282828;
+  --border-hi: #3a3a3a;
+  --orange: #e86807;
+  --orange-dim: #e8680722;
+  --orange-hi: #ff8c38;
+  --text: #e8e8e8;
+  --muted: #666;
+  --muted-hi: #999;
+  --ok: #4ade80;
+  --fail: #f87171;
+  --warn: #fbbf24;
+  --mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --sans: 'Inter', system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #app {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+input, select {
+  font-family: inherit;
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* shared atoms */
+.hk {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
+.pane-label {
+  padding: 8px 12px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tag {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted-hi);
+}
+.tag.cmyk { background: #2a1500; color: #f97316; border-color: #4a2500; }
+.tag.rgb  { background: #0f1e30; color: #60a5fa; border-color: #1e3a5f; }
+.tag.mixed{ background: #1a1a00; color: #fbbf24; border-color: #3a3a00; }
+.tag.ok   { background: #022c1e; color: #4ade80; border-color: #065f46; }
+.tag.warn { background: #1c1300; color: #fbbf24; border-color: #3d2c00; }
