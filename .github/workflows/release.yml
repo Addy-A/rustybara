@@ -187,11 +187,198 @@ jobs:
             ${{ steps.ver.outputs.image }}:latest
 
   # -------------------------------------------------------------------------
+  # GUI — Windows installer (Tauri, MSVC)
+  # -------------------------------------------------------------------------
+  build-gui-windows:
+    name: GUI — Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        working-directory: rbara-gui/frontend
+        run: npm ci
+
+      - name: Fetch pdfium (chromium/${{ env.PDFIUM_CHROMIUM }}, Windows x64)
+        shell: pwsh
+        run: |
+          $url = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F${{ env.PDFIUM_CHROMIUM }}/pdfium-win-x64.tgz"
+          Invoke-WebRequest $url -OutFile pdfium.tgz
+          tar -xf pdfium.tgz -C $env:TEMP
+          New-Item -ItemType Directory -Force -Path rbara-gui\src-tauri\resources
+          Copy-Item "$env:TEMP\lib\pdfium.dll" rbara-gui\src-tauri\resources\pdfium.dll
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: rbara-gui
+          args: --target x86_64-pc-windows-msvc
+
+      - name: Collect installer
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path installer\gui\dist
+          Get-ChildItem -Recurse rbara-gui\src-tauri\target\x86_64-pc-windows-msvc\release\bundle `
+            -Include *.msi, *.exe |
+            Copy-Item -Destination installer\gui\dist\
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-windows
+          path: installer/gui/dist/*
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # GUI — Linux AppImage + deb (Tauri)
+  # -------------------------------------------------------------------------
+  build-gui-linux:
+    name: GUI — Linux AppImage + deb
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            liblcms2-dev \
+            pkg-config \
+            curl tar
+
+      - name: Install frontend dependencies
+        working-directory: rbara-gui/frontend
+        run: npm ci
+
+      - name: Fetch pdfium (chromium/${{ env.PDFIUM_CHROMIUM }}, Linux x64)
+        run: |
+          curl -fsSL \
+            "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F${PDFIUM_CHROMIUM}/pdfium-linux-x64.tgz" \
+            | tar xz -C /tmp
+          mkdir -p rbara-gui/src-tauri/resources
+          cp /tmp/lib/libpdfium.so rbara-gui/src-tauri/resources/libpdfium.so
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: rbara-gui
+
+      - name: Collect bundles
+        run: |
+          mkdir -p installer/gui/dist
+          find rbara-gui/src-tauri/target/release/bundle \
+            -type f \( -name "*.AppImage" -o -name "*.deb" \) \
+            -exec cp {} installer/gui/dist/ \;
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-linux
+          path: installer/gui/dist/*
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # GUI — macOS dmg (Apple silicon + Intel)
+  # -------------------------------------------------------------------------
+  build-gui-macos:
+    name: GUI — macOS dmg (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
+            pdfium_pkg: pdfium-mac-arm64.tgz
+          - arch: x86_64
+            runner: macos-14
+            target: x86_64-apple-darwin
+            pdfium_pkg: pdfium-mac-x64.tgz
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, ${{ matrix.target }})
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        working-directory: rbara-gui/frontend
+        run: npm ci
+
+      - name: Fetch pdfium (chromium/${{ env.PDFIUM_CHROMIUM }}, ${{ matrix.arch }})
+        run: |
+          curl -fsSL \
+            "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F${PDFIUM_CHROMIUM}/${{ matrix.pdfium_pkg }}" \
+            | tar xz -C /tmp
+          mkdir -p rbara-gui/src-tauri/resources
+          cp /tmp/lib/libpdfium.dylib rbara-gui/src-tauri/resources/libpdfium.dylib
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # When code signing is ready, add these secrets:
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          projectPath: rbara-gui
+          args: --target ${{ matrix.target }}
+
+      - name: Collect dmg
+        run: |
+          mkdir -p installer/gui/dist
+          find rbara-gui/src-tauri/target/${{ matrix.target }}/release/bundle \
+            -name "*.dmg" \
+            -exec cp {} installer/gui/dist/rbara-gui-${{ matrix.arch }}.dmg \;
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-macos-${{ matrix.arch }}
+          path: installer/gui/dist/*.dmg
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
   # Publish: gather every artifact and attach to a GitHub Release
   # -------------------------------------------------------------------------
   publish-release:
     name: Publish GitHub Release
-    needs: [build-windows, build-linux, build-macos, build-docker]
+    needs: [build-windows, build-linux, build-macos, build-docker,
+            build-gui-windows, build-gui-linux, build-gui-macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -203,12 +390,12 @@ jobs:
           # Only our explicit installer artifacts. docker/build-push-action
           # auto-uploads a "*.dockerbuild" build-record artifact whose name
           # contains '~' and breaks download paths — skip it.
-          pattern: "{windows-installer,linux-tarball,macos-tarball-*}"
+          pattern: "{windows-installer,linux-tarball,macos-tarball-*,gui-windows,gui-linux,gui-macos-*}"
 
       - name: Flatten artifact tree
         run: |
           mkdir -p release-files
-          find dist -type f \( -name '*.exe' -o -name '*.tar.gz' \) -exec cp {} release-files/ \;
+          find dist -type f \( -name '*.exe' -o -name '*.tar.gz' -o -name '*.msi' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.dmg' \) -exec cp {} release-files/ \;
           ls -lh release-files
 
       - name: Generate SHA256 checksums
@@ -246,6 +433,10 @@ jobs:
             | macOS (Apple silicon) | `rbara-*-macos-arm64.tar.gz` |
             | macOS (Intel) | `rbara-*-macos-x86_64.tar.gz` |
             | Docker | `ghcr.io/addy-a/rbara:${{ steps.tag.outputs.tag }}` |
+            | Windows (GUI) | `rbara-gui-*_x64-setup.exe` or `rbara-gui-*.msi` |
+            | Linux (GUI) | `rbara-gui-*.AppImage` or `rbara-gui-*.deb` |
+            | macOS Apple silicon (GUI) | `rbara-gui-arm64.dmg` |
+            | macOS Intel (GUI) | `rbara-gui-x86_64.dmg` |
 
             See `SHA256SUMS.txt` for checksums.
 
