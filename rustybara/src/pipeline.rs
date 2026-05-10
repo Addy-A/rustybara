@@ -135,7 +135,7 @@ impl PdfPipeline {
         Ok(self)
     }
 
-    /// Analyses a PDF document and classifies the color spaces used across all pages.
+    /// Analyzes a PDF document and classifies the color spaces used across all pages.
     ///
     /// Iterates through every page's content stream, inspecting PDF paint operators to
     /// determine whether the document uses CMYK (`k`/`K`), RGB (`rg`/`RG`), both, or
@@ -151,7 +151,7 @@ impl PdfPipeline {
     /// * `ColorSpaceKind::PureCMYK`  – only CMYK paint operators were found.
     /// * `ColorSpaceKind::PureRGB`   – only RGB paint operators were found.
     /// * `ColorSpaceKind::Mixed`     – both CMYK and RGB operators are present.
-    /// * `ColorSpaceKind::Unknown`   – no recognisable color operators were found.
+    /// * `ColorSpaceKind::Unknown`   – no recognizable color operators were found.
     ///
     /// # Notes
     ///
