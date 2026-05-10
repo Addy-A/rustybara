@@ -54,7 +54,19 @@ pub enum ColorSpace {
     Rgb,
 }
 
-/// A version of ColorSpace but for the UI
+/// A coarse classification of the color spaces found in a PDF document.
+///
+/// Unlike [`ColorSpace`], which describes a single ICC profile, `ColorSpaceKind`
+/// summarises the overall mix of color painting operators discovered across the
+/// document's content streams. It is returned by
+/// [`PdfPipeline::detect_color_space`](crate::pipeline::PdfPipeline::detect_color_space).
+///
+/// # Variants
+///
+/// * `PureCMYK`  – Every color paint operator in the document is CMYK (`k`/`K`).
+/// * `PureRGB`   – Every color paint operator in the document is RGB (`rg`/`RG`).
+/// * `Mixed`     – The document contains both CMYK and RGB paint operators.
+/// * `Unknown`   – No recognisable color paint operators were found.
 pub enum ColorSpaceKind {
     PureCMYK,
     PureRGB,

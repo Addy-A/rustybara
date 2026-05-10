@@ -82,6 +82,35 @@ pub struct ColorTransform {
 }
 
 impl ColorTransform {
+    /// Creates a new `ColorTransform` for converting pixel data between two ICC profiles.
+    ///
+    /// Builds an LCMS2 transform that maps pixel data from the `src` color space to the
+    /// `dst` color space using the specified rendering intent. The pixel format (e.g.
+    /// `RGB_8`, `CMYK_8`) is inferred automatically from each profile's [`ColorSpace`].
+    ///
+    /// # Arguments
+    ///
+    /// * `src`    – Source [`IccProfile`] describing the input color space.
+    /// * `dst`    – Destination [`IccProfile`] describing the output color space.
+    /// * `intent` – [`RenderingIntent`] controlling how out-of-gamut colors are handled.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(Self)` containing the ready-to-use transform, or an error if LCMS2
+    /// fails to parse either profile or to build the transform.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`crate::Error::Color`] error (via [`lcms2::Error`]) if either ICC
+    /// profile is invalid or the transform cannot be created for the given intent.
+    ///
+    /// # Example
+    ///
+    /// ```no_test
+    /// let src = IccProfile::from_file("input.icc")?;
+    /// let dst = IccProfile::srgb()?;
+    /// let transform = ColorTransform::new(&src, &dst, RenderingIntent::Perceptual)?;
+    /// ```
     pub fn new(src: &IccProfile, dst: &IccProfile, intent: RenderingIntent) -> crate::Result<Self> {
         let src_profile = Profile::new_icc(src.as_bytes())?;
         let dst_profile = Profile::new_icc(dst.as_bytes())?;
@@ -134,9 +163,18 @@ impl ColorTransform {
         dst
     }
 
+    /// Returns the number of channels in the source color space.
+    ///
+    /// For example, `3` for RGB/sRGB and `4` for CMYK. This value determines how many
+    /// consecutive bytes in the input slice are consumed per pixel during conversion.
     pub fn src_channels(&self) -> usize {
         self.src_channels
     }
+
+    /// Returns the number of channels in the destination color space.
+    ///
+    /// For example, `3` for RGB/sRGB, `4` for CMYK, and `1` for grayscale. This value
+    /// determines how many bytes are written per pixel into the output buffer during conversion.
     pub fn dst_channels(&self) -> usize {
         self.dst_channels
     }

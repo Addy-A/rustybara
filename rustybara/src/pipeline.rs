@@ -28,6 +28,15 @@ pub struct PdfPipeline {
 }
 
 impl PdfPipeline {
+    /// Returns a reference to the underlying `lopdf` document.
+    ///
+    /// Provides direct read access to the raw PDF document object, which can be used
+    /// to inspect or query document internals (e.g., page objects, resources, metadata)
+    /// without going through the pipeline abstraction.
+    ///
+    /// # Returns
+    ///
+    /// A shared reference to the inner `lopdf::Document`.
     pub fn doc(&self) -> &Document {
         &self.doc
     }
@@ -126,6 +135,27 @@ impl PdfPipeline {
         Ok(self)
     }
 
+    /// Analyses a PDF document and classifies the color spaces used across all pages.
+    ///
+    /// Iterates through every page's content stream, inspecting PDF paint operators to
+    /// determine whether the document uses CMYK (`k`/`K`), RGB (`rg`/`RG`), both, or
+    /// neither.
+    ///
+    /// # Arguments
+    ///
+    /// * `doc` - A reference to the `lopdf::Document` to inspect.
+    ///
+    /// # Returns
+    ///
+    /// A [`ColorSpaceKind`] variant describing the overall color usage:
+    /// * `ColorSpaceKind::PureCMYK`  – only CMYK paint operators were found.
+    /// * `ColorSpaceKind::PureRGB`   – only RGB paint operators were found.
+    /// * `ColorSpaceKind::Mixed`     – both CMYK and RGB operators are present.
+    /// * `ColorSpaceKind::Unknown`   – no recognisable color operators were found.
+    ///
+    /// # Notes
+    ///
+    /// Pages whose content stream cannot be decoded are silently skipped.
     pub fn detect_color_space(doc: &Document) -> ColorSpaceKind {
         let mut has_cmyk = false;
         let mut has_rgb = false;
@@ -153,6 +183,35 @@ impl PdfPipeline {
         }
     }
 
+    /// Remaps a specific CMYK color to another color throughout the document.
+    ///
+    /// Applies a color substitution rule to every page in the document. Any CMYK paint
+    /// command whose channel values are within `tolerance` of the `from` color will have
+    /// its operands replaced with the `to` color values. Both fill (`k`) and stroke (`K`)
+    /// operators are processed.
+    ///
+    /// # Arguments
+    ///
+    /// * `from`      – CMYK source color as `[C, M, Y, K]` with each channel in `0.0..=1.0`.
+    /// * `to`        – CMYK target color as `[C, M, Y, K]` with each channel in `0.0..=1.0`.
+    /// * `tolerance` – Maximum per-channel absolute difference for a color to be considered
+    ///   a match. `0.0` requires an exact match; `1.0` matches any color.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(&mut Self)` on success, allowing method chaining, or an error if any
+    /// page content stream could not be decoded or re-encoded.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if page content decoding or encoding fails for any page.
+    ///
+    /// # Example
+    ///
+    /// ```no_test
+    /// // Replace pure black with a warm black within a 5 % tolerance
+    /// pipeline.remap_color([0.0, 0.0, 0.0, 1.0], [0.0, 0.06, 0.12, 0.88], 0.05)?;
+    /// ```
     pub fn remap_color(
         &mut self,
         from: [f64; 4],
