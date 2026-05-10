@@ -34,6 +34,27 @@ pub struct Rect {
 }
 
 impl Rect {
+    /// Creates a new `Rect` from its position and dimensions.
+    ///
+    /// # Arguments
+    ///
+    /// * `x`      – X-coordinate of the left edge.
+    /// * `y`      – Y-coordinate of the bottom edge (PDF coordinate system, Y increases upward).
+    /// * `width`  – Horizontal size of the rectangle.
+    /// * `height` – Vertical size of the rectangle.
+    ///
+    /// # Returns
+    ///
+    /// A new `Rect` with the supplied position and dimensions.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustybara::geometry::Rect;
+    /// let rect = Rect::new(0.0, 0.0, 612.0, 792.0);
+    /// assert_eq!(rect.width, 612.0);
+    /// assert_eq!(rect.height, 792.0);
+    /// ```
     pub fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
         Rect {
             x,
@@ -154,9 +175,17 @@ impl Rect {
         Rect::from_corners(arr[0], arr[1], arr[2], arr[3])
     }
 
+    /// Returns the X-coordinate of the right edge of the rectangle.
+    ///
+    /// Computed as `x + width`.
     pub fn right(&self) -> f64 {
         self.x + self.width
     }
+
+    /// Returns the Y-coordinate of the top edge of the rectangle.
+    ///
+    /// Computed as `y + height`. In the PDF coordinate system the Y-axis points upward,
+    /// so the top edge has the **larger** Y value.
     pub fn top(&self) -> f64 {
         self.y + self.height
     }
