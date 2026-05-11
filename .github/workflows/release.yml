@@ -212,12 +212,27 @@ jobs:
       - name: Fetch pdfium (chromium/${{ env.PDFIUM_CHROMIUM }}, Windows x64)
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $url = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F$env:PDFIUM_CHROMIUM/pdfium-win-x64.tgz"
           Invoke-WebRequest $url -OutFile pdfium.tgz
           New-Item -ItemType Directory -Force -Path "$env:TEMP\pdfium" | Out-Null
           tar -xf pdfium.tgz -C "$env:TEMP\pdfium"
-          New-Item -ItemType Directory -Force -Path rbara-gui\resources
-          Copy-Item "$env:TEMP\pdfium\bin\pdfium.dll" rbara-gui\resources\pdfium.dll
+          $src = "$env:TEMP\pdfium\bin\pdfium.dll"
+          $dest = "rbara-gui\resources\pdfium.dll"
+          if (-not (Test-Path -PathType Leaf $src)) {
+            Write-Error "ERROR: $src is not a regular file in archive"
+            Get-ChildItem -Recurse "$env:TEMP\pdfium" -Filter *.dll
+            exit 1
+          }
+          New-Item -ItemType Directory -Force -Path rbara-gui\resources | Out-Null
+          if (Test-Path -PathType Container $dest) { Remove-Item -Recurse -Force $dest }
+          if (Test-Path $dest) { Remove-Item -Force $dest }
+          Copy-Item $src $dest
+          if (-not (Test-Path -PathType Leaf $dest)) {
+            Write-Error "ERROR: $dest is not a regular file after copy"
+            Get-ChildItem rbara-gui\resources
+            exit 1
+          }
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
@@ -274,11 +289,24 @@ jobs:
 
       - name: Fetch pdfium (chromium/${{ env.PDFIUM_CHROMIUM }}, Linux x64)
         run: |
+          set -euo pipefail
           curl -fsSL \
             "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F${PDFIUM_CHROMIUM}/pdfium-linux-x64.tgz" \
             | tar xz -C /tmp
+          SRC=/tmp/lib/libpdfium.so
+          DEST=rbara-gui/resources/libpdfium.so
+          if [ ! -f "$SRC" ]; then
+            echo "ERROR: $SRC not a regular file in archive"
+            find /tmp -name '*.so*' 2>/dev/null || true
+            exit 1
+          fi
           mkdir -p rbara-gui/resources
-          cp /tmp/lib/libpdfium.so rbara-gui/resources/libpdfium.so
+          if [ -d "$DEST" ] && [ ! -L "$DEST" ]; then
+            rm -rf "$DEST"
+          fi
+          rm -f "$DEST"
+          cp "$SRC" "$DEST"
+          test -f "$DEST" || { echo "ERROR: $DEST is not a regular file after copy"; ls -la rbara-gui/resources; exit 1; }
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
@@ -339,15 +367,20 @@ jobs:
           curl -fsSL \
             "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F${PDFIUM_CHROMIUM}/${{ matrix.pdfium_pkg }}" \
             | tar xz -C /tmp
+          SRC=/tmp/lib/libpdfium.dylib
+          DEST=rbara-gui/resources/libpdfium.dylib
+          if [ ! -f "$SRC" ]; then
+            echo "ERROR: $SRC not a regular file in archive"
+            find /tmp -name '*.dylib' 2>/dev/null || true
+            exit 1
+          fi
           mkdir -p rbara-gui/resources
-          DYLIB=/tmp/lib/libpdfium.dylib
-          if [ ! -e "$DYLIB" ]; then
-            echo "ERROR: $DYLIB not found in archive" && find /tmp -name '*.dylib' 2>/dev/null && exit 1
+          if [ -d "$DEST" ] && [ ! -L "$DEST" ]; then
+            rm -rf "$DEST"
           fi
-          if [ -d "$DYLIB" ]; then
-            echo "ERROR: $DYLIB is a directory, not a file" && exit 1
-          fi
-          cp "$DYLIB" rbara-gui/resources/libpdfium.dylib
+          rm -f "$DEST"
+          cp "$SRC" "$DEST"
+          test -f "$DEST" || { echo "ERROR: $DEST is not a regular file after copy"; ls -la rbara-gui/resources; exit 1; }
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
