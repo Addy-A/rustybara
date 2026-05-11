@@ -335,11 +335,19 @@ jobs:
 
       - name: Fetch pdfium (chromium/${{ env.PDFIUM_CHROMIUM }}, ${{ matrix.arch }})
         run: |
+          set -euo pipefail
           curl -fsSL \
             "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F${PDFIUM_CHROMIUM}/${{ matrix.pdfium_pkg }}" \
             | tar xz -C /tmp
           mkdir -p rbara-gui/resources
-          cp /tmp/lib/libpdfium.dylib rbara-gui/resources/libpdfium.dylib
+          DYLIB=/tmp/lib/libpdfium.dylib
+          if [ ! -e "$DYLIB" ]; then
+            echo "ERROR: $DYLIB not found in archive" && find /tmp -name '*.dylib' 2>/dev/null && exit 1
+          fi
+          if [ -d "$DYLIB" ]; then
+            echo "ERROR: $DYLIB is a directory, not a file" && exit 1
+          fi
+          cp "$DYLIB" rbara-gui/resources/libpdfium.dylib
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
