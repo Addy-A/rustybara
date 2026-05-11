@@ -32,6 +32,22 @@ pub enum OutputFormat {
 }
 
 impl OutputFormat {
+    /// Returns the canonical file extension string for this output format.
+    ///
+    /// The returned extension does **not** include a leading dot and can be appended
+    /// directly to a file name (e.g., `"jpg"`, `"png"`, `"webp"`, `"tiff"`).
+    ///
+    /// # Returns
+    ///
+    /// A `'static` string slice containing the lowercase file extension.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustybara::encode::OutputFormat;
+    /// assert_eq!(OutputFormat::Png.extension(), "png");
+    /// assert_eq!(OutputFormat::Jpg.extension(), "jpg");
+    /// ```
     pub fn extension(&self) -> &'static str {
         match self {
             Self::Jpg => "jpg",
@@ -41,6 +57,22 @@ impl OutputFormat {
         }
     }
 
+    /// Converts this `OutputFormat` variant into the corresponding `image::ImageFormat` value.
+    ///
+    /// This is used internally when delegating to the `image` crate's save routines that
+    /// accept an `ImageFormat` argument directly.
+    ///
+    /// # Returns
+    ///
+    /// The matching `image::ImageFormat` variant for this format.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use rustybara::encode::OutputFormat;
+    /// use image::ImageFormat;
+    /// assert_eq!(OutputFormat::Png.image_format(), ImageFormat::Png);
+    /// ```
     pub fn image_format(&self) -> ImageFormat {
         match self {
             Self::Jpg => ImageFormat::Jpeg,
