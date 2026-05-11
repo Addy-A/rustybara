@@ -49,9 +49,14 @@ WORKDIR /src
 # Copy the whole workspace (Cargo.lock is at the workspace root).
 # Order chosen so source changes don't bust the apt layer above.
 COPY Cargo.toml Cargo.lock* ./
-COPY rustybara/ rustybara/
-COPY rbara/    rbara/
-COPY rbv/      rbv/
+COPY rustybara/     rustybara/
+COPY rbara/         rbara/
+COPY rbv/           rbv/
+# Cargo needs every workspace member's Cargo.toml to resolve the workspace,
+# even for members that aren't built in this image.
+RUN mkdir -p rustybara-icc rbara-gui
+COPY rustybara-icc/Cargo.toml rustybara-icc/Cargo.toml
+COPY rbara-gui/Cargo.toml     rbara-gui/Cargo.toml
 COPY README.md LICENSE-LGPL-3.0 LICENSE-GPL-3.0 ./
 
 # Build only the `rbara` binary (skip rbv stub).
