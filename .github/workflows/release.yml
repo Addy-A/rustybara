@@ -218,8 +218,8 @@ jobs:
               def ck(t, d):
                   x = t + d
                   return struct.pack(">I", len(d)) + x + struct.pack(">I", zlib.crc32(x) & 0xffffffff)
-              ihdr = ck(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0))
-              raw = b"".join(b"\x00" + b"\x80" * w for _ in range(h))
+              ihdr = ck(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+              raw = b"".join(b"\x00" + b"\x80\x80\x80\xff" * w for _ in range(h))
               idat = ck(b"IDAT", zlib.compress(raw))
               iend = ck(b"IEND", b"")
               return b"\x89PNG\r\n\x1a\n" + ihdr + idat + iend
@@ -321,8 +321,8 @@ jobs:
               def ck(t, d):
                   x = t + d
                   return struct.pack(">I", len(d)) + x + struct.pack(">I", zlib.crc32(x) & 0xffffffff)
-              ihdr = ck(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0))
-              raw = b"".join(b"\x00" + b"\x80" * w for _ in range(h))
+              ihdr = ck(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+              raw = b"".join(b"\x00" + b"\x80\x80\x80\xff" * w for _ in range(h))
               idat = ck(b"IDAT", zlib.compress(raw))
               iend = ck(b"IEND", b"")
               return b"\x89PNG\r\n\x1a\n" + ihdr + idat + iend
@@ -416,8 +416,8 @@ jobs:
               def ck(t, d):
                   x = t + d
                   return struct.pack(">I", len(d)) + x + struct.pack(">I", zlib.crc32(x) & 0xffffffff)
-              ihdr = ck(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0))
-              raw = b"".join(b"\x00" + b"\x80" * w for _ in range(h))
+              ihdr = ck(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+              raw = b"".join(b"\x00" + b"\x80\x80\x80\xff" * w for _ in range(h))
               idat = ck(b"IDAT", zlib.compress(raw))
               iend = ck(b"IEND", b"")
               return b"\x89PNG\r\n\x1a\n" + ihdr + idat + iend
