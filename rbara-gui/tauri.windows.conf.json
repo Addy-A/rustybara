@@ -1,7 +1,7 @@
 {
   "bundle": {
     "resources": {
-      "resources/pdfium.dll": "."
+      "resources/pdfium.dll": "pdfium.dll"
     }
   }
 }

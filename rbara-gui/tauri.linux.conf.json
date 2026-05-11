@@ -1,7 +1,7 @@
 {
   "bundle": {
     "resources": {
-      "resources/libpdfium.so": "."
+      "resources/libpdfium.so": "libpdfium.so"
     }
   }
 }

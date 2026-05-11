@@ -1,7 +1,7 @@
 {
   "bundle": {
     "resources": {
-      "resources/libpdfium.dylib": "."
+      "resources/libpdfium.dylib": "libpdfium.dylib"
     }
   }
 }
