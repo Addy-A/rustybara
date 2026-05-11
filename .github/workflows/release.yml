@@ -209,6 +209,32 @@ jobs:
         working-directory: rbara-gui/frontend
         run: npm ci
 
+      - name: Generate placeholder icons
+        shell: pwsh
+        run: |
+          $code = @'
+          import struct, zlib, os
+          def png(w, h):
+              def ck(t, d):
+                  x = t + d
+                  return struct.pack(">I", len(d)) + x + struct.pack(">I", zlib.crc32(x) & 0xffffffff)
+              ihdr = ck(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0))
+              raw = b"".join(b"\x00" + b"\x80" * w for _ in range(h))
+              idat = ck(b"IDAT", zlib.compress(raw))
+              iend = ck(b"IEND", b"")
+              return b"\x89PNG\r\n\x1a\n" + ihdr + idat + iend
+          os.makedirs("rbara-gui/icons", exist_ok=True)
+          for name, w, h in [("icon.png",512,512),("32x32.png",32,32),("128x128.png",128,128),("128x128@2x.png",256,256)]:
+              p = "rbara-gui/icons/" + name
+              if not os.path.exists(p):
+                  open(p, "wb").write(png(w, h))
+                  print("Generated", p)
+          '@
+          $tmpf = [IO.Path]::GetTempFileName() + ".py"
+          $code | Set-Content $tmpf -Encoding utf8
+          python3 $tmpf
+          Remove-Item $tmpf
+
       - name: Fetch pdfium (chromium/${{ env.PDFIUM_CHROMIUM }}, Windows x64)
         shell: pwsh
         run: |
@@ -287,6 +313,27 @@ jobs:
         working-directory: rbara-gui/frontend
         run: npm ci
 
+      - name: Generate placeholder icons
+        run: |
+          python3 - <<'PYEOF'
+          import struct, zlib, os
+          def png(w, h):
+              def ck(t, d):
+                  x = t + d
+                  return struct.pack(">I", len(d)) + x + struct.pack(">I", zlib.crc32(x) & 0xffffffff)
+              ihdr = ck(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0))
+              raw = b"".join(b"\x00" + b"\x80" * w for _ in range(h))
+              idat = ck(b"IDAT", zlib.compress(raw))
+              iend = ck(b"IEND", b"")
+              return b"\x89PNG\r\n\x1a\n" + ihdr + idat + iend
+          os.makedirs("rbara-gui/icons", exist_ok=True)
+          for name, w, h in [("icon.png",512,512),("32x32.png",32,32),("128x128.png",128,128),("128x128@2x.png",256,256)]:
+              p = "rbara-gui/icons/" + name
+              if not os.path.exists(p):
+                  open(p, "wb").write(png(w, h))
+                  print("Generated", p)
+          PYEOF
+
       - name: Fetch pdfium (chromium/${{ env.PDFIUM_CHROMIUM }}, Linux x64)
         run: |
           set -euo pipefail
@@ -360,6 +407,27 @@ jobs:
       - name: Install frontend dependencies
         working-directory: rbara-gui/frontend
         run: npm ci
+
+      - name: Generate placeholder icons
+        run: |
+          python3 - <<'PYEOF'
+          import struct, zlib, os
+          def png(w, h):
+              def ck(t, d):
+                  x = t + d
+                  return struct.pack(">I", len(d)) + x + struct.pack(">I", zlib.crc32(x) & 0xffffffff)
+              ihdr = ck(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0))
+              raw = b"".join(b"\x00" + b"\x80" * w for _ in range(h))
+              idat = ck(b"IDAT", zlib.compress(raw))
+              iend = ck(b"IEND", b"")
+              return b"\x89PNG\r\n\x1a\n" + ihdr + idat + iend
+          os.makedirs("rbara-gui/icons", exist_ok=True)
+          for name, w, h in [("icon.png",512,512),("32x32.png",32,32),("128x128.png",128,128),("128x128@2x.png",256,256)]:
+              p = "rbara-gui/icons/" + name
+              if not os.path.exists(p):
+                  open(p, "wb").write(png(w, h))
+                  print("Generated", p)
+          PYEOF
 
       - name: Fetch pdfium (chromium/${{ env.PDFIUM_CHROMIUM }}, ${{ matrix.arch }})
         run: |
