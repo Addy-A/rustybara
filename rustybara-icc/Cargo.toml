@@ -1,0 +1,16 @@
+[package]
+name = "rustybara-icc"
+version = "0.1.0"
+edition = "2024"
+license = "LGPL-3.0-only"
+description = "ICC color profile storage and transform engine for the rustybara workspace"
+repository = "https://github.com/Addy-A/rustybara"
+
+[dependencies]
+lcms2 = "6.1.1"
+lopdf = "0.40.0"
+image = { version = "0.25.10", features = ["jpeg", "tiff", "png", "webp"] }
+thiserror = "2.0.18"
+
+[dev-dependencies]
+# test fixtures and golden file comparison tooling as needed

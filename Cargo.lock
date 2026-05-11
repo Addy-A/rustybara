@@ -4839,6 +4839,12 @@ dependencies = [
 [[package]]
 name = "rustybara-icc"
 version = "0.1.0"
+dependencies = [
+ "image",
+ "lcms2",
+ "lopdf",
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "ryu"
