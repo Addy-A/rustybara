@@ -299,7 +299,7 @@ impl App {
     pub fn select_menu_item(&mut self) {
         let action = MenuAction::ALL[self.menu_index];
         let mut action_entry = self::ActionLogEntry {
-            timestamp: chrono::Local::now().format("%h:%m:%s").to_string(),
+            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
             action: String::new(),
             status: LogStatus::Ok,
         };
@@ -387,10 +387,12 @@ impl App {
                 if !new_paths.is_empty() {
                     self.file_paths = new_paths;
                 }
-                if let Some(path) = self.file_paths.first() {
-                    if let Ok(meta) = crate::process::load_metadata(path) {
-                        self.pdf_metadata = Some(meta);
-                    }
+                if let Some(Ok(meta)) = self
+                    .file_paths
+                    .first()
+                    .map(|p| crate::process::load_metadata(p))
+                {
+                    self.pdf_metadata = Some(meta);
                 }
             }
             Err(e) => {

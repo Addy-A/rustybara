@@ -122,6 +122,7 @@ pub fn random_quip() -> String {
         "Answering the messenger's scroll",
         "Answering via bird call",
         "Seventeen Thirty Eight",
+        "The game",
     ];
     let mut rnd = rand::rng();
     quips.choose(&mut rnd).unwrap().to_string()
