@@ -216,8 +216,8 @@ jobs:
           Invoke-WebRequest $url -OutFile pdfium.tgz
           New-Item -ItemType Directory -Force -Path "$env:TEMP\pdfium" | Out-Null
           tar -xf pdfium.tgz -C "$env:TEMP\pdfium"
-          New-Item -ItemType Directory -Force -Path rbara-gui\src-tauri\resources
-          Copy-Item "$env:TEMP\pdfium\bin\pdfium.dll" rbara-gui\src-tauri\resources\pdfium.dll
+          New-Item -ItemType Directory -Force -Path rbara-gui\resources
+          Copy-Item "$env:TEMP\pdfium\bin\pdfium.dll" rbara-gui\resources\pdfium.dll
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
@@ -231,7 +231,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path installer\gui\dist
-          Get-ChildItem -Recurse rbara-gui\src-tauri\target\x86_64-pc-windows-msvc\release\bundle `
+          Get-ChildItem -Recurse target\x86_64-pc-windows-msvc\release\bundle `
             -Include *.msi, *.exe |
             Copy-Item -Destination installer\gui\dist\
 
@@ -277,8 +277,8 @@ jobs:
           curl -fsSL \
             "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F${PDFIUM_CHROMIUM}/pdfium-linux-x64.tgz" \
             | tar xz -C /tmp
-          mkdir -p rbara-gui/src-tauri/resources
-          cp /tmp/lib/libpdfium.so rbara-gui/src-tauri/resources/libpdfium.so
+          mkdir -p rbara-gui/resources
+          cp /tmp/lib/libpdfium.so rbara-gui/resources/libpdfium.so
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
@@ -290,7 +290,7 @@ jobs:
       - name: Collect bundles
         run: |
           mkdir -p installer/gui/dist
-          find rbara-gui/src-tauri/target/release/bundle \
+          find target/release/bundle \
             -type f \( -name "*.AppImage" -o -name "*.deb" \) \
             -exec cp {} installer/gui/dist/ \;
 
@@ -338,8 +338,8 @@ jobs:
           curl -fsSL \
             "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F${PDFIUM_CHROMIUM}/${{ matrix.pdfium_pkg }}" \
             | tar xz -C /tmp
-          mkdir -p rbara-gui/src-tauri/resources
-          cp /tmp/lib/libpdfium.dylib rbara-gui/src-tauri/resources/libpdfium.dylib
+          mkdir -p rbara-gui/resources
+          cp /tmp/lib/libpdfium.dylib rbara-gui/resources/libpdfium.dylib
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
@@ -352,7 +352,7 @@ jobs:
       - name: Collect dmg
         run: |
           mkdir -p installer/gui/dist
-          find rbara-gui/src-tauri/target/${{ matrix.target }}/release/bundle \
+          find target/${{ matrix.target }}/release/bundle \
             -name "*.dmg" \
             -exec cp {} installer/gui/dist/rbara-gui-${{ matrix.arch }}.dmg \;
 
