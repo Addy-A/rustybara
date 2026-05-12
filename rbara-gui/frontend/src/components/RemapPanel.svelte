@@ -11,6 +11,27 @@
   let toBg   = $derived(cmykToRgb(...app.params.remapTo));
 
   const labels = ['C', 'M', 'Y', 'K'];
+
+  let pctMode = $state(false);
+  let inputMax  = $derived(pctMode ? 100 : 1);
+  let inputStep = $derived(pctMode ? 1 : 0.01);
+  let toleranceHint = $derived(
+    pctMode ? '0% = exact match · 100% = match anything'
+            : '0.0 = exact match · 1.0 = match anything'
+  );
+
+  function disp(v) { return pctMode ? Math.round(v * 100) : v; }
+  function toStore(v) { return pctMode ? v / 100 : v; }
+
+  function setFrom(i, e) {
+    app.params.remapFrom[i] = Math.max(0, Math.min(1, toStore(+e.target.value)));
+  }
+  function setTo(i, e) {
+    app.params.remapTo[i] = Math.max(0, Math.min(1, toStore(+e.target.value)));
+  }
+  function setTolerance(e) {
+    app.params.remapTolerance = Math.max(0, Math.min(1, toStore(+e.target.value)));
+  }
 </script>
 
 <div class="header">
@@ -19,6 +40,9 @@
     <div class="params-title">Remap Colors</div>
     <div class="params-desc">Replaces every CMYK fill matching the From color (within tolerance) with the To color.</div>
   </div>
+  <button class="mode-btn" onclick={() => (pctMode = !pctMode)}>
+    {pctMode ? '% Pct' : '# Dec'}
+  </button>
 </div>
 
 <div class="remap-row">
@@ -32,9 +56,10 @@
           <input
             type="number"
             min="0"
-            max="1"
-            step="0.01"
-            bind:value={app.params.remapFrom[i]}
+            max={inputMax}
+            step={inputStep}
+            value={disp(app.params.remapFrom[i])}
+            oninput={(e) => setFrom(i, e)}
           />
         </div>
       {/each}
@@ -50,9 +75,10 @@
           <input
             type="number"
             min="0"
-            max="1"
-            step="0.01"
-            bind:value={app.params.remapTo[i]}
+            max={inputMax}
+            step={inputStep}
+            value={disp(app.params.remapTo[i])}
+            oninput={(e) => setTo(i, e)}
           />
         </div>
       {/each}
@@ -68,11 +94,12 @@
       class="param-input"
       type="number"
       min="0"
-      max="1"
-      step="0.01"
-      bind:value={app.params.remapTolerance}
+      max={inputMax}
+      step={inputStep}
+      value={disp(app.params.remapTolerance)}
+      oninput={(e) => setTolerance(e)}
     />
-    <div class="tolerance-hint">0.0 = exact match · 1.0 = match anything</div>
+    <div class="tolerance-hint">{toleranceHint}</div>
   </div>
 </div>
 
@@ -97,6 +124,19 @@
   .title-icon { font-size: 20px; color: var(--orange); }
   .params-title { font-size: 13px; font-weight: 700; color: var(--text); }
   .params-desc { font-size: 11.5px; color: var(--muted-hi); line-height: 1.5; margin-top: 2px; }
+  .mode-btn {
+    margin-left: auto;
+    padding: 3px 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--muted-hi);
+    font-size: 11px;
+    font-family: var(--mono);
+    flex-shrink: 0;
+    transition: 0.12s;
+  }
+  .mode-btn:hover { border-color: var(--orange); color: var(--orange); }
   .param-group { display: flex; flex-direction: column; gap: 7px; }
   .param-label {
     font-size: 10.5px;

@@ -16,6 +16,9 @@
     Clear All
   </button>
   <div class="tb-right">
+    <button class="tb-btn" onclick={() => (app.theme = app.theme === 'dark' ? 'light' : 'dark')}>
+      {app.theme === 'dark' ? '☀' : '☾'}
+    </button>
     <button class="tb-btn" style="color:var(--muted)" onclick={() => (app.helpVisible = true)}>
       ? Help
     </button>
@@ -68,5 +71,5 @@
     background: var(--border);
     margin: 0 4px;
   }
-  .tb-right { margin-left: auto; }
+  .tb-right { margin-left: auto; display: flex; gap: 6px; }
 </style>

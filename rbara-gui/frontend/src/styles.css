@@ -1,7 +1,7 @@
 :root {
-  --bg: #0e0e0e;
+  --bg: #0f0b09;
   --surface: #141414;
-  --panel: #1a1a1a;
+  --panel: #212121;
   --border: #282828;
   --border-hi: #3a3a3a;
   --orange: #e86807;
@@ -92,3 +92,38 @@ input, select {
 .tag.mixed{ background: #1a1a00; color: #fbbf24; border-color: #3a3a00; }
 .tag.ok   { background: #022c1e; color: #4ade80; border-color: #065f46; }
 .tag.warn { background: #1c1300; color: #fbbf24; border-color: #3d2c00; }
+
+/* ── Light mode ── */
+body.light {
+  --bg: #f4f4f4;
+  --surface: #ebebeb;
+  --panel: #e2e2e2;
+  --border: #d0d0d0;
+  --border-hi: #b8b8b8;
+  --text: #1a1a1a;
+  --muted: #777;
+  --muted-hi: #444;
+  --ok: #16a34a;
+  --fail: #dc2626;
+  --warn: #d97706;
+  --orange-dim: #e8680714;
+}
+
+/* tags */
+body.light .tag.cmyk  { background: #fff3eb; color: #c2410c; border-color: #f97316; }
+body.light .tag.rgb   { background: #eff6ff; color: #1d4ed8; border-color: #93c5fd; }
+body.light .tag.mixed { background: #fffbeb; color: #92400e; border-color: #fcd34d; }
+body.light .tag.ok    { background: #f0fdf4; color: #15803d; border-color: #86efac; }
+body.light .tag.warn  { background: #fffbeb; color: #92400e; border-color: #fcd34d; }
+
+/* FileStrip chip-cs — higher specificity (0,3,1) overrides scoped (0,3,0) */
+body.light .chip-cs.cmyk  { background: #fff3eb; color: #c2410c; border: 1px solid #f97316; }
+body.light .chip-cs.rgb   { background: #eff6ff; color: #1d4ed8; border: 1px solid #93c5fd; }
+body.light .chip-cs.mixed { background: #fffbeb; color: #92400e; border: 1px solid #fcd34d; }
+
+/* Toolbar danger button */
+body.light .tb-btn.danger { border-color: #fca5a5; color: #dc2626; background: #fff5f5; }
+
+/* Notice borders */
+body.light .notice.ok   { border-color: #86efac; }
+body.light .notice.warn { border-color: #fca5a5; }

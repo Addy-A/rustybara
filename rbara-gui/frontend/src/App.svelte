@@ -29,6 +29,12 @@
   let outputDir = $state(null);
   let actionLog = $state([]);              // {ok, message, output_paths, timestamp, action}
   let helpVisible = $state(false);
+  let theme = $state(localStorage.getItem('rbara-theme') ?? 'dark');
+
+  $effect(() => {
+    document.body.classList.toggle('light', theme === 'light');
+    localStorage.setItem('rbara-theme', theme);
+  });
 
   let params = $state({
     bleedInches: 0.125,
@@ -271,6 +277,8 @@
     get outputHint() { return outputHint; },
     get helpVisible() { return helpVisible; },
     set helpVisible(v) { helpVisible = v; },
+    get theme() { return theme; },
+    set theme(v) { theme = v; },
     get scopedFiles() { return scopedFiles; },
     get scopedPaths() { return scopedPaths; },
     get scopedCount() { return scopedCount; },
