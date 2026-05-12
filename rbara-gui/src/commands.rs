@@ -175,15 +175,24 @@ pub fn resize_to_bleed(
 }
 
 #[tauri::command]
-pub fn export_images(
+pub async fn export_images(
     paths: Vec<String>,
     format: String,
     dpi: u32,
     output_dir: Option<String>,
     state: State<'_, ProcessingLock>,
 ) -> Result<ActionResult, String> {
-    let _guard = LockGuard::acquire(&state.0)?;
-    let output_dir = output_dir.map(PathBuf::from);
+    // Acquire lock synchronously before spawning the blocking render task.
+    {
+        let mut guard = state
+            .0
+            .lock()
+            .map_err(|_| "Processing lock poisoned".to_string())?;
+        if *guard {
+            return Err("A file is already being processed".to_string());
+        }
+        *guard = true;
+    }
 
     let fmt = match format.as_str() {
         "png" => OutputFormat::Png,
@@ -196,37 +205,54 @@ pub fn export_images(
         render_annotations: false,
         render_form_data: false,
     };
+    let output_dir = output_dir.map(PathBuf::from);
+    let format_label = format.clone();
 
-    let mut output_paths = Vec::new();
-    let mut total_images = 0u32;
+    // Run the slow pdfium render on a blocking thread so the UI stays responsive.
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let mut output_paths = Vec::new();
+        let mut total_images = 0u32;
 
-    for path_str in &paths {
-        let path = PathBuf::from(path_str);
-        let pipeline = PdfPipeline::open(&path).map_err(friendly_error)?;
-        let page_count = pipeline.page_count() as u32;
+        for path_str in &paths {
+            let path = PathBuf::from(path_str);
+            let pipeline = PdfPipeline::open(&path).map_err(friendly_error)?;
+            let page_count = pipeline.page_count() as u32;
 
-        for page in 0..page_count {
-            let base = output_path(&path, &output_dir, Some(fmt.extension()), false);
-            let out = if page_count > 1 {
-                let stem = base.file_stem().unwrap_or_default().to_string_lossy();
-                base.with_file_name(format!("{}_{}.{}", stem, page + 1, fmt.extension()))
-            } else {
-                base
-            };
-            pipeline
-                .save_page_image(page, &out, &fmt, &config)
-                .map_err(friendly_error)?;
-            output_paths.push(out.to_string_lossy().into_owned());
-            total_images += 1;
+            for page in 0..page_count {
+                let base = output_path(&path, &output_dir, Some(fmt.extension()), false);
+                let out = if page_count > 1 {
+                    let stem = base.file_stem().unwrap_or_default().to_string_lossy();
+                    base.with_file_name(format!("{}_{}.{}", stem, page + 1, fmt.extension()))
+                } else {
+                    base
+                };
+                pipeline
+                    .save_page_image(page, &out, &fmt, &config)
+                    .map_err(friendly_error)?;
+                output_paths.push(out.to_string_lossy().into_owned());
+                total_images += 1;
+            }
         }
+
+        Ok::<ActionResult, String>(ActionResult {
+            ok: true,
+            message: format!(
+                "Exported {} image(s) ({}, {}dpi)",
+                total_images, format_label, dpi
+            ),
+            output_paths,
+            timestamp: now_timestamp(),
+        })
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?;
+
+    // Release lock whether the task succeeded or failed.
+    if let Ok(mut guard) = state.0.lock() {
+        *guard = false;
     }
 
-    Ok(ActionResult {
-        ok: true,
-        message: format!("Exported {} image(s) ({}, {}dpi)", total_images, format, dpi),
-        output_paths,
-        timestamp: now_timestamp(),
-    })
+    result
 }
 
 #[tauri::command]

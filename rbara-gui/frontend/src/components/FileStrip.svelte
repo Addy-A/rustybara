@@ -1,6 +1,6 @@
 <script>
   import { useAppState } from '../lib/context.js';
-  import { colorSpaceTagClass, colorSpaceLabel } from '../lib/api.js';
+  import { colorSpaceTagClass, colorSpaceLabel, formatSize } from '../lib/api.js';
   const app = useAppState();
 </script>
 
@@ -41,7 +41,7 @@
       >{f.scoped ? '✓' : ''}</span>
       <span class="chip-name">{f.name}</span>
       <span class="chip-cs {colorSpaceTagClass(f.colorSpace)}">{colorSpaceLabel(f.colorSpace)}</span>
-      <span class="chip-size">{f.sizeKb} KB</span>
+      <span class="chip-size">{formatSize(f.sizeKb)}</span>
       <span
         class="chip-x"
         onclick={(e) => { e.stopPropagation(); app.removeFile(i); }}

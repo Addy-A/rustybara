@@ -1,5 +1,6 @@
 <script>
   import { useAppState } from '../lib/context.js';
+  import { formatSize } from '../lib/api.js';
   const app = useAppState();
 
   let { compact = false } = $props();
@@ -48,7 +49,7 @@
         </div>
         <div class="meta-cell">
           <div class="mc-label">File Size</div>
-          <div class="mc-val">{m.file_size_kb} KB</div>
+          <div class="mc-val">{formatSize(m.file_size_kb)}</div>
         </div>
         <div class="meta-cell">
           <div class="mc-label">Editing</div>

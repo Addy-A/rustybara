@@ -43,6 +43,13 @@ export function colorSpaceTagClass(cs) {
   return '';
 }
 
+export function formatSize(kb) {
+  if (kb < 1024) return `${kb} KB`;
+  if (kb < 1024 * 1024) return `${(kb / 1024).toFixed(1)} MB`;
+  if (kb < 1024 * 1024 * 1024) return `${(kb / (1024 * 1024)).toFixed(2)} GB`;
+  return `${(kb / (1024 * 1024 * 1024)).toFixed(2)} TB`;
+}
+
 export function colorSpaceLabel(cs) {
   switch (cs) {
     case 'PureCMYK': return 'CMYK';

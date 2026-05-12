@@ -1,5 +1,7 @@
 /target
 /rustybara/tests/fixtures/secret_fixture
 /rustybara-icc/src/profiles/data
+/rustybara-icc/.claude/
 /rbara-gui/frontend/node_modules
+/rbara-gui/resources/
 .env
