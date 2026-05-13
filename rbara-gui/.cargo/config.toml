@@ -1,0 +1,5 @@
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-rpath", "-C", "link-arg=@executable_path/../Resources"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-rpath", "-C", "link-arg=@executable_path/../Resources"]
