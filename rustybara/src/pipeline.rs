@@ -1,4 +1,3 @@
-use crate::color::icc::ColorSpaceKind;
 use crate::encode::OutputFormat;
 use crate::pages::PageBoxes;
 use crate::raster::RenderConfig;
@@ -23,6 +22,17 @@ use std::path::Path;
 /// let doc = Document::load("example.pdf")?;
 /// let pipeline = PdfPipeline::with_document(doc);
 /// ```
+/// Describes the overall color operator usage found across a PDF document's content streams.
+///
+/// Returned by [`PdfPipeline::detect_color_space`]. Distinct from the profile-level
+/// [`rustybara_icc::ColorSpaceKind`], which classifies individual ICC profiles.
+pub enum DocumentColorKind {
+    PureCMYK,
+    PureRGB,
+    Mixed,
+    Unknown,
+}
+
 pub struct PdfPipeline {
     doc: Document,
 }
@@ -156,7 +166,7 @@ impl PdfPipeline {
     /// # Notes
     ///
     /// Pages whose content stream cannot be decoded are silently skipped.
-    pub fn detect_color_space(doc: &Document) -> ColorSpaceKind {
+    pub fn detect_color_space(doc: &Document) -> DocumentColorKind {
         let mut has_cmyk = false;
         let mut has_rgb = false;
 
@@ -171,15 +181,15 @@ impl PdfPipeline {
                     _ => {}
                 }
                 if has_cmyk && has_rgb {
-                    return ColorSpaceKind::Mixed;
+                    return DocumentColorKind::Mixed;
                 }
             }
         }
 
         match (has_cmyk, has_rgb) {
-            (true, false) => ColorSpaceKind::PureCMYK,
-            (false, true) => ColorSpaceKind::PureRGB,
-            _ => ColorSpaceKind::Unknown,
+            (true, false) => DocumentColorKind::PureCMYK,
+            (false, true) => DocumentColorKind::PureRGB,
+            _ => DocumentColorKind::Unknown,
         }
     }
 

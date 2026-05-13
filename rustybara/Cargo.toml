@@ -16,11 +16,11 @@ lopdf = "0.40.0"
 pdfium-render = { version = "0.9.0", features = ["thread_safe"] }
 image = { version = "0.25.10", features = ["jpeg", "tiff", "png", "webp"] }
 webp = "0.3.1"
-lcms2 = { version = "6.1.1", optional = true }
+rustybara-icc = { path = "../rustybara-icc", optional = true }
 rayon = "1.11.0"
 
 [features]
-color = ["dep:lcms2"]
+color = ["dep:rustybara-icc"]
 gpu = []   # stubbed, planned for GPU renderer
 
 [dev-dependencies]

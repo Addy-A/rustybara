@@ -1,6 +1,6 @@
 use image::ImageError;
 #[cfg(feature = "color")]
-use lcms2::Error as Lcms2Error;
+use rustybara_icc::IccError;
 use lopdf::Error as LopdfError;
 use pdfium_render::prelude::PdfiumError;
 use std::fmt;
@@ -42,7 +42,7 @@ pub enum Error {
     Pdf(LopdfError),
     Render(PdfiumError),
     #[cfg(feature = "color")]
-    Color(Lcms2Error),
+    Color(IccError),
 }
 
 impl fmt::Display for Error {
@@ -96,8 +96,8 @@ impl From<PdfiumError> for Error {
 }
 
 #[cfg(feature = "color")]
-impl From<Lcms2Error> for Error {
-    fn from(err: Lcms2Error) -> Self {
+impl From<IccError> for Error {
+    fn from(err: IccError) -> Self {
         Error::Color(err)
     }
 }

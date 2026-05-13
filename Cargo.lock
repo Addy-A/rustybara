@@ -4829,10 +4829,10 @@ name = "rustybara"
 version = "0.1.2"
 dependencies = [
  "image",
- "lcms2",
  "lopdf",
  "pdfium-render",
  "rayon",
+ "rustybara-icc",
  "webp",
 ]
 
