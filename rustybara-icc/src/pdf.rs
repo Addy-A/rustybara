@@ -120,6 +120,58 @@ impl<'a> PdfColorConverter<'a> {
     }
 }
 
+/// Flattens all `Separation` spot color uses to their device CMYK alternates across the
+/// entire document without applying any ICC transform.
+///
+/// For each page, `cs`/`scn` operator pairs that reference a `Separation` color space are
+/// replaced with equivalent `k` (device CMYK) operators using the tint function embedded in
+/// the color space definition. The document is modified in-place.
+///
+/// Returns the total number of spot color operator sequences replaced across all pages.
+///
+/// **DeviceN limitation:** `DeviceN` color spaces are detected but not correctly flattened —
+/// their `scn` operators carry one tint value per ink channel, which the current single-channel
+/// evaluator does not handle. Those operators are left unchanged.
+pub fn flatten_spot_colors(doc: &mut Document) -> crate::Result<u32> {
+    let page_ids: Vec<lopdf::ObjectId> = doc.get_pages().values().copied().collect();
+    let mut total = 0u32;
+
+    for page_id in page_ids {
+        let content = doc.get_and_decode_page_content(page_id)?;
+        let spot_names: std::collections::HashSet<String> = find_spot_colorspaces(doc)
+            .into_iter()
+            .map(|(alias, _)| alias)
+            .collect();
+        let (flattened, count) = flatten_spot_ops(&content.operations, &spot_names, doc, page_id);
+        total += count;
+
+        let new_content = Content { operations: flattened };
+        let bytes = new_content.encode()?;
+
+        let stream_ids = doc.get_page_contents(page_id);
+        if stream_ids.is_empty() {
+            continue;
+        }
+        let stream_id = stream_ids[0];
+        if let Ok(Object::Stream(stream)) = doc.get_object_mut(stream_id) {
+            stream.set_plain_content(bytes);
+        }
+        if stream_ids.len() > 1 {
+            for &extra_id in &stream_ids[1..] {
+                if let Ok(Object::Stream(s)) = doc.get_object_mut(extra_id) {
+                    s.set_plain_content(Vec::new());
+                }
+            }
+            if let Ok(page_obj) = doc.get_object_mut(page_id)
+                && let Ok(dict) = page_obj.as_dict_mut()
+            {
+                dict.set("Contents", Object::Reference(stream_id));
+            }
+        }
+    }
+    Ok(total)
+}
+
 fn convert_operations(operations: &[Operation], transform: &ColorTransform) -> Vec<Operation> {
     operations
         .iter()

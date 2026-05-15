@@ -174,6 +174,37 @@ pub const VIDEO_PAL: IccProfile = IccProfile {
     bytes: include_bytes!("data/RGB/VideoPAL.icc"),
 };
 
+// ── Lookup ────────────────────────────────────────────────────────────────────
+
+/// Returns the profile constant for a given machine-readable name, or `None` if unknown.
+pub fn by_name(name: &str) -> Option<&'static IccProfile> {
+    match name {
+        "CoatedFOGRA27" => Some(&COATED_FOGRA_27),
+        "CoatedFOGRA39" => Some(&COATED_FOGRA_39),
+        "CoatedGRACoL2006" => Some(&COATED_GRACOL_2006),
+        "JapanColor2001Coated" => Some(&JAPAN_COLOR_2001_COATED),
+        "JapanColor2001Uncoated" => Some(&JAPAN_COLOR_2001_UNCOATED),
+        "JapanColor2002Newspaper" => Some(&JAPAN_COLOR_2002_NEWSPAPER),
+        "JapanColor2003WebCoated" => Some(&JAPAN_COLOR_2003_WEB_COATED),
+        "JapanWebCoated" => Some(&JAPAN_WEB_COATED),
+        "UncoatedFOGRA29" => Some(&UNCOATED_FOGRA_29),
+        "USWebCoatedSWOP" => Some(&US_WEB_COATED_SWOP),
+        "USWebUncoated" => Some(&US_WEB_UNCOATED),
+        "WebCoatedFOGRA28" => Some(&WEB_COATED_FOGRA_28),
+        "WebCoatedSWOP2006Grade3" => Some(&WEB_COATED_SWOP_2006_GRADE3),
+        "WebCoatedSWOP2006Grade5" => Some(&WEB_COATED_SWOP_2006_GRADE5),
+        "AdobeRGB1998" => Some(&ADOBE_RGB_1998),
+        "AppleRGB" => Some(&APPLE_RGB),
+        "ColorMatchRGB" => Some(&COLOR_MATCH_RGB),
+        "PAL_SECAM" => Some(&PAL_SECAM),
+        "SMPTE-C" => Some(&SMPTE_C),
+        "VideoHD" => Some(&VIDEO_HD),
+        "VideoNTSC" => Some(&VIDEO_NTSC),
+        "VideoPAL" => Some(&VIDEO_PAL),
+        _ => None,
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

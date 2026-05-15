@@ -70,7 +70,7 @@ fn friendly_error(e: rustybara::Error) -> String {
              Details: {e}"
         ),
         rustybara::Error::Image(_) => format!("Image encoding failed: {e}"),
-        rustybara::Error::Color(_) => format!("Color conversion failed: {e}"),
+        rustybara::Error::Color(_) => format!("Color space conversion failed: {e}"),
     }
 }
 
@@ -285,6 +285,186 @@ pub fn remap_colors(
     Ok(ActionResult {
         ok: true,
         message: format!("Remapped {} file(s)", paths.len()),
+        output_paths,
+        timestamp: now_timestamp(),
+    })
+}
+
+#[tauri::command]
+pub fn add_trim_box(
+    paths: Vec<String>,
+    bleed_inches: f64,
+    output_dir: Option<String>,
+    overwrite: bool,
+    state: State<'_, ProcessingLock>,
+) -> Result<ActionResult, String> {
+    let _guard = LockGuard::acquire(&state.0)?;
+    let output_dir = output_dir.map(PathBuf::from);
+    let bleed_pts = bleed_inches * 72.0;
+    let mut output_paths = Vec::new();
+
+    for path_str in &paths {
+        let path = PathBuf::from(path_str);
+        let out = output_path(&path, &output_dir, None, overwrite);
+        PdfPipeline::open(&path)
+            .and_then(|mut p| {
+                p.add_trim_box(bleed_pts)?;
+                p.save_pdf(&out)?;
+                Ok(())
+            })
+            .map_err(friendly_error)?;
+        output_paths.push(out.to_string_lossy().into_owned());
+    }
+
+    Ok(ActionResult {
+        ok: true,
+        message: format!("Added trim box to {} file(s) (bleed: {}″)", paths.len(), bleed_inches),
+        output_paths,
+        timestamp: now_timestamp(),
+    })
+}
+
+#[tauri::command]
+pub fn split_pages(
+    paths: Vec<String>,
+    output_dir: Option<String>,
+    state: State<'_, ProcessingLock>,
+) -> Result<ActionResult, String> {
+    let _guard = LockGuard::acquire(&state.0)?;
+    let output_dir = output_dir.map(PathBuf::from);
+    let mut output_paths = Vec::new();
+    let mut total_pages = 0u32;
+
+    for path_str in &paths {
+        let path = PathBuf::from(path_str);
+        let pipeline = PdfPipeline::open(&path).map_err(friendly_error)?;
+        let pages = pipeline.split_pages().map_err(friendly_error)?;
+        let dir: &std::path::Path = output_dir.as_deref()
+            .or_else(|| path.parent().filter(|p| !p.as_os_str().is_empty()))
+            .unwrap_or(std::path::Path::new("."));
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+        for (i, mut page) in pages.into_iter().enumerate() {
+            let out = dir.join(format!("{}_page_{}.pdf", stem, i + 1));
+            page.save_pdf(&out).map_err(friendly_error)?;
+            output_paths.push(out.to_string_lossy().into_owned());
+            total_pages += 1;
+        }
+    }
+
+    Ok(ActionResult {
+        ok: true,
+        message: format!("Split {} file(s) into {} page(s)", paths.len(), total_pages),
+        output_paths,
+        timestamp: now_timestamp(),
+    })
+}
+
+#[tauri::command]
+pub fn extract_pages(
+    paths: Vec<String>,
+    page_nums: Vec<u32>,
+    output_dir: Option<String>,
+    overwrite: bool,
+    state: State<'_, ProcessingLock>,
+) -> Result<ActionResult, String> {
+    let _guard = LockGuard::acquire(&state.0)?;
+    let output_dir = output_dir.map(PathBuf::from);
+    let mut output_paths = Vec::new();
+
+    for path_str in &paths {
+        let path = PathBuf::from(path_str);
+        let out = output_path(&path, &output_dir, None, overwrite);
+        PdfPipeline::open(&path)
+            .and_then(|p| {
+                let mut extracted = p.extract_pages(&page_nums)?;
+                extracted.save_pdf(&out)?;
+                Ok(())
+            })
+            .map_err(friendly_error)?;
+        output_paths.push(out.to_string_lossy().into_owned());
+    }
+
+    Ok(ActionResult {
+        ok: true,
+        message: format!("Extracted {} page(s) from {} file(s)", page_nums.len(), paths.len()),
+        output_paths,
+        timestamp: now_timestamp(),
+    })
+}
+
+#[tauri::command]
+pub fn flatten_spots(
+    paths: Vec<String>,
+    output_dir: Option<String>,
+    overwrite: bool,
+    state: State<'_, ProcessingLock>,
+) -> Result<ActionResult, String> {
+    let _guard = LockGuard::acquire(&state.0)?;
+    let output_dir = output_dir.map(PathBuf::from);
+    let mut output_paths = Vec::new();
+    let mut total_spots = 0u32;
+
+    for path_str in &paths {
+        let path = PathBuf::from(path_str);
+        let out = output_path(&path, &output_dir, None, overwrite);
+        let spots = PdfPipeline::open(&path)
+            .and_then(|mut p| {
+                let n = p.flatten_spots()?;
+                p.save_pdf(&out)?;
+                Ok(n)
+            })
+            .map_err(friendly_error)?;
+        total_spots += spots;
+        output_paths.push(out.to_string_lossy().into_owned());
+    }
+
+    Ok(ActionResult {
+        ok: true,
+        message: format!(
+            "Flattened {} spot color use(s) across {} file(s)",
+            total_spots,
+            paths.len()
+        ),
+        output_paths,
+        timestamp: now_timestamp(),
+    })
+}
+
+#[tauri::command]
+pub fn convert_color_space(
+    paths: Vec<String>,
+    from_profile: String,
+    to_profile: String,
+    intent: String,
+    output_dir: Option<String>,
+    overwrite: bool,
+    state: State<'_, ProcessingLock>,
+) -> Result<ActionResult, String> {
+    let _guard = LockGuard::acquire(&state.0)?;
+    let output_dir = output_dir.map(PathBuf::from);
+    let mut output_paths = Vec::new();
+
+    for path_str in &paths {
+        let path = PathBuf::from(path_str);
+        let out = output_path(&path, &output_dir, None, overwrite);
+        PdfPipeline::open(&path)
+            .and_then(|mut p| {
+                p.convert_color_space(&from_profile, &to_profile, &intent)?;
+                p.save_pdf(&out)?;
+                Ok(())
+            })
+            .map_err(friendly_error)?;
+        output_paths.push(out.to_string_lossy().into_owned());
+    }
+
+    Ok(ActionResult {
+        ok: true,
+        message: format!(
+            "Converted {} file(s): {} → {}",
+            paths.len(),
+            from_profile,
+            to_profile
+        ),
         output_paths,
         timestamp: now_timestamp(),
     })

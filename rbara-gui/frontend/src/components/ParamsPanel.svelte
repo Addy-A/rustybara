@@ -4,6 +4,11 @@
   import ResizePanel from './ResizePanel.svelte';
   import ExportPanel from './ExportPanel.svelte';
   import RemapPanel from './RemapPanel.svelte';
+  import ConvertColorSpacePanel from './ConvertColorSpacePanel.svelte';
+  import FlattenSpotsPanel from './FlattenSpotsPanel.svelte';
+  import AddTrimBoxPanel from './AddTrimBoxPanel.svelte';
+  import SplitPagesPanel from './SplitPagesPanel.svelte';
+  import ExtractPagesPanel from './ExtractPagesPanel.svelte';
   import OutputPanel from './OutputPanel.svelte';
   const app = useAppState();
 </script>
@@ -17,6 +22,16 @@
     <ExportPanel />
   {:else if app.activeAction === 'remap'}
     <RemapPanel />
+  {:else if app.activeAction === 'colorspace'}
+    <ConvertColorSpacePanel />
+  {:else if app.activeAction === 'spots'}
+    <FlattenSpotsPanel />
+  {:else if app.activeAction === 'addtrimbox'}
+    <AddTrimBoxPanel />
+  {:else if app.activeAction === 'splitpages'}
+    <SplitPagesPanel />
+  {:else if app.activeAction === 'extractpages'}
+    <ExtractPagesPanel />
   {:else if app.activeAction === 'output'}
     <OutputPanel />
   {/if}

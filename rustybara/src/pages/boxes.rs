@@ -138,6 +138,39 @@ impl PageBoxes {
     }
 }
 
+/// Sets a `TrimBox` on every page by insetting the `MediaBox` by `bleed_pts` on all sides.
+///
+/// Reads each page's `MediaBox`, shrinks it inward by `bleed_pts`, and writes the result
+/// back as the page's `TrimBox`. Any existing `TrimBox` is overwritten.
+pub fn set_trim_boxes(doc: &mut Document, bleed_pts: f64) -> crate::Result<()> {
+    let page_ids: Vec<ObjectId> = doc.get_pages().values().copied().collect();
+
+    let trim_rects: Vec<(ObjectId, [f64; 4])> = page_ids.iter()
+        .map(|&page_id| {
+            let boxes = PageBoxes::read(doc, page_id)?;
+            let m = &boxes.media_box;
+            Ok((page_id, [
+                m.x + bleed_pts,
+                m.y + bleed_pts,
+                m.right() - bleed_pts,
+                m.top() - bleed_pts,
+            ]))
+        })
+        .collect::<crate::Result<Vec<_>>>()?;
+
+    for (page_id, [x0, y0, x1, y1]) in trim_rects {
+        let arr = vec![
+            Object::Real(x0 as f32),
+            Object::Real(y0 as f32),
+            Object::Real(x1 as f32),
+            Object::Real(y1 as f32),
+        ];
+        doc.get_dictionary_mut(page_id)?.set(b"TrimBox", Object::Array(arr));
+    }
+
+    Ok(())
+}
+
 fn arr_to_rect(arr: &[Object]) -> Rect {
     Rect::from_corners(
         object_to_f64(&arr[0]),

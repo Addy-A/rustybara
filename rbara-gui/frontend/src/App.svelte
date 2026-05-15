@@ -43,6 +43,11 @@
     remapFrom: [1.0, 1.0, 1.0, 1.0],
     remapTo: [0.6, 0.4, 0.2, 1.0],
     remapTolerance: 1.0,
+    fromProfile: 'CoatedFOGRA39',
+    toProfile: 'CoatedGRACoL2006',
+    convertIntent: 'RelativeColorimetric',
+    trimBoxBleedInches: 0.125,
+    extractPagesInput: '1',
   });
 
   // ---------- layout state ----------
@@ -191,6 +196,35 @@
             overwrite
           );
           break;
+        case 'colorspace':
+          actionLabel = 'ConvertColorSpace';
+          result = await api.convertColorSpace(
+            paths,
+            params.fromProfile,
+            params.toProfile,
+            params.convertIntent,
+            outputDir,
+            overwrite
+          );
+          break;
+        case 'spots':
+          actionLabel = 'FlattenSpots';
+          result = await api.flattenSpots(paths, outputDir, overwrite);
+          break;
+        case 'addtrimbox':
+          actionLabel = 'AddTrimBox';
+          result = await api.addTrimBox(paths, params.trimBoxBleedInches, outputDir, overwrite);
+          break;
+        case 'splitpages':
+          actionLabel = 'SplitPages';
+          result = await api.splitPages(paths, outputDir);
+          break;
+        case 'extractpages': {
+          actionLabel = 'ExtractPages';
+          const pageNums = api.parsePageNums(params.extractPagesInput);
+          result = await api.extractPages(paths, pageNums, outputDir, overwrite);
+          break;
+        }
         default:
           processing = false;
           return;
@@ -223,6 +257,11 @@
       case 'r': activeAction = 'resize'; break;
       case 'x': activeAction = 'export'; break;
       case 'm': activeAction = 'remap'; break;
+      case 'c': activeAction = 'colorspace'; break;
+      case 's': activeAction = 'spots'; break;
+      case 'b': activeAction = 'addtrimbox'; break;
+      case 'p': activeAction = 'splitpages'; break;
+      case 'e': activeAction = 'extractpages'; break;
       case '/': activeAction = 'output'; break;
       case 'o': overwrite = !overwrite; break;
       case 'f': addFiles(); break;

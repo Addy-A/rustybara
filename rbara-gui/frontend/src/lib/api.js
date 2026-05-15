@@ -30,6 +30,46 @@ export async function remapColors(paths, from, to, tolerance, outputDir, overwri
   return await invoke('remap_colors', { paths, from, to, tolerance, outputDir, overwrite });
 }
 
+export async function convertColorSpace(paths, fromProfile, toProfile, intent, outputDir, overwrite) {
+  return await invoke('convert_color_space', { paths, fromProfile, toProfile, intent, outputDir, overwrite });
+}
+
+export async function flattenSpots(paths, outputDir, overwrite) {
+  return await invoke('flatten_spots', { paths, outputDir, overwrite });
+}
+
+export async function addTrimBox(paths, bleedInches, outputDir, overwrite) {
+  return await invoke('add_trim_box', { paths, bleedInches, outputDir, overwrite });
+}
+
+export async function splitPages(paths, outputDir) {
+  return await invoke('split_pages', { paths, outputDir });
+}
+
+export async function extractPages(paths, pageNums, outputDir, overwrite) {
+  return await invoke('extract_pages', { paths, pageNums, outputDir, overwrite });
+}
+
+// Parses a 1-indexed page string like "1, 3-5, 7" into 0-indexed numbers for the backend.
+export function parsePageNums(input) {
+  return [...new Set(
+    String(input).split(',')
+      .flatMap(s => {
+        s = s.trim();
+        const range = s.match(/^(\d+)-(\d+)$/);
+        if (range) {
+          const from = parseInt(range[1], 10);
+          const to = parseInt(range[2], 10);
+          return Array.from({ length: Math.max(0, to - from + 1) }, (_, i) => from + i);
+        }
+        const n = parseInt(s, 10);
+        return isNaN(n) ? [] : [n];
+      })
+      .filter(n => n >= 1)
+      .map(n => n - 1)
+  )].sort((a, b) => a - b);
+}
+
 export function basename(path) {
   if (!path) return '';
   const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));

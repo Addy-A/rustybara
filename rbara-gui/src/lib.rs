@@ -3,8 +3,8 @@ pub mod commands;
 use std::sync::Mutex;
 
 use commands::{
-    export_images, load_metadata, open_file_dialog, remap_colors, resize_to_bleed, trim_marks,
-    ProcessingLock,
+    add_trim_box, convert_color_space, export_images, extract_pages, flatten_spots, load_metadata,
+    open_file_dialog, remap_colors, resize_to_bleed, split_pages, trim_marks, ProcessingLock,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -15,8 +15,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             trim_marks,
             resize_to_bleed,
+            add_trim_box,
+            split_pages,
+            extract_pages,
             export_images,
             remap_colors,
+            flatten_spots,
+            convert_color_space,
             load_metadata,
             open_file_dialog,
         ])

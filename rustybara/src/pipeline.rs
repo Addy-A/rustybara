@@ -145,6 +145,67 @@ impl PdfPipeline {
         Ok(self)
     }
 
+    /// Sets a `TrimBox` on every page by insetting the `MediaBox` by `bleed_pts` on all sides.
+    ///
+    /// Use this when a PDF arrives without a `TrimBox` but the bleed extent is known. The most
+    /// common prepress default is `9.0` points (⅛ inch / ~3.175 mm). Any existing `TrimBox` is
+    /// overwritten. This is the inverse of [`Self::resize`], which expands the `MediaBox` outward.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any page dictionary cannot be accessed.
+    pub fn add_trim_box(&mut self, bleed_pts: f64) -> crate::Result<&mut Self> {
+        crate::pages::set_trim_boxes(&mut self.doc, bleed_pts)?;
+        Ok(self)
+    }
+
+    /// Extracts a subset of pages into a new [`PdfPipeline`].
+    ///
+    /// Page numbers are **zero-indexed** — page `0` is the first page, consistent with
+    /// [`Self::save_page_image`]. Out-of-range values are silently ignored; output page order
+    /// always matches the original document.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `page_nums` contains no valid indices or if the page tree cannot
+    /// be rewritten.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use rustybara::PdfPipeline;
+    /// let doc = PdfPipeline::open("brochure.pdf").unwrap();
+    /// let page_count = doc.page_count() as u32;
+    /// let mut cover = doc.extract_pages(&[0]).unwrap();
+    /// let mut body  = doc.extract_pages(&(1..page_count).collect::<Vec<_>>()).unwrap();
+    /// cover.save_pdf("cover.pdf").unwrap();
+    /// body.save_pdf("body.pdf").unwrap();
+    /// ```
+    pub fn extract_pages(&self, page_nums: &[u32]) -> crate::Result<Self> {
+        let doc = crate::pages::extract_pages(&self.doc, page_nums)?;
+        Ok(Self { doc })
+    }
+
+    /// Splits every page into its own [`PdfPipeline`].
+    ///
+    /// Returns a `Vec` where index `i` holds a single-page pipeline for zero-indexed page `i`.
+    /// Convenience wrapper around [`Self::extract_pages`].
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use rustybara::PdfPipeline;
+    /// let doc = PdfPipeline::open("spread.pdf").unwrap();
+    /// for (i, mut page) in doc.split_pages().unwrap().into_iter().enumerate() {
+    ///     page.save_pdf(format!("page_{}.pdf", i + 1)).unwrap();
+    /// }
+    /// ```
+    pub fn split_pages(&self) -> crate::Result<Vec<Self>> {
+        (0..self.page_count() as u32)
+            .map(|i| self.extract_pages(&[i]))
+            .collect()
+    }
+
     /// Analyzes a PDF document and classifies the color spaces used across all pages.
     ///
     /// Iterates through every page's content stream, inspecting PDF paint operators to
@@ -235,6 +296,69 @@ impl PdfPipeline {
         };
         ColorRemap::apply(&mut self.doc, &[remaps])?;
         Ok(self)
+    }
+
+    /// Flattens all `Separation` spot color uses to their device CMYK alternates without
+    /// applying any ICC transform.
+    ///
+    /// This is a lighter alternative to [`convert_color_space`] for documents that have
+    /// spot inks but don't need a full profile-to-profile conversion. Each `cs`/`scn`
+    /// operator pair referencing a `Separation` color space is replaced with the equivalent
+    /// device CMYK `k` operator evaluated from the embedded tint function.
+    ///
+    /// Returns the total number of spot color operator sequences replaced across all pages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any page's content stream cannot be decoded or re-encoded.
+    #[cfg(feature = "color")]
+    pub fn flatten_spots(&mut self) -> crate::Result<u32> {
+        use rustybara_icc::pdf::flatten_spot_colors;
+        Ok(flatten_spot_colors(&mut self.doc)?)
+    }
+
+    /// Applies an ICC color space conversion to every page in the document.
+    ///
+    /// Builds a [`rustybara_icc::ColorTransform`] from the named source and destination
+    /// profiles, then walks every page's content stream, flattening spot colors and
+    /// rewriting CMYK/RGB paint operators through the transform.
+    ///
+    /// # Arguments
+    ///
+    /// * `from_profile` – Machine-readable name of the source ICC profile (e.g. `"CoatedFOGRA39"`).
+    /// * `to_profile`   – Machine-readable name of the destination ICC profile.
+    /// * `intent`       – Rendering intent as a string: `"Perceptual"`, `"Saturation"`,
+    ///   `"AbsoluteColorimetric"`, or anything else for `RelativeColorimetric` (the default).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either profile name is unknown, if the lcms2 transform cannot be
+    /// built, or if any page's content stream cannot be decoded or re-encoded.
+    #[cfg(feature = "color")]
+    pub fn convert_color_space(
+        &mut self,
+        from_profile: &str,
+        to_profile: &str,
+        intent: &str,
+    ) -> crate::Result<()> {
+        use rustybara_icc::pdf::PdfColorConverter;
+        use rustybara_icc::{profiles, ColorTransform, IccError, RenderingIntent};
+
+        let from = profiles::by_name(from_profile).ok_or_else(|| {
+            IccError::Profile(format!("unknown source profile: {from_profile}"))
+        })?;
+        let to = profiles::by_name(to_profile).ok_or_else(|| {
+            IccError::Profile(format!("unknown destination profile: {to_profile}"))
+        })?;
+        let ri = match intent {
+            "Perceptual"           => RenderingIntent::Perceptual,
+            "Saturation"           => RenderingIntent::Saturation,
+            "AbsoluteColorimetric" => RenderingIntent::AbsoluteColorimetric,
+            _                      => RenderingIntent::RelativeColorimetric,
+        };
+        let transform = ColorTransform::new(from, to, ri)?;
+        PdfColorConverter::new(&mut self.doc, transform).convert_document()?;
+        Ok(())
     }
 
     /// Returns the total number of pages in the document.
