@@ -292,7 +292,7 @@ pub fn remap_colors(
 
 #[tauri::command]
 pub fn load_metadata(path: String) -> Result<PdfMetadataDto, String> {
-    use rustybara::color::icc::ColorSpaceKind;
+    use rustybara::DocumentColorKind;
 
     let path = PathBuf::from(path);
     let pipeline = PdfPipeline::open(&path).map_err(friendly_error)?;
@@ -321,10 +321,10 @@ pub fn load_metadata(path: String) -> Result<PdfMetadataDto, String> {
     };
 
     let color_space = match PdfPipeline::detect_color_space(doc) {
-        ColorSpaceKind::PureCMYK => "PureCMYK",
-        ColorSpaceKind::PureRGB => "PureRGB",
-        ColorSpaceKind::Mixed => "Mixed",
-        ColorSpaceKind::Unknown => "Unknown",
+        DocumentColorKind::PureCMYK => "PureCMYK",
+        DocumentColorKind::PureRGB => "PureRGB",
+        DocumentColorKind::Mixed => "Mixed",
+        DocumentColorKind::Unknown => "Unknown",
     }
     .to_string();
 

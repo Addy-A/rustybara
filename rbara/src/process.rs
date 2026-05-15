@@ -165,10 +165,10 @@ pub fn load_metadata(path: &Path) -> rustybara::Result<crate::tui::app::PdfMetad
     };
 
     let color_space = match rustybara::PdfPipeline::detect_color_space(pipeline.doc()) {
-        rustybara::color::icc::ColorSpaceKind::PureCMYK => ColorSpaceInfo::PureCMYK,
-        rustybara::color::icc::ColorSpaceKind::PureRGB => ColorSpaceInfo::PureRGB,
-        rustybara::color::icc::ColorSpaceKind::Mixed => ColorSpaceInfo::Mixed,
-        rustybara::color::icc::ColorSpaceKind::Unknown => ColorSpaceInfo::Unknown,
+        rustybara::DocumentColorKind::PureCMYK => ColorSpaceInfo::PureCMYK,
+        rustybara::DocumentColorKind::PureRGB => ColorSpaceInfo::PureRGB,
+        rustybara::DocumentColorKind::Mixed => ColorSpaceInfo::Mixed,
+        rustybara::DocumentColorKind::Unknown => ColorSpaceInfo::Unknown,
     };
 
     let file_size_kb = std::fs::metadata(path).map(|m| m.len() / 1024).unwrap_or(0);

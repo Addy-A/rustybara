@@ -17,13 +17,6 @@ use lopdf::{Document, Object};
 ///
 /// # Examples
 ///
-/// ```
-/// let remap = ColorRemap {
-///     from: [1.0, 0.0, 0.0, 1.0], // Red
-///     to: [0.0, 1.0, 0.0, 1.0],   // Green
-///     tolerance: 0.1,              // 10% tolerance
-/// };
-/// ```
 pub struct ColorRemap {
     pub from: [f64; 4],
     pub to: [f64; 4],

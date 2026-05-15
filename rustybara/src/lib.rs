@@ -11,4 +11,5 @@ pub mod pipeline;
 pub use error::Error;
 pub use error::Result;
 
+pub use pipeline::DocumentColorKind;
 pub use pipeline::PdfPipeline;

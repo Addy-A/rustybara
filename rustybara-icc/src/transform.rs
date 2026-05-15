@@ -36,6 +36,17 @@ pub struct ColorTransform {
 }
 
 impl ColorTransform {
+    /// Build a transform between two bundled ICC profiles.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use rustybara_icc::{ColorTransform, RenderingIntent, profiles};
+    /// let t = ColorTransform::new(
+    ///     &profiles::COATED_FOGRA_39,
+    ///     &profiles::COATED_GRACOL_2006,
+    ///     RenderingIntent::RelativeColorimetric,
+    /// ).unwrap();
+    /// ```
     pub fn new(src: &IccProfile, dst: &IccProfile, intent: RenderingIntent) -> crate::Result<Self> {
         let src_profile =
             Profile::new_icc(src.bytes).map_err(|e| crate::IccError::Profile(e.to_string()))?;
@@ -64,14 +75,21 @@ impl ColorTransform {
         })
     }
 
+    /// Returns the color space kind of the transform's source profile.
     pub fn input_color_space(&self) -> &crate::ColorSpaceKind {
         &self.src_cs
     }
 
+    /// Returns the color space kind of the transform's destination profile.
     pub fn output_color_space(&self) -> &crate::ColorSpaceKind {
         &self.dst_cs
     }
 
+    /// Apply the transform to a packed 8-bit pixel buffer and return the converted bytes.
+    ///
+    /// Input stride is `src.len() / src_channels` pixels; output length is
+    /// `pixel_count * dst_channels`. Use this for channel-changing transforms
+    /// (e.g. RGB → CMYK) where `apply_to_pixels` cannot be used in-place.
     pub fn convert(&self, src: &[u8]) -> Vec<u8> {
         let pixel_count = src.len() / self.src_channels;
         let mut dst = vec![0u8; pixel_count * self.dst_channels];
@@ -95,6 +113,7 @@ impl ColorTransform {
         self.dst_channels
     }
 
+    /// Build a transform from arbitrary ICC profile bytes (not necessarily bundled profiles).
     pub fn from_bytes(from: &[u8], to: &[u8], intent: RenderingIntent) -> crate::Result<Self> {
         let src_profile =
             Profile::new_icc(from).map_err(|e| crate::IccError::Profile(e.to_string()))?;
@@ -125,6 +144,14 @@ impl ColorTransform {
         })
     }
 
+    /// Apply the transform in-place to a packed 8-bit pixel buffer.
+    ///
+    /// Requires that source and destination channel counts are equal (same-space
+    /// transforms, e.g. FOGRA39 → GRACoL). For channel-changing transforms such as
+    /// RGB → CMYK, use [`Self::convert`] instead.
+    ///
+    /// # Panics
+    /// Panics in debug builds if `src_channels != dst_channels`.
     pub fn apply_to_pixels(&self, pixels: &mut [u8]) {
         debug_assert_eq!(
             self.src_channels, self.dst_channels,
@@ -134,6 +161,18 @@ impl ColorTransform {
         self.transform.transform_pixels(&input, pixels);
     }
 
+    /// Apply the transform in-place to an `image::DynamicImage`.
+    ///
+    /// **CMYK limitation:** The `image` crate has no native CMYK image variant.
+    /// This method only supports same-channel-count transforms (RGB → RGB, Gray → Gray).
+    /// For RGB → CMYK conversion, call [`Self::convert`] on the raw pixel bytes directly
+    /// and handle the resulting 4-channel buffer explicitly. The PDF surgery layer in
+    /// [`crate::pdf::PdfColorConverter`] handles this correctly by writing to PDF
+    /// image XObject streams rather than going through `DynamicImage`.
+    ///
+    /// # Errors
+    /// Returns [`IccError::UnsupportedColorSpace`] if the transform changes channel count
+    /// or if the image variant does not match the transform's source color space.
     pub fn apply_to_image(&self, image: &mut DynamicImage) -> crate::Result<()> {
         if self.src_channels != self.dst_channels {
             return Err(IccError::UnsupportedColorSpace(format!(

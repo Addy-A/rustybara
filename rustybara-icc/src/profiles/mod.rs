@@ -1,9 +1,18 @@
 use crate::ColorSpaceKind;
 
+/// A compile-time embedded ICC color profile with typed metadata.
+///
+/// All bundled profiles are exposed as `pub const` values in this module
+/// (e.g. [`COATED_FOGRA_39`], [`ADOBE_RGB_1998`]). Pass them to
+/// [`crate::ColorTransform::new`] to build a color transform.
 pub struct IccProfile {
+    /// Short machine-readable identifier (e.g. `"CoatedFOGRA39"`).
     pub name: &'static str,
+    /// Human-readable description (e.g. `"Coated FOGRA 39"`).
     pub description: &'static str,
+    /// Color space this profile operates in.
     pub color_space: ColorSpaceKind,
+    /// Raw ICC profile bytes embedded at compile time via `include_bytes!`.
     pub bytes: &'static [u8],
 }
 

@@ -4,11 +4,17 @@ use lopdf::{Document, Object};
 use crate::ColorSpaceKind;
 use crate::transform::ColorTransform;
 
+/// Summary of what [`PdfColorConverter`] changed during a conversion run.
 pub struct ConversionReport {
+    /// Number of pages visited by the converter.
     pub pages_processed: u32,
+    /// Number of image XObjects whose pixel data was ICC-transformed (Phase 4c — not yet implemented).
     pub images_converted: u32,
+    /// Number of `Separation` spot color uses flattened to device CMYK.
     pub spot_colors_flattened: u32,
+    /// Number of color space resource dictionary entries rewritten (Phase 4a — not yet implemented).
     pub color_spaces_rewritten: u32,
+    /// Non-fatal warnings encountered during conversion (e.g. skipped DeviceN color spaces).
     pub warnings: Vec<String>,
 }
 
@@ -22,6 +28,34 @@ impl<'a> PdfColorConverter<'a> {
         PdfColorConverter { doc, transform }
     }
 
+    /// Convert color spaces throughout the entire document and return a summary report.
+    ///
+    /// Iterates every page returned by the document's page tree, applies the spot-color
+    /// pre-pass followed by the ICC color transform to each page's content stream, and
+    /// aggregates the results into a [`ConversionReport`].
+    ///
+    /// **DeviceN limitation:** `DeviceN` color spaces (multi-channel inks, Hexachrome, etc.)
+    /// are detected but not correctly flattened in this version. Their `scn`/`SCN` operators
+    /// carry one tint value per ink channel, which the current single-channel tint evaluator
+    /// does not handle. Full DeviceN support is a post-v1.0 item; for now, documents
+    /// containing DeviceN inks may produce incorrect output for those operators.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use rustybara_icc::{ColorTransform, RenderingIntent, profiles};
+    /// use rustybara_icc::pdf::PdfColorConverter;
+    ///
+    /// let mut doc = lopdf::Document::load("input.pdf").unwrap();
+    /// let transform = ColorTransform::new(
+    ///     &profiles::COATED_FOGRA_39,
+    ///     &profiles::COATED_GRACOL_2006,
+    ///     RenderingIntent::RelativeColorimetric,
+    /// ).unwrap();
+    /// let report = PdfColorConverter::new(&mut doc, transform)
+    ///     .convert_document()
+    ///     .unwrap();
+    /// println!("{} pages, {} spots flattened", report.pages_processed, report.spot_colors_flattened);
+    /// ```
     pub fn convert_document(&mut self) -> crate::Result<ConversionReport> {
         let mut report = ConversionReport {
             pages_processed: 0,
@@ -41,6 +75,10 @@ impl<'a> PdfColorConverter<'a> {
         Ok(report)
     }
 
+    /// Convert a single page identified by its lopdf `ObjectId`.
+    ///
+    /// Returns the number of spot color uses flattened on this page.
+    /// Prefer [`Self::convert_document`] for whole-document conversion.
     pub fn convert_page(&mut self, page_id: lopdf::ObjectId) -> crate::Result<u32> {
         let content = self.doc.get_and_decode_page_content(page_id)?;
 
