@@ -1,5 +1,6 @@
-use crate::intent::RenderingIntent;
 use crate::profiles::IccProfile;
+use crate::{IccError, intent::RenderingIntent};
+use image::DynamicImage;
 use lcms2::{Flags, Profile};
 
 /// A color transformation wrapper that converts pixel data between different color spaces.
@@ -132,6 +133,45 @@ impl ColorTransform {
         let input = pixels.to_vec();
         self.transform.transform_pixels(&input, pixels);
     }
+
+    pub fn apply_to_image(&self, image: &mut DynamicImage) -> crate::Result<()> {
+        if self.src_channels != self.dst_channels {
+            return Err(IccError::UnsupportedColorSpace(format!(
+                "apply_to_image requires equal src/dst channel counts ({} -> {}); \
+                use convert() on raw bytes for channel-changing transforms (e.g. RGB -> CMYK)",
+                self.src_channels, self.dst_channels
+            )));
+        }
+
+        match image {
+            DynamicImage::ImageRgb8(img) => {
+                if self.src_cs != crate::ColorSpaceKind::Rgb {
+                    return Err(IccError::UnsupportedColorSpace(format!(
+                        "image is Rgb8 but transform input is {:?}",
+                        self.src_cs
+                    )));
+                }
+                self.apply_to_pixels(img.as_mut());
+            }
+            DynamicImage::ImageLuma8(img) => {
+                if self.src_cs != crate::ColorSpaceKind::Gray {
+                    return Err(IccError::UnsupportedColorSpace(format!(
+                        "image is Luma8 but transform input is {:?}",
+                        self.src_cs
+                    )));
+                }
+                self.apply_to_pixels(img.as_mut());
+            }
+            _ => {
+                return Err(IccError::UnsupportedColorSpace(
+                    "only Rgb8 and Luma8 are supported; convert first with \
+                    DynamicImage::into_rgb8() or into_luma8()"
+                        .to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 fn color_space_from_sig(sig: lcms2::ColorSpaceSignature) -> crate::ColorSpaceKind {
@@ -142,5 +182,266 @@ fn color_space_from_sig(sig: lcms2::ColorSpaceSignature) -> crate::ColorSpaceKin
         GrayData => crate::ColorSpaceKind::Gray,
         LabData => crate::ColorSpaceKind::Lab,
         _ => crate::ColorSpaceKind::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::profiles::{
+        COATED_FOGRA_39, COATED_GRACOL_2006, UNCOATED_FOGRA_29, US_WEB_COATED_SWOP,
+    };
+    use crate::{ColorSpaceKind, RenderingIntent};
+
+    // --- constructor ---
+
+    #[test]
+    fn new_cmyk_to_cmyk_ok() {
+        assert!(
+            ColorTransform::new(
+                &COATED_FOGRA_39,
+                &COATED_GRACOL_2006,
+                RenderingIntent::RelativeColorimetric,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn from_bytes_cmyk_to_cmyk_ok() {
+        assert!(
+            ColorTransform::from_bytes(
+                COATED_FOGRA_39.bytes,
+                COATED_GRACOL_2006.bytes,
+                RenderingIntent::RelativeColorimetric,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn from_bytes_invalid_src_returns_err() {
+        assert!(
+            ColorTransform::from_bytes(
+                b"not an icc profile",
+                COATED_FOGRA_39.bytes,
+                RenderingIntent::Perceptual,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn from_bytes_invalid_dst_returns_err() {
+        assert!(
+            ColorTransform::from_bytes(
+                COATED_FOGRA_39.bytes,
+                b"not an icc profile",
+                RenderingIntent::Perceptual,
+            )
+            .is_err()
+        );
+    }
+
+    // --- color space accessors ---
+
+    #[test]
+    fn new_input_color_space_is_cmyk() {
+        let t = ColorTransform::new(
+            &COATED_FOGRA_39,
+            &COATED_GRACOL_2006,
+            RenderingIntent::Perceptual,
+        )
+        .unwrap();
+        assert_eq!(t.input_color_space(), &ColorSpaceKind::Cmyk);
+    }
+
+    #[test]
+    fn new_output_color_space_is_cmyk() {
+        let t = ColorTransform::new(
+            &COATED_FOGRA_39,
+            &COATED_GRACOL_2006,
+            RenderingIntent::Perceptual,
+        )
+        .unwrap();
+        assert_eq!(t.output_color_space(), &ColorSpaceKind::Cmyk);
+    }
+
+    #[test]
+    fn from_bytes_detects_cmyk_color_spaces() {
+        let t = ColorTransform::from_bytes(
+            COATED_FOGRA_39.bytes,
+            US_WEB_COATED_SWOP.bytes,
+            RenderingIntent::RelativeColorimetric,
+        )
+        .unwrap();
+        assert_eq!(t.input_color_space(), &ColorSpaceKind::Cmyk);
+        assert_eq!(t.output_color_space(), &ColorSpaceKind::Cmyk);
+    }
+
+    // --- channel counts ---
+
+    #[test]
+    fn cmyk_to_cmyk_src_channels_is_4() {
+        let t = ColorTransform::new(
+            &COATED_FOGRA_39,
+            &COATED_GRACOL_2006,
+            RenderingIntent::Perceptual,
+        )
+        .unwrap();
+        assert_eq!(t.src_channels(), 4);
+    }
+
+    #[test]
+    fn cmyk_to_cmyk_dst_channels_is_4() {
+        let t = ColorTransform::new(
+            &COATED_FOGRA_39,
+            &COATED_GRACOL_2006,
+            RenderingIntent::Perceptual,
+        )
+        .unwrap();
+        assert_eq!(t.dst_channels(), 4);
+    }
+
+    // --- convert output size ---
+
+    #[test]
+    fn convert_output_length_matches_pixel_count() {
+        let t = ColorTransform::new(
+            &COATED_FOGRA_39,
+            &COATED_GRACOL_2006,
+            RenderingIntent::RelativeColorimetric,
+        )
+        .unwrap();
+        let input = vec![0u8; 5 * 4]; // 5 CMYK pixels
+        let output = t.convert(&input);
+        assert_eq!(output.len(), 5 * t.dst_channels());
+    }
+
+    #[test]
+    fn convert_empty_input_produces_empty_output() {
+        let t = ColorTransform::new(
+            &COATED_FOGRA_39,
+            &COATED_GRACOL_2006,
+            RenderingIntent::Perceptual,
+        )
+        .unwrap();
+        assert!(t.convert(&[]).is_empty());
+    }
+
+    // --- apply_to_pixels ---
+
+    #[test]
+    fn apply_to_pixels_preserves_slice_length() {
+        let t = ColorTransform::new(
+            &COATED_FOGRA_39,
+            &COATED_GRACOL_2006,
+            RenderingIntent::RelativeColorimetric,
+        )
+        .unwrap();
+        // 2 CMYK pixels
+        let mut pixels = vec![50u8, 70, 80, 10, 0, 0, 0, 255];
+        let len_before = pixels.len();
+        t.apply_to_pixels(&mut pixels);
+        assert_eq!(pixels.len(), len_before);
+    }
+
+    // --- stability ---
+
+    // Paper white (C=0 M=0 Y=0 K=0) with RelativeColorimetric maps the source white point
+    // to the destination white point, so the output should also be near ink-free.
+    #[test]
+    fn paper_white_stays_light_after_cmyk_to_cmyk() {
+        let t = ColorTransform::new(
+            &COATED_FOGRA_39,
+            &COATED_GRACOL_2006,
+            RenderingIntent::RelativeColorimetric,
+        )
+        .unwrap();
+        let white = [0u8, 0, 0, 0];
+        let out = t.convert(&white);
+        for (i, &ch) in out.iter().enumerate() {
+            assert!(
+                ch < 10,
+                "channel {i} = {ch}: expected near-zero ink for paper white input"
+            );
+        }
+    }
+
+    // Verify that a different profile pair also builds cleanly (not just FOGRA39↔GRACoL).
+    #[test]
+    fn different_profile_pair_constructs_ok() {
+        assert!(
+            ColorTransform::new(
+                &US_WEB_COATED_SWOP,
+                &UNCOATED_FOGRA_29,
+                RenderingIntent::Perceptual,
+            )
+            .is_ok()
+        );
+    }
+
+    // --- all intents ---
+
+    #[test]
+    fn all_rendering_intents_construct_ok() {
+        use RenderingIntent::*;
+        for intent in [
+            Perceptual,
+            RelativeColorimetric,
+            Saturation,
+            AbsoluteColorimetric,
+        ] {
+            ColorTransform::new(&COATED_FOGRA_39, &COATED_GRACOL_2006, intent)
+                .unwrap_or_else(|e| panic!("intent {intent:?} failed: {e}"));
+        }
+    }
+
+    // --- FOGRA39 → sRGB reference values (STUBBED) ---
+    //
+    // These tests pin FOGRA39 CMYK → sRGB output against values produced by a validated
+    // reference tool (Argyll CMS `xicclu`, Little CMS CLI `transicc`, or Adobe ACE).
+    //
+    // How to generate reference values with `transicc` (Little CMS CLI):
+    //   transicc -i CoatedFOGRA39.icc -o sRGB_IEC61966-2-1.icc -t 1
+    //   # -t 1 = RelativeColorimetric; input CMYK as 0..255, output RGB 0..255
+    //
+    // Acceptance criterion: ±2 per channel (8-bit quantisation + rounding tolerance).
+    //
+    // To enable a test:
+    //   1. Obtain sRGB bytes at runtime:
+    //      let srgb_bytes = lcms2::Profile::new_srgb().icc_data().unwrap().to_vec();
+    //   2. Build the transform:
+    //      let t = ColorTransform::from_bytes(
+    //          COATED_FOGRA_39.bytes, &srgb_bytes, RenderingIntent::RelativeColorimetric
+    //      ).unwrap();
+    //   3. Convert the patch and compare:
+    //      let out = t.convert(&cmyk);
+    //      for (i, (&a, &e)) in out.iter().zip(expected_rgb.iter()).enumerate() {
+    //          assert!((a as i16 - e as i16).unsigned_abs() <= 2, "ch{i}: {a} ≠ {e}±2");
+    //      }
+
+    #[test]
+    #[ignore = "stub: fill expected_rgb from validated reference tool before enabling"]
+    fn fogra39_to_srgb_rich_black() {
+        // Patch: C=191 M=173 Y=171 K=229  (75% 68% 67% 90% scaled to 0..255)
+        // let expected_rgb: [u8; 3] = todo!("validated reference values");
+        todo!("implement after obtaining reference values")
+    }
+
+    #[test]
+    #[ignore = "stub: fill expected_rgb from validated reference tool before enabling"]
+    fn fogra39_to_srgb_pure_cyan() {
+        // Patch: C=255 M=0 Y=0 K=0
+        // let expected_rgb: [u8; 3] = todo!("validated reference values");
+        todo!("implement after obtaining reference values")
+    }
+
+    #[test]
+    #[ignore = "stub: fill expected_rgb from validated reference tool before enabling"]
+    fn fogra39_to_srgb_paper_white() {
+        // Patch: C=0 M=0 Y=0 K=0
+        // let expected_rgb: [u8; 3] = todo!("validated reference values");
+        todo!("implement after obtaining reference values")
     }
 }

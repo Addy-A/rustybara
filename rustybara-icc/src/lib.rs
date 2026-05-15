@@ -1,6 +1,7 @@
 pub mod color_space;
 pub mod error;
 pub mod intent;
+pub mod pdf;
 pub mod pixel_format;
 pub mod profiles;
 pub mod transform;

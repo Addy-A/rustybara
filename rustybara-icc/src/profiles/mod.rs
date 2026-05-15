@@ -7,151 +7,219 @@ pub struct IccProfile {
     pub bytes: &'static [u8],
 }
 
+// ── CMYK ─────────────────────────────────────────────────────────────────────
+
 pub const COATED_FOGRA_27: IccProfile = IccProfile {
     name: "CoatedFOGRA27",
     description: "Coated FOGRA 27",
     color_space: ColorSpaceKind::Cmyk,
-    bytes: include_bytes!("data/CoatedFOGRA27.icc"),
+    bytes: include_bytes!("data/CMYK/CoatedFOGRA27.icc"),
 };
 
 pub const COATED_FOGRA_39: IccProfile = IccProfile {
     name: "CoatedFOGRA39",
     description: "Coated FOGRA 39",
     color_space: ColorSpaceKind::Cmyk,
-    bytes: include_bytes!("data/CoatedFOGRA39.icc"),
+    bytes: include_bytes!("data/CMYK/CoatedFOGRA39.icc"),
 };
 
 pub const COATED_GRACOL_2006: IccProfile = IccProfile {
     name: "CoatedGRACoL2006",
     description: "Coated GRACoL 2006",
     color_space: ColorSpaceKind::Cmyk,
-    bytes: include_bytes!("data/CoatedGRACoL2006.icc"),
+    bytes: include_bytes!("data/CMYK/CoatedGRACoL2006.icc"),
+};
+
+pub const JAPAN_COLOR_2001_COATED: IccProfile = IccProfile {
+    name: "JapanColor2001Coated",
+    description: "Japan Color 2001 Coated",
+    color_space: ColorSpaceKind::Cmyk,
+    bytes: include_bytes!("data/CMYK/JapanColor2001Coated.icc"),
+};
+
+pub const JAPAN_COLOR_2001_UNCOATED: IccProfile = IccProfile {
+    name: "JapanColor2001Uncoated",
+    description: "Japan Color 2001 Uncoated",
+    color_space: ColorSpaceKind::Cmyk,
+    bytes: include_bytes!("data/CMYK/JapanColor2001Uncoated.icc"),
+};
+
+pub const JAPAN_COLOR_2002_NEWSPAPER: IccProfile = IccProfile {
+    name: "JapanColor2002Newspaper",
+    description: "Japan Color 2002 Newspaper",
+    color_space: ColorSpaceKind::Cmyk,
+    bytes: include_bytes!("data/CMYK/JapanColor2002Newspaper.icc"),
+};
+
+pub const JAPAN_COLOR_2003_WEB_COATED: IccProfile = IccProfile {
+    name: "JapanColor2003WebCoated",
+    description: "Japan Color 2003 Web Coated",
+    color_space: ColorSpaceKind::Cmyk,
+    bytes: include_bytes!("data/CMYK/JapanColor2003WebCoated.icc"),
+};
+
+pub const JAPAN_WEB_COATED: IccProfile = IccProfile {
+    name: "JapanWebCoated",
+    description: "Japan Web Coated",
+    color_space: ColorSpaceKind::Cmyk,
+    bytes: include_bytes!("data/CMYK/JapanWebCoated.icc"),
 };
 
 pub const UNCOATED_FOGRA_29: IccProfile = IccProfile {
     name: "UncoatedFOGRA29",
     description: "Uncoated FOGRA 29",
     color_space: ColorSpaceKind::Cmyk,
-    bytes: include_bytes!("data/UncoatedFOGRA29.icc"),
+    bytes: include_bytes!("data/CMYK/UncoatedFOGRA29.icc"),
 };
 
 pub const US_WEB_COATED_SWOP: IccProfile = IccProfile {
     name: "USWebCoatedSWOP",
     description: "US Web Coated SWOP",
     color_space: ColorSpaceKind::Cmyk,
-    bytes: include_bytes!("data/USWebCoatedSWOP.icc"),
+    bytes: include_bytes!("data/CMYK/USWebCoatedSWOP.icc"),
 };
 
 pub const US_WEB_UNCOATED: IccProfile = IccProfile {
     name: "USWebUncoated",
     description: "US Web Uncoated",
     color_space: ColorSpaceKind::Cmyk,
-    bytes: include_bytes!("data/USWebUncoated.icc"),
+    bytes: include_bytes!("data/CMYK/USWebUncoated.icc"),
 };
 
 pub const WEB_COATED_FOGRA_28: IccProfile = IccProfile {
     name: "WebCoatedFOGRA28",
     description: "Web Coated FOGRA 28",
     color_space: ColorSpaceKind::Cmyk,
-    bytes: include_bytes!("data/WebCoatedFOGRA28.icc"),
+    bytes: include_bytes!("data/CMYK/WebCoatedFOGRA28.icc"),
 };
 
 pub const WEB_COATED_SWOP_2006_GRADE3: IccProfile = IccProfile {
     name: "WebCoatedSWOP2006Grade3",
     description: "Web Coated SWOP 2006 Grade 3",
     color_space: ColorSpaceKind::Cmyk,
-    bytes: include_bytes!("data/WebCoatedSWOP2006Grade3.icc"),
+    bytes: include_bytes!("data/CMYK/WebCoatedSWOP2006Grade3.icc"),
 };
 
 pub const WEB_COATED_SWOP_2006_GRADE5: IccProfile = IccProfile {
     name: "WebCoatedSWOP2006Grade5",
     description: "Web Coated SWOP 2006 Grade 5",
     color_space: ColorSpaceKind::Cmyk,
-    bytes: include_bytes!("data/WebCoatedSWOP2006Grade5.icc"),
+    bytes: include_bytes!("data/CMYK/WebCoatedSWOP2006Grade5.icc"),
 };
+
+// ── RGB ──────────────────────────────────────────────────────────────────────
+
+pub const ADOBE_RGB_1998: IccProfile = IccProfile {
+    name: "AdobeRGB1998",
+    description: "Adobe RGB (1998)",
+    color_space: ColorSpaceKind::Rgb,
+    bytes: include_bytes!("data/RGB/AdobeRGB1998.icc"),
+};
+
+pub const APPLE_RGB: IccProfile = IccProfile {
+    name: "AppleRGB",
+    description: "Apple RGB",
+    color_space: ColorSpaceKind::Rgb,
+    bytes: include_bytes!("data/RGB/AppleRGB.icc"),
+};
+
+pub const COLOR_MATCH_RGB: IccProfile = IccProfile {
+    name: "ColorMatchRGB",
+    description: "ColorMatch RGB",
+    color_space: ColorSpaceKind::Rgb,
+    bytes: include_bytes!("data/RGB/ColorMatchRGB.icc"),
+};
+
+pub const PAL_SECAM: IccProfile = IccProfile {
+    name: "PAL_SECAM",
+    description: "PAL/SECAM",
+    color_space: ColorSpaceKind::Rgb,
+    bytes: include_bytes!("data/RGB/PAL_SECAM.icc"),
+};
+
+pub const SMPTE_C: IccProfile = IccProfile {
+    name: "SMPTE-C",
+    description: "SMPTE-C",
+    color_space: ColorSpaceKind::Rgb,
+    bytes: include_bytes!("data/RGB/SMPTE-C.icc"),
+};
+
+pub const VIDEO_HD: IccProfile = IccProfile {
+    name: "VideoHD",
+    description: "HDTV (Rec. 709)",
+    color_space: ColorSpaceKind::Rgb,
+    bytes: include_bytes!("data/RGB/VideoHD.icc"),
+};
+
+pub const VIDEO_NTSC: IccProfile = IccProfile {
+    name: "VideoNTSC",
+    description: "NTSC (1953)",
+    color_space: ColorSpaceKind::Rgb,
+    bytes: include_bytes!("data/RGB/VideoNTSC.icc"),
+};
+
+pub const VIDEO_PAL: IccProfile = IccProfile {
+    name: "VideoPAL",
+    description: "PAL (Video)",
+    color_space: ColorSpaceKind::Rgb,
+    bytes: include_bytes!("data/RGB/VideoPAL.icc"),
+};
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ColorSpaceKind;
 
-    fn assert_icc_signature(profile: &IccProfile) {
+    const ALL_CMYK: &[&IccProfile] = &[
+        &COATED_FOGRA_27,
+        &COATED_FOGRA_39,
+        &COATED_GRACOL_2006,
+        &JAPAN_COLOR_2001_COATED,
+        &JAPAN_COLOR_2001_UNCOATED,
+        &JAPAN_COLOR_2002_NEWSPAPER,
+        &JAPAN_COLOR_2003_WEB_COATED,
+        &JAPAN_WEB_COATED,
+        &UNCOATED_FOGRA_29,
+        &US_WEB_COATED_SWOP,
+        &US_WEB_UNCOATED,
+        &WEB_COATED_FOGRA_28,
+        &WEB_COATED_SWOP_2006_GRADE3,
+        &WEB_COATED_SWOP_2006_GRADE5,
+    ];
+
+    const ALL_RGB: &[&IccProfile] = &[
+        &ADOBE_RGB_1998,
+        &APPLE_RGB,
+        &COLOR_MATCH_RGB,
+        &PAL_SECAM,
+        &SMPTE_C,
+        &VIDEO_HD,
+        &VIDEO_NTSC,
+        &VIDEO_PAL,
+    ];
+
+    fn assert_icc_signature(p: &IccProfile) {
         assert!(
-            profile.bytes.len() >= 40,
+            p.bytes.len() >= 40,
             "{}: profile too short to contain an ICC header ({} bytes)",
-            profile.name,
-            profile.bytes.len()
+            p.name,
+            p.bytes.len()
         );
         assert_eq!(
-            &profile.bytes[36..40],
+            &p.bytes[36..40],
             b"acsp",
-            "{}: bytes[36..40] are not the ICC signature 'ascp'",
-            profile.name,
+            "{}: bytes[36..40] are not the ICC signature 'acsp'",
+            p.name,
         );
     }
 
-    // -- non-zero bytes --
+    // ── color_space field correctness ─────────────────────────────────────────
 
-    #[test]
-    fn coated_fogra27_has_bytes() {
-        assert!(!COATED_FOGRA_27.bytes.is_empty());
-    }
-
-    #[test]
-    fn coated_fogra_39_has_bytes() {
-        assert!(!COATED_FOGRA_39.bytes.is_empty());
-    }
-
-    #[test]
-    fn coated_gracol2006_has_bytes() {
-        assert!(!COATED_GRACOL_2006.bytes.is_empty());
-    }
-
-    #[test]
-    fn uncoated_fogra29_has_bytes() {
-        assert!(!UNCOATED_FOGRA_29.bytes.is_empty());
-    }
-
-    #[test]
-    fn us_web_coatedswop_has_bytes() {
-        assert!(!US_WEB_COATED_SWOP.bytes.is_empty());
-    }
-
-    #[test]
-    fn us_webuncoated_has_bytes() {
-        assert!(!US_WEB_UNCOATED.bytes.is_empty());
-    }
-
-    #[test]
-    fn web_coatedfogra28_has_bytes() {
-        assert!(!WEB_COATED_FOGRA_28.bytes.is_empty());
-    }
-
-    #[test]
-    fn web_coatedswop2006_grade3_has_bytes() {
-        assert!(!WEB_COATED_SWOP_2006_GRADE3.bytes.is_empty());
-    }
-
-    #[test]
-    fn web_coatedswop2006_grade5_has_bytes() {
-        assert!(!WEB_COATED_SWOP_2006_GRADE5.bytes.is_empty());
-    }
-
-    // -- color_space field correctness --
     #[test]
     fn all_cmyk_profiles_report_cmyk() {
-        let cmyk_profiles = [
-            &COATED_FOGRA_27,
-            &COATED_FOGRA_39,
-            &COATED_GRACOL_2006,
-            &UNCOATED_FOGRA_29,
-            &US_WEB_COATED_SWOP,
-            &US_WEB_UNCOATED,
-            &WEB_COATED_FOGRA_28,
-            &WEB_COATED_SWOP_2006_GRADE3,
-            &WEB_COATED_SWOP_2006_GRADE5,
-        ];
-        for p in &cmyk_profiles {
+        for p in ALL_CMYK {
             assert_eq!(
                 p.color_space,
                 ColorSpaceKind::Cmyk,
@@ -163,108 +231,105 @@ mod tests {
     }
 
     #[test]
-    fn coated_fogra27_icc_signature() {
-        assert_icc_signature(&COATED_FOGRA_27);
+    fn all_rgb_profiles_report_rgb() {
+        for p in ALL_RGB {
+            assert_eq!(
+                p.color_space,
+                ColorSpaceKind::Rgb,
+                "{}: expected Rgb, got {:?}",
+                p.name,
+                p.color_space
+            );
+        }
+    }
+
+    // ── ICC signature ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn all_cmyk_profiles_have_valid_icc_signature() {
+        for p in ALL_CMYK {
+            assert_icc_signature(p);
+        }
     }
 
     #[test]
-    fn coated_fogra39_icc_signature() {
-        assert_icc_signature(&COATED_FOGRA_39);
+    fn all_rgb_profiles_have_valid_icc_signature() {
+        for p in ALL_RGB {
+            assert_icc_signature(p);
+        }
+    }
+
+    // ── non-empty bytes ───────────────────────────────────────────────────────
+
+    #[test]
+    fn all_cmyk_profiles_have_non_empty_bytes() {
+        for p in ALL_CMYK {
+            assert!(!p.bytes.is_empty(), "{}: bytes is empty", p.name);
+        }
     }
 
     #[test]
-    fn coated_gracol2006_icc_signatures() {
-        assert_icc_signature(&COATED_GRACOL_2006);
+    fn all_rgb_profiles_have_non_empty_bytes() {
+        for p in ALL_RGB {
+            assert!(!p.bytes.is_empty(), "{}: bytes is empty", p.name);
+        }
     }
 
-    #[test]
-    fn uncoated_fogra29_icc_signatures() {
-        assert_icc_signature(&UNCOATED_FOGRA_29);
-    }
+    // ── name / description ────────────────────────────────────────────────────
 
     #[test]
-    fn us_web_coatedswop_icc_signatures() {
-        assert_icc_signature(&US_WEB_COATED_SWOP);
-    }
-
-    #[test]
-    fn us_webuncoated_icc_signatures() {
-        assert_icc_signature(&US_WEB_UNCOATED);
-    }
-
-    #[test]
-    fn web_coatedswop2006_grade3_icc_signatures() {
-        assert_icc_signature(&WEB_COATED_SWOP_2006_GRADE3);
-    }
-
-    #[test]
-    fn web_coatedswop2006_grade5_icc_signatures() {
-        assert_icc_signature(&WEB_COATED_SWOP_2006_GRADE5);
-    }
-
-    #[test]
-    fn all_profiles_have_non_empty_name() {
-        let all: &[&IccProfile] = &[
-            &COATED_FOGRA_27,
-            &COATED_FOGRA_39,
-            &COATED_GRACOL_2006,
-            &UNCOATED_FOGRA_29,
-            &US_WEB_COATED_SWOP,
-            &US_WEB_UNCOATED,
-            &WEB_COATED_SWOP_2006_GRADE3,
-            &WEB_COATED_SWOP_2006_GRADE5,
-        ];
-        for p in all {
-            assert!(!p.name.is_empty(), "profile has empty name field");
+    fn all_cmyk_profiles_have_non_empty_name_and_description() {
+        for p in ALL_CMYK {
+            assert!(!p.name.is_empty(), "a CMYK profile has an empty name");
             assert!(!p.description.is_empty(), "{}: empty description", p.name);
         }
     }
 
-    // --- profile size sanity --
-    // Adobe CMYK profiles are hundreds of KB. A valid ICC profile is at minimum 128 bytes (just
-    // the header). Anything under 1 KB is almost certainly a truncated or corrupted embed.
+    #[test]
+    fn all_rgb_profiles_have_non_empty_name_and_description() {
+        for p in ALL_RGB {
+            assert!(!p.name.is_empty(), "an RGB profile has an empty name");
+            assert!(!p.description.is_empty(), "{}: empty description", p.name);
+        }
+    }
+
+    // ── size sanity ───────────────────────────────────────────────────────────
+    // A valid ICC profile is at minimum 128 bytes (header only). Anything under 1 KB
+    // is almost certainly a truncated or corrupted embed.
 
     #[test]
-    fn all_profiles_exceed_minimum_icc_size() {
-        let all: &[(&str, &[u8])] = &[
-            (COATED_FOGRA_27.name, COATED_FOGRA_27.bytes),
-            (COATED_FOGRA_39.name, COATED_FOGRA_39.bytes),
-            (COATED_GRACOL_2006.name, COATED_GRACOL_2006.bytes),
-            (UNCOATED_FOGRA_29.name, UNCOATED_FOGRA_29.bytes),
-            (US_WEB_COATED_SWOP.name, US_WEB_COATED_SWOP.bytes),
-            (WEB_COATED_FOGRA_28.name, WEB_COATED_FOGRA_28.bytes),
-            (
-                WEB_COATED_SWOP_2006_GRADE3.name,
-                WEB_COATED_SWOP_2006_GRADE3.bytes,
-            ),
-            (
-                WEB_COATED_SWOP_2006_GRADE5.name,
-                WEB_COATED_SWOP_2006_GRADE5.bytes,
-            ),
-        ];
-        for (name, bytes) in all {
+    fn all_cmyk_profiles_exceed_minimum_icc_size() {
+        for p in ALL_CMYK {
             assert!(
-                bytes.len() >= 1024,
-                "{}: suspiciously small ({} bytes) - likely a broken embed",
-                name,
-                bytes.len(),
+                p.bytes.len() >= 1024,
+                "{}: suspiciously small ({} bytes) — likely a broken embed",
+                p.name,
+                p.bytes.len(),
             );
         }
     }
 
     #[test]
-    fn all_profiles_size_matches_icc_header_declaration() {
-        let all: &[&IccProfile] = &[
-            &COATED_FOGRA_27,
-            &COATED_FOGRA_39,
-            &COATED_GRACOL_2006,
-            &UNCOATED_FOGRA_29,
-            &US_WEB_COATED_SWOP,
-            &US_WEB_UNCOATED,
-            &WEB_COATED_SWOP_2006_GRADE3,
-            &WEB_COATED_SWOP_2006_GRADE5,
-        ];
-        for p in all {
+    fn all_rgb_profiles_exceed_minimum_icc_size() {
+        for p in ALL_RGB {
+            // Matrix-based RGB profiles are compact (AdobeRGB1998 is ~560 bytes).
+            // 256 bytes is a safe floor: header (128) + a minimal tag table.
+            assert!(
+                p.bytes.len() >= 256,
+                "{}: suspiciously small ({} bytes) — likely a broken embed",
+                p.name,
+                p.bytes.len(),
+            );
+        }
+    }
+
+    // ── ICC header size field ─────────────────────────────────────────────────
+    // Bytes 0–3 of every ICC profile are a big-endian u32 declaring the total file size.
+    // A mismatch means the file was truncated or the wrong file was embedded.
+
+    #[test]
+    fn all_cmyk_profiles_size_matches_icc_header_declaration() {
+        for p in ALL_CMYK {
             assert!(p.bytes.len() >= 4, "{}: too short for size field", p.name);
             let declared = u32::from_be_bytes(p.bytes[0..4].try_into().unwrap()) as usize;
             assert_eq!(
@@ -276,5 +341,35 @@ mod tests {
                 p.bytes.len()
             );
         }
+    }
+
+    #[test]
+    fn all_rgb_profiles_size_matches_icc_header_declaration() {
+        for p in ALL_RGB {
+            assert!(p.bytes.len() >= 4, "{}: too short for size field", p.name);
+            let declared = u32::from_be_bytes(p.bytes[0..4].try_into().unwrap()) as usize;
+            assert_eq!(
+                declared,
+                p.bytes.len(),
+                "{}: ICC header declares {} bytes but embed has {}",
+                p.name,
+                declared,
+                p.bytes.len()
+            );
+        }
+    }
+
+    // ── key individual spot checks ────────────────────────────────────────────
+    // Redundant with the array tests above but give a clear, named signal for the
+    // most commonly-used profiles when something goes wrong.
+
+    #[test]
+    fn coated_fogra39_is_embedded() {
+        assert!(!COATED_FOGRA_39.bytes.is_empty());
+    }
+
+    #[test]
+    fn adobe_rgb_1998_is_embedded() {
+        assert!(!ADOBE_RGB_1998.bytes.is_empty());
     }
 }
