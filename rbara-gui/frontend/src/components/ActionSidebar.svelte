@@ -2,16 +2,19 @@
   import { useAppState } from '../lib/context.js';
   const app = useAppState();
 
+  const trimActions = [
+    { id: 'trim',       icon: '✂', label: 'Trim Marks',  key: 't' },
+    { id: 'addtrimbox', icon: '⊞', label: 'Add Trim Box', key: 'b' },
+  ];
+
   const mainActions = [
-    { id: 'trim', icon: '✂', label: 'Trim Marks', key: 't' },
     { id: 'resize', icon: '⊡', label: 'Resize to Bleed', key: 'r' },
-    { id: 'export', icon: '⇲', label: 'Export Images', key: 'x' },
+    { id: 'export', icon: '⇲', label: 'Export Images',   key: 'x' },
   ];
 
   const pagesActions = [
-    { id: 'addtrimbox',   icon: '⊞', label: 'Add Trim Box',    key: 'b' },
-    { id: 'splitpages',   icon: '⧉', label: 'Split Pages',     key: 'p' },
-    { id: 'extractpages', icon: '⊟', label: 'Extract Pages',   key: 'e' },
+    { id: 'splitpages',   icon: '⧉', label: 'Split Pages',   key: 'p' },
+    { id: 'extractpages', icon: '⊟', label: 'Extract Pages', key: 'e' },
   ];
 
   const colorActions = [
@@ -20,15 +23,20 @@
     { id: 'spots',      icon: '✦', label: 'Flatten Spot Colors', key: 's' },
   ];
 
-  const pagesIds = new Set(['addtrimbox', 'splitpages', 'extractpages']);
+  const trimIds  = new Set(['trim', 'addtrimbox']);
+  const pagesIds = new Set(['splitpages', 'extractpages']);
   const colorIds = new Set(['remap', 'colorspace', 'spots']);
 
+  let trimExpanded  = $state(trimIds.has(app.activeAction));
   let pagesExpanded = $state(pagesIds.has(app.activeAction));
   let colorExpanded = $state(colorIds.has(app.activeAction));
+
+  let isTrimActive  = $derived(trimIds.has(app.activeAction));
   let isPagesActive = $derived(pagesIds.has(app.activeAction));
   let isColorActive = $derived(colorIds.has(app.activeAction));
 
   $effect(() => {
+    if (trimIds.has(app.activeAction))  trimExpanded  = true;
     if (pagesIds.has(app.activeAction)) pagesExpanded = true;
     if (colorIds.has(app.activeAction)) colorExpanded = true;
   });
@@ -36,6 +44,34 @@
 
 <div class="actions-pane">
   <div class="pane-label">Actions</div>
+
+  <div
+    class="group-header"
+    class:active={isTrimActive}
+    onclick={() => (trimExpanded = !trimExpanded)}
+    role="button"
+    tabindex="0"
+  >
+    <span class="ai-icon">✂</span>
+    <span class="ai-label">Trim</span>
+    <span class="chevron">{trimExpanded ? '▾' : '▸'}</span>
+  </div>
+
+  {#if trimExpanded}
+    {#each trimActions as a (a.id)}
+      <div
+        class="action-item nested"
+        class:active={app.activeAction === a.id}
+        onclick={() => (app.activeAction = a.id)}
+        role="button"
+        tabindex="0"
+      >
+        <span class="ai-icon">{a.icon}</span>
+        <span class="ai-label">{a.label}</span>
+        <span class="ai-key">{a.key}</span>
+      </div>
+    {/each}
+  {/if}
 
   {#each mainActions as a (a.id)}
     <div
@@ -191,5 +227,15 @@
   .actions-footer {
     margin-top: auto;
     border-top: 1px solid var(--border);
+  }
+
+  .pane-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    padding: 8px 12px 6px;
+    border-bottom: 1px solid var(--border);
   }
 </style>

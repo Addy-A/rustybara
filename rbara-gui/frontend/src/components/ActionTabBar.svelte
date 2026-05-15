@@ -2,15 +2,18 @@
   import { useAppState } from '../lib/context.js';
   const app = useAppState();
 
+  const trimActions = [
+    { id: 'trim',       icon: '✂', label: 'Trim Marks',  key: 't' },
+    { id: 'addtrimbox', icon: '⊞', label: 'Add Trim Box', key: 'b' },
+  ];
+
   const mainActions = [
-    { id: 'trim',   icon: '✂', label: 'Trim Marks',   key: 't' },
     { id: 'resize', icon: '⊡', label: 'Resize to Bleed', key: 'r' },
-    { id: 'export', icon: '⇲', label: 'Export Images', key: 'x' },
-    { id: 'output', icon: '⊘', label: 'Output',        key: '/' },
+    { id: 'export', icon: '⇲', label: 'Export Images',   key: 'x' },
+    { id: 'output', icon: '⊘', label: 'Output',          key: '/' },
   ];
 
   const pagesActions = [
-    { id: 'addtrimbox',   icon: '⊞', label: 'Add Trim Box',  key: 'b' },
     { id: 'splitpages',   icon: '⧉', label: 'Split Pages',   key: 'p' },
     { id: 'extractpages', icon: '⊟', label: 'Extract Pages', key: 'e' },
   ];
@@ -21,22 +24,56 @@
     { id: 'spots',      icon: '✦', label: 'Flatten Spot Colors', key: 's' },
   ];
 
-  const pagesIds = new Set(['addtrimbox', 'splitpages', 'extractpages']);
+  const trimIds  = new Set(['trim', 'addtrimbox']);
+  const pagesIds = new Set(['splitpages', 'extractpages']);
   const colorIds = new Set(['remap', 'colorspace', 'spots']);
 
+  let trimMenuOpen  = $state(false);
   let pagesMenuOpen = $state(false);
   let colorMenuOpen = $state(false);
 
+  let isTrimActive  = $derived(trimIds.has(app.activeAction));
   let isPagesActive = $derived(pagesIds.has(app.activeAction));
   let isColorActive = $derived(colorIds.has(app.activeAction));
+  let activeTrimAction  = $derived(trimActions.find(a => a.id === app.activeAction));
   let activePagesAction = $derived(pagesActions.find(a => a.id === app.activeAction));
   let activeColorAction = $derived(colorActions.find(a => a.id === app.activeAction));
 
+  function selectTrim(id)  { app.activeAction = id; trimMenuOpen  = false; }
   function selectPages(id) { app.activeAction = id; pagesMenuOpen = false; }
   function selectColor(id) { app.activeAction = id; colorMenuOpen = false; }
 </script>
 
 <div class="tab-bar">
+  <div class="tab-color-wrap">
+    <button
+      class="tab"
+      class:active={isTrimActive}
+      onclick={() => (trimMenuOpen = !trimMenuOpen)}
+    >
+      <span class="t-icon">{activeTrimAction?.icon ?? '✂'}</span>
+      <span class="t-label">Trim ▾</span>
+      <span class="hk">{activeTrimAction?.key ?? '…'}</span>
+    </button>
+
+    {#if trimMenuOpen}
+      <div class="overlay" onclick={() => (trimMenuOpen = false)} role="presentation"></div>
+      <div class="color-menu">
+        {#each trimActions as a (a.id)}
+          <button
+            class="cm-item"
+            class:active={app.activeAction === a.id}
+            onclick={() => selectTrim(a.id)}
+          >
+            <span class="cm-icon">{a.icon}</span>
+            <span class="cm-label">{a.label}</span>
+            <span class="cm-key">{a.key}</span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </div>
+
   {#each mainActions as a (a.id)}
     <button
       class="tab"

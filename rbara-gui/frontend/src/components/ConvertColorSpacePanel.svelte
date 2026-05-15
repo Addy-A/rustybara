@@ -33,10 +33,26 @@
   ];
 
   const intents = [
-    { value: 'RelativeColorimetric', label: 'Relative Colorimetric' },
-    { value: 'Perceptual',           label: 'Perceptual' },
-    { value: 'Saturation',           label: 'Saturation' },
-    { value: 'AbsoluteColorimetric', label: 'Absolute Colorimetric' },
+    {
+      value: 'RelativeColorimetric',
+      label: 'Relative Colorimetric',
+      desc: 'Best for print. In-gamut colors stay exact; out-of-gamut colors clip to the nearest match. White point adapts to the destination.',
+    },
+    {
+      value: 'Perceptual',
+      label: 'Perceptual',
+      desc: 'Scales the whole gamut to fit, preserving visual relationships. Colors may shift slightly but nothing clips. Good for photos.',
+    },
+    {
+      value: 'Saturation',
+      label: 'Saturation',
+      desc: 'Keeps colors vibrant at the expense of accuracy. Suited for charts, logos, and graphics where punchy color matters most.',
+    },
+    {
+      value: 'AbsoluteColorimetric',
+      label: 'Absolute Colorimetric',
+      desc: 'Like Relative but does not adjust the white point. Used for soft-proofing to simulate one substrate on another.',
+    },
   ];
 
   let sameProfile = $derived(app.params.fromProfile === app.params.toProfile);
@@ -88,11 +104,21 @@
 
 <div class="param-group">
   <div class="param-label">Rendering Intent</div>
-  <select class="param-select" bind:value={app.params.convertIntent}>
+  <div class="intent-list">
     {#each intents as i (i.value)}
-      <option value={i.value}>{i.label}</option>
+      <button
+        class="intent-card"
+        class:sel={app.params.convertIntent === i.value}
+        onclick={() => (app.params.convertIntent = i.value)}
+      >
+        <div class="intent-dot"></div>
+        <div class="intent-text">
+          <div class="intent-name">{i.label}</div>
+          <div class="intent-desc">{i.desc}</div>
+        </div>
+      </button>
     {/each}
-  </select>
+  </div>
 </div>
 
 {#if sameProfile}
@@ -136,4 +162,42 @@
   .arrow-row { display: flex; justify-content: center; padding: 2px 0; }
   .arrow { font-size: 20px; color: var(--orange); }
   .hint { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  .intent-list { display: flex; flex-direction: column; gap: 5px; }
+  .intent-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 8px 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    text-align: left;
+    cursor: pointer;
+    transition: 0.1s;
+    width: 100%;
+  }
+  .intent-card:hover { border-color: var(--muted-hi); }
+  .intent-card.sel {
+    border-color: var(--orange);
+    background: var(--orange-dim);
+  }
+  .intent-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    border: 1.5px solid var(--border);
+    background: transparent;
+    flex-shrink: 0;
+    margin-top: 3px;
+    transition: 0.1s;
+  }
+  .intent-card.sel .intent-dot {
+    border-color: var(--orange);
+    background: var(--orange);
+  }
+  .intent-text { display: flex; flex-direction: column; gap: 2px; }
+  .intent-name { font-size: 12px; font-weight: 600; color: var(--text); }
+  .intent-card.sel .intent-name { color: var(--orange-hi); }
+  .intent-desc { font-size: 11px; color: var(--muted-hi); line-height: 1.5; }
 </style>
