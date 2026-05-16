@@ -17,7 +17,6 @@ path = "src/main.rs"
 [dependencies]
 lcms2 = "6.1.1"
 lopdf = "0.40.0"
-rustybara = "0.1.2"
 image = { version = "0.25.10", features = ["jpeg", "tiff", "png", "webp"] }
 thiserror = "2.0.18"
 
