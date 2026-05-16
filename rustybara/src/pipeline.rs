@@ -6,26 +6,17 @@ use image::DynamicImage;
 use lopdf::Document;
 use std::path::Path;
 
-/// A pipeline for processing and manipulating PDF documents.
-///
-/// The `PdfPipeline` struct provides a structured way to work with PDF files,
-/// encapsulating a `Document` and offering methods to perform various operations
-/// such as reading, modifying, and writing PDF content.
-///
-/// # Examples
-///
-/// ```no_test
-/// // Create a new PDF pipeline
-/// let pipeline = PdfPipeline::new();
-///
-/// // Load a PDF document
-/// let doc = Document::load("example.pdf")?;
-/// let pipeline = PdfPipeline::with_document(doc);
-/// ```
 /// Describes the overall color operator usage found across a PDF document's content streams.
 ///
 /// Returned by [`PdfPipeline::detect_color_space`]. Distinct from the profile-level
 /// [`rustybara_icc::ColorSpaceKind`], which classifies individual ICC profiles.
+///
+/// # Variants
+///
+/// * `PureCMYK` — Only CMYK color operators (`k`, `K`) were found
+/// * `PureRGB` — Only RGB color operators (`rg`, `RG`) were found
+/// * `Mixed` — Both CMYK and RGB operators are present
+/// * `Unknown` — No recognizable color operators were found
 pub enum DocumentColorKind {
     PureCMYK,
     PureRGB,
@@ -33,6 +24,39 @@ pub enum DocumentColorKind {
     Unknown,
 }
 
+/// High-level pipeline for PDF preprocessing operations.
+///
+/// `PdfPipeline` wraps a `lopdf::Document` and provides a chainable API for common
+/// prepress operations like trimming marks, resizing pages, remapping colors, and
+/// exporting to images.
+///
+/// # Examples
+///
+/// ```no_run
+/// use rustybara::PdfPipeline;
+///
+/// # fn main() -> rustybara::Result<()> {
+/// // Chain multiple operations
+/// PdfPipeline::open("input.pdf")?
+///     .trim()?                    // Remove content outside TrimBox
+///     .resize(9.0)?               // Add 9pt bleed
+///     .save_pdf("output.pdf")?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// ```no_run
+/// use rustybara::{PdfPipeline, encode::OutputFormat, raster::RenderConfig};
+///
+/// # fn main() -> rustybara::Result<()> {
+/// let pipeline = PdfPipeline::open("document.pdf")?;
+/// let config = RenderConfig::prepress(); // 300 DPI
+///
+/// // Export first page as JPEG
+/// pipeline.save_page_image(0, "page_1.jpg", &OutputFormat::Jpg, &config)?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct PdfPipeline {
     doc: Document,
 }
