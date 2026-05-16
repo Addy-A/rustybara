@@ -1,7 +1,8 @@
 /target
 /rustybara/tests/fixtures/secret_fixture
 /rustybara/tests/fixtures/test_results/
-/rustybara-icc/src/profiles/data
+/rustybara-icc/src/profiles/data/CMYK/
+/rustybara-icc/src/profiles/data/RGB/
 /rustybara-icc/.claude/
 /rbara-gui/frontend/node_modules
 /rbara-gui/resources/
