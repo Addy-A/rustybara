@@ -9,7 +9,7 @@
 //!
 //! ## Key Functions
 //!
-//! - [`save`] — Save a DynamicImage to disk in the specified format
+//! - [`save()`] — Save a DynamicImage to disk in the specified format
 
 pub mod save;
 pub use save::{OutputFormat, save};

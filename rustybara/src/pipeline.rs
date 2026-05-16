@@ -8,8 +8,8 @@ use std::path::Path;
 
 /// Describes the overall color operator usage found across a PDF document's content streams.
 ///
-/// Returned by [`PdfPipeline::detect_color_space`]. Distinct from the profile-level
-/// [`rustybara_icc::ColorSpaceKind`], which classifies individual ICC profiles.
+/// Returned by [`PdfPipeline::detect_color_space`]. Distinct from ICC profile classification,
+/// which identifies individual color profiles.
 ///
 /// # Variants
 ///
@@ -242,11 +242,11 @@ impl PdfPipeline {
     ///
     /// # Returns
     ///
-    /// A [`ColorSpaceKind`] variant describing the overall color usage:
-    /// * `ColorSpaceKind::PureCMYK`  – only CMYK paint operators were found.
-    /// * `ColorSpaceKind::PureRGB`   – only RGB paint operators were found.
-    /// * `ColorSpaceKind::Mixed`     – both CMYK and RGB operators are present.
-    /// * `ColorSpaceKind::Unknown`   – no recognizable color operators were found.
+    /// A [`DocumentColorKind`] variant describing the overall color usage:
+    /// * `DocumentColorKind::PureCMYK`  – only CMYK paint operators were found.
+    /// * `DocumentColorKind::PureRGB`   – only RGB paint operators were found.
+    /// * `DocumentColorKind::Mixed`     – both CMYK and RGB operators are present.
+    /// * `DocumentColorKind::Unknown`   – no recognizable color operators were found.
     ///
     /// # Notes
     ///
@@ -325,7 +325,7 @@ impl PdfPipeline {
     /// Flattens all `Separation` spot color uses to their device CMYK alternates without
     /// applying any ICC transform.
     ///
-    /// This is a lighter alternative to [`convert_color_space`] for documents that have
+    /// This is a lighter alternative to [`Self::convert_color_space`] for documents that have
     /// spot inks but don't need a full profile-to-profile conversion. Each `cs`/`scn`
     /// operator pair referencing a `Separation` color space is replaced with the equivalent
     /// device CMYK `k` operator evaluated from the embedded tint function.

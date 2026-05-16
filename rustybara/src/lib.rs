@@ -58,7 +58,7 @@
 //! - [`raster`] — PDF rendering via PDFium
 //! - [`encode`] — Image encoding to various formats
 //! - [`geometry`] — 2D geometry primitives (Rect, Matrix)
-//! - [`color`] — ICC color management (feature-gated)
+//! - `color` — ICC color management (feature-gated, requires `color` feature)
 
 #[cfg(feature = "color")]
 pub mod color;
