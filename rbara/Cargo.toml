@@ -5,7 +5,7 @@ edition = "2024"
 license = "GPL-3.0-only"
 
 [dependencies]
-rustybara = { path = "../rustybara", features = ["color"] }
+rustybara = { path = "../rustybara", version = "0.1.3", features = ["color"] }
 ratatui = "0.30.0"
 clap = { version = "4.5", features = ["derive"] }
 rand = "0.10.1"
