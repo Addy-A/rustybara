@@ -54,8 +54,8 @@ COPY rbara/         rbara/
 COPY rbv/           rbv/
 # Cargo needs every workspace member's Cargo.toml to resolve the workspace,
 # even for members that aren't built in this image.
-RUN mkdir -p rustybara-icc rbara-gui
-COPY rustybara-icc/Cargo.toml rustybara-icc/Cargo.toml
+RUN mkdir -p rbara-gui
+COPY rustybara-icc/           rustybara-icc/
 COPY rbara-gui/Cargo.toml     rbara-gui/Cargo.toml
 COPY README.md LICENSE-LGPL-3.0 LICENSE-GPL-3.0 ./
 
