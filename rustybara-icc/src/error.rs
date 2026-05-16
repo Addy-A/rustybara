@@ -1,3 +1,12 @@
+/// Errors that can occur during ICC color management operations.
+///
+/// # Variants
+///
+/// * `Transform` — Error during color transformation (e.g., invalid pixel data, incompatible profiles)
+/// * `UnsupportedColorSpace` — Attempted operation on an unsupported color space
+/// * `Pdf` — Error reading or manipulating PDF objects
+/// * `Image` — Error processing image data
+/// * `Profile` — Error loading or parsing an ICC profile
 #[derive(thiserror::Error, Debug)]
 pub enum IccError {
     #[error("lcms2 transform error: {0}")]
