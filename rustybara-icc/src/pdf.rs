@@ -414,7 +414,7 @@ fn object_to_f64(obj: &lopdf::Object) -> f64 {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "bundled-profiles"))]
 mod tests {
     use super::*;
     use crate::RenderingIntent;

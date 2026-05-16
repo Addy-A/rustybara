@@ -17,15 +17,10 @@ name: release
 #   rustybara-icc-<version>-macos-arm64.tar.gz       (ICC CLI, macOS Apple silicon)
 #   rustybara-icc-<version>-macos-x86_64.tar.gz      (ICC CLI, macOS Intel)
 #
-# ICC CLI bundled-profiles: set the ICC_PROFILES_ZIP repository secret to a
-# base64-encoded ZIP of the Adobe ICC profile data directory (CMYK/ + RGB/).
-# When present, the binary is built with --features bundled-profiles so named
-# print profiles (--from CoatedFOGRA39 etc.) work out of the box.
-# Without the secret the binary still builds; only --to srgb is available.
-#
-# To create the secret (PowerShell):
-#   $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes("icc-profiles.zip"))
-#   # Paste $b64 into Settings → Secrets → ICC_PROFILES_ZIP
+# ICC CLI note: released binaries support --to srgb out of the box.
+# For named print profiles (--from CoatedFOGRA39 etc.) build locally with:
+#   cargo build --release -p rustybara-icc --features bundled-profiles
+# (requires Adobe ICC profiles — see rustybara-icc/src/profiles/data/README.md)
 #
 # Each artifact bundles its own pdfium (chromium/7776) — no system pdfium needed.
 # All four installers are independent and can run/release in parallel.
@@ -531,33 +526,11 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install little-cms2
 
-      - name: Unpack ICC profiles
-        if: ${{ secrets.ICC_PROFILES_ZIP != '' }}
-        shell: bash
-        env:
-          ICC_ZIP_B64: ${{ secrets.ICC_PROFILES_ZIP }}
-        run: |
-          echo "$ICC_ZIP_B64" | base64 -d > icc.zip
-          python3 -c "
-import zipfile
-with zipfile.ZipFile('icc.zip') as z:
-    z.extractall('rustybara-icc/src/profiles/data')
-"
-
-      - name: Resolve feature flags
-        id: feats
-        shell: bash
-        env:
-          ICC_ZIP_B64: ${{ secrets.ICC_PROFILES_ZIP }}
-        run: |
-          if [ -n "$ICC_ZIP_B64" ]; then
-            echo "flags=--features bundled-profiles" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Build
         env:
           PKG_CONFIG_ALLOW_CROSS: '1'
-        run: cargo build --release -p rustybara-icc --target ${{ matrix.target }} ${{ steps.feats.outputs.flags }}
+        run: cargo build --release -p rustybara-icc --target ${{ matrix.target }}
 
       - name: Package artifact
         shell: bash
