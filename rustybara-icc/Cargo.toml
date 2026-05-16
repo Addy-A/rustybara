@@ -15,7 +15,7 @@ name = "rustybara-icc"
 path = "src/main.rs"
 
 [dependencies]
-lcms2 = "6.1.1"
+lcms2 = { version = "6.1.1", features = ["static"] }
 lopdf = "0.40.0"
 image = { version = "0.25.10", features = ["jpeg", "tiff", "png", "webp"] }
 thiserror = "2.0.18"

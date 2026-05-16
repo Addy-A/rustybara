@@ -520,11 +520,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends liblcms2-dev pkg-config
-
-      - name: Install build deps (macOS, native arm64 only)
-        if: runner.os == 'macOS' && matrix.target == 'aarch64-apple-darwin'
-        run: brew install little-cms2
+          sudo apt-get install -y --no-install-recommends pkg-config
 
 
       - name: Build
