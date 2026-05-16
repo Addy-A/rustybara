@@ -4589,15 +4589,15 @@ dependencies = [
  "clap",
  "rand 0.10.1",
  "ratatui",
- "rustybara 0.1.2",
+ "rustybara 0.1.3",
 ]
 
 [[package]]
 name = "rbara-gui"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "chrono",
- "rustybara 0.1.2",
+ "rustybara 0.1.3",
  "rustybara-icc",
  "serde",
  "serde_json",
@@ -4610,7 +4610,7 @@ dependencies = [
 name = "rbv"
 version = "0.1.0"
 dependencies = [
- "rustybara 0.1.2",
+ "rustybara 0.1.3",
  "wgpu",
  "winit",
 ]
@@ -4828,18 +4828,6 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 [[package]]
 name = "rustybara"
 version = "0.1.2"
-dependencies = [
- "image",
- "lopdf",
- "pdfium-render",
- "rayon",
- "rustybara-icc",
- "webp",
-]
-
-[[package]]
-name = "rustybara"
-version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "280d71956d823b17ba61287589690bb369390fc46711ec672b21882130c11539"
 dependencies = [
@@ -4851,13 +4839,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustybara"
+version = "0.1.3"
+dependencies = [
+ "image",
+ "lopdf",
+ "pdfium-render",
+ "rayon",
+ "rustybara-icc",
+ "webp",
+]
+
+[[package]]
 name = "rustybara-icc"
 version = "0.1.0"
 dependencies = [
  "image",
  "lcms2",
  "lopdf",
- "rustybara 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rustybara 0.1.2",
  "thiserror 2.0.18",
 ]
 
