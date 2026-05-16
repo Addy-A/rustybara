@@ -1,12 +1,14 @@
 use crate::ColorSpaceKind;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
+#[cfg(feature = "bundled-profiles")]
+use std::sync::LazyLock;
 
 /// An ICC color profile with typed metadata.
 ///
 /// Bundled profiles are exposed as `pub static` [`LazyLock`] values in this module
-/// (e.g. [`COATED_FOGRA_39`], [`ADOBE_RGB_1998`]). User-supplied profiles can be
-/// constructed with [`IccProfile::from_user_bytes`]. Pass any profile to
-/// [`crate::ColorTransform::new`] to build a color transform.
+/// (e.g. [`COATED_FOGRA_39`], [`ADOBE_RGB_1998`]) when the `bundled-profiles` feature
+/// is enabled. User-supplied profiles can be constructed with [`IccProfile::from_user_bytes`].
+/// Pass any profile to [`crate::ColorTransform::new`] to build a color transform.
 #[derive(Clone)]
 pub struct IccProfile {
     /// Short machine-readable identifier (e.g. `"CoatedFOGRA39"`).
@@ -47,8 +49,14 @@ impl IccProfile {
     }
 }
 
+// ── Bundled profile statics ───────────────────────────────────────────────────
+//
+// Requires the `bundled-profiles` feature. The ICC files are not distributed with
+// this crate — see src/profiles/data/README.md for download instructions.
+
 // ── CMYK ─────────────────────────────────────────────────────────────────────
 
+#[cfg(feature = "bundled-profiles")]
 pub static COATED_FOGRA_27: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "CoatedFOGRA27".to_string(),
     description: "Coated FOGRA 27".to_string(),
@@ -56,6 +64,7 @@ pub static COATED_FOGRA_27: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     bytes: Arc::from(include_bytes!("data/CMYK/CoatedFOGRA27.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static COATED_FOGRA_39: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "CoatedFOGRA39".to_string(),
     description: "Coated FOGRA 39".to_string(),
@@ -63,6 +72,7 @@ pub static COATED_FOGRA_39: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     bytes: Arc::from(include_bytes!("data/CMYK/CoatedFOGRA39.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static COATED_GRACOL_2006: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "CoatedGRACoL2006".to_string(),
     description: "Coated GRACoL 2006".to_string(),
@@ -70,6 +80,7 @@ pub static COATED_GRACOL_2006: LazyLock<IccProfile> = LazyLock::new(|| IccProfil
     bytes: Arc::from(include_bytes!("data/CMYK/CoatedGRACoL2006.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static JAPAN_COLOR_2001_COATED: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "JapanColor2001Coated".to_string(),
     description: "Japan Color 2001 Coated".to_string(),
@@ -77,6 +88,7 @@ pub static JAPAN_COLOR_2001_COATED: LazyLock<IccProfile> = LazyLock::new(|| IccP
     bytes: Arc::from(include_bytes!("data/CMYK/JapanColor2001Coated.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static JAPAN_COLOR_2001_UNCOATED: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "JapanColor2001Uncoated".to_string(),
     description: "Japan Color 2001 Uncoated".to_string(),
@@ -84,6 +96,7 @@ pub static JAPAN_COLOR_2001_UNCOATED: LazyLock<IccProfile> = LazyLock::new(|| Ic
     bytes: Arc::from(include_bytes!("data/CMYK/JapanColor2001Uncoated.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static JAPAN_COLOR_2002_NEWSPAPER: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "JapanColor2002Newspaper".to_string(),
     description: "Japan Color 2002 Newspaper".to_string(),
@@ -91,6 +104,7 @@ pub static JAPAN_COLOR_2002_NEWSPAPER: LazyLock<IccProfile> = LazyLock::new(|| I
     bytes: Arc::from(include_bytes!("data/CMYK/JapanColor2002Newspaper.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static JAPAN_COLOR_2003_WEB_COATED: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "JapanColor2003WebCoated".to_string(),
     description: "Japan Color 2003 Web Coated".to_string(),
@@ -98,6 +112,7 @@ pub static JAPAN_COLOR_2003_WEB_COATED: LazyLock<IccProfile> = LazyLock::new(|| 
     bytes: Arc::from(include_bytes!("data/CMYK/JapanColor2003WebCoated.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static JAPAN_WEB_COATED: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "JapanWebCoated".to_string(),
     description: "Japan Web Coated".to_string(),
@@ -105,6 +120,7 @@ pub static JAPAN_WEB_COATED: LazyLock<IccProfile> = LazyLock::new(|| IccProfile 
     bytes: Arc::from(include_bytes!("data/CMYK/JapanWebCoated.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static UNCOATED_FOGRA_29: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "UncoatedFOGRA29".to_string(),
     description: "Uncoated FOGRA 29".to_string(),
@@ -112,6 +128,7 @@ pub static UNCOATED_FOGRA_29: LazyLock<IccProfile> = LazyLock::new(|| IccProfile
     bytes: Arc::from(include_bytes!("data/CMYK/UncoatedFOGRA29.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static US_WEB_COATED_SWOP: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "USWebCoatedSWOP".to_string(),
     description: "US Web Coated SWOP".to_string(),
@@ -119,6 +136,7 @@ pub static US_WEB_COATED_SWOP: LazyLock<IccProfile> = LazyLock::new(|| IccProfil
     bytes: Arc::from(include_bytes!("data/CMYK/USWebCoatedSWOP.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static US_WEB_UNCOATED: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "USWebUncoated".to_string(),
     description: "US Web Uncoated".to_string(),
@@ -126,6 +144,7 @@ pub static US_WEB_UNCOATED: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     bytes: Arc::from(include_bytes!("data/CMYK/USWebUncoated.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static WEB_COATED_FOGRA_28: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "WebCoatedFOGRA28".to_string(),
     description: "Web Coated FOGRA 28".to_string(),
@@ -133,6 +152,7 @@ pub static WEB_COATED_FOGRA_28: LazyLock<IccProfile> = LazyLock::new(|| IccProfi
     bytes: Arc::from(include_bytes!("data/CMYK/WebCoatedFOGRA28.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static WEB_COATED_SWOP_2006_GRADE3: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "WebCoatedSWOP2006Grade3".to_string(),
     description: "Web Coated SWOP 2006 Grade 3".to_string(),
@@ -140,6 +160,7 @@ pub static WEB_COATED_SWOP_2006_GRADE3: LazyLock<IccProfile> = LazyLock::new(|| 
     bytes: Arc::from(include_bytes!("data/CMYK/WebCoatedSWOP2006Grade3.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static WEB_COATED_SWOP_2006_GRADE5: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "WebCoatedSWOP2006Grade5".to_string(),
     description: "Web Coated SWOP 2006 Grade 5".to_string(),
@@ -149,6 +170,7 @@ pub static WEB_COATED_SWOP_2006_GRADE5: LazyLock<IccProfile> = LazyLock::new(|| 
 
 // ── RGB ──────────────────────────────────────────────────────────────────────
 
+#[cfg(feature = "bundled-profiles")]
 pub static ADOBE_RGB_1998: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "AdobeRGB1998".to_string(),
     description: "Adobe RGB (1998)".to_string(),
@@ -156,6 +178,7 @@ pub static ADOBE_RGB_1998: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     bytes: Arc::from(include_bytes!("data/RGB/AdobeRGB1998.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static APPLE_RGB: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "AppleRGB".to_string(),
     description: "Apple RGB".to_string(),
@@ -163,6 +186,7 @@ pub static APPLE_RGB: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     bytes: Arc::from(include_bytes!("data/RGB/AppleRGB.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static COLOR_MATCH_RGB: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "ColorMatchRGB".to_string(),
     description: "ColorMatch RGB".to_string(),
@@ -170,6 +194,7 @@ pub static COLOR_MATCH_RGB: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     bytes: Arc::from(include_bytes!("data/RGB/ColorMatchRGB.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static PAL_SECAM: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "PAL_SECAM".to_string(),
     description: "PAL/SECAM".to_string(),
@@ -177,6 +202,7 @@ pub static PAL_SECAM: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     bytes: Arc::from(include_bytes!("data/RGB/PAL_SECAM.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static SMPTE_C: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "SMPTE-C".to_string(),
     description: "SMPTE-C".to_string(),
@@ -184,6 +210,7 @@ pub static SMPTE_C: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     bytes: Arc::from(include_bytes!("data/RGB/SMPTE-C.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static VIDEO_HD: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "VideoHD".to_string(),
     description: "HDTV (Rec. 709)".to_string(),
@@ -191,6 +218,7 @@ pub static VIDEO_HD: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     bytes: Arc::from(include_bytes!("data/RGB/VideoHD.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static VIDEO_NTSC: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "VideoNTSC".to_string(),
     description: "NTSC (1953)".to_string(),
@@ -198,6 +226,7 @@ pub static VIDEO_NTSC: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     bytes: Arc::from(include_bytes!("data/RGB/VideoNTSC.icc").as_slice()),
 });
 
+#[cfg(feature = "bundled-profiles")]
 pub static VIDEO_PAL: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
     name: "VideoPAL".to_string(),
     description: "PAL (Video)".to_string(),
@@ -208,6 +237,11 @@ pub static VIDEO_PAL: LazyLock<IccProfile> = LazyLock::new(|| IccProfile {
 // ── Lookup ────────────────────────────────────────────────────────────────────
 
 /// Returns the bundled profile for a given machine-readable name, or `None` if unknown.
+///
+/// Requires the `bundled-profiles` feature and the Adobe ICC profile files to be present
+/// at compile time. See `src/profiles/data/README.md` for setup instructions.
+/// Without that feature this function always returns `None`.
+#[cfg(feature = "bundled-profiles")]
 pub fn by_name(name: &str) -> Option<&'static IccProfile> {
     match name {
         "CoatedFOGRA27" => Some(&*COATED_FOGRA_27),
@@ -236,9 +270,14 @@ pub fn by_name(name: &str) -> Option<&'static IccProfile> {
     }
 }
 
+#[cfg(not(feature = "bundled-profiles"))]
+pub fn by_name(_name: &str) -> Option<&'static IccProfile> {
+    None
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, feature = "bundled-profiles"))]
 mod tests {
     use super::*;
     use crate::ColorSpaceKind;

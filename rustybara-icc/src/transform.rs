@@ -224,7 +224,7 @@ fn color_space_from_sig(sig: lcms2::ColorSpaceSignature) -> crate::ColorSpaceKin
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "bundled-profiles"))]
 mod tests {
     use super::*;
     use crate::profiles::{

@@ -20,5 +20,8 @@ lopdf = "0.40.0"
 image = { version = "0.25.10", features = ["jpeg", "tiff", "png", "webp"] }
 thiserror = "2.0.18"
 
+[features]
+bundled-profiles = []
+
 [dev-dependencies]
 # test fixtures and golden file comparison tooling as needed
