@@ -187,10 +187,12 @@ fn convert_operation(op: &Operation, transform: &ColorTransform) -> Operation {
         _ => return op.clone(),
     };
 
-    let is_fill = op.operator == fill_op;
-    let is_stroke = op.operator == stroke_op;
+    let is_fill = (op.operator == fill_op || op.operator == "sc")
+        && op.operands.len() == channel_count;
+    let is_stroke = (op.operator == stroke_op || op.operator == "SC")
+        && op.operands.len() == channel_count;
 
-    if !(is_fill || is_stroke) || op.operands.len() != channel_count {
+    if !(is_fill || is_stroke) {
         return op.clone();
     }
 
@@ -285,7 +287,7 @@ fn flatten_spot_ops(
                 current_stroke_cs = None;
                 out.push(op.clone());
             }
-            "scn" if current_fill_cs.is_some() => {
+            "scn" | "sc" if current_fill_cs.is_some() && op.operands.len() == 1 => {
                 let tint = op
                     .operands
                     .first()
@@ -300,7 +302,7 @@ fn flatten_spot_ops(
                 });
                 count += 1;
             }
-            "SCN" if current_stroke_cs.is_some() => {
+            "SCN" | "SC" if current_stroke_cs.is_some() && op.operands.len() == 1 => {
                 let tint = op
                     .operands
                     .first()
@@ -879,8 +881,6 @@ mod tests {
 
     #[test]
     fn flatten_spot_scn_stroke_emits_uppercase_k() {
-        // SCN (stroke) must become K (stroke CMYK), not k (fill CMYK).
-        // This test pins Issue 5 — will fail until line 221 is fixed.
         let (doc, page_id) = make_minimal_doc(vec![]);
         let ops = vec![spot_name_op("CS", "CS1"), tint_op("SCN", 0.5)];
         let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
@@ -888,6 +888,48 @@ mod tests {
             out.iter().any(|o| o.operator == "K"),
             "SCN stroke must become K (stroke), not k (fill)"
         );
+    }
+
+    // InDesign uses sc/SC (not scn/SCN) for Separation tint operators.
+
+    #[test]
+    fn flatten_spot_sc_after_spot_cs_becomes_k_op() {
+        let (doc, page_id) = make_minimal_doc(vec![]);
+        let ops = vec![spot_name_op("cs", "CS1"), tint_op("sc", 0.5)];
+        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        assert!(
+            out.iter().any(|o| o.operator == "k"),
+            "sc after spot cs must become k"
+        );
+    }
+
+    #[test]
+    fn flatten_spot_sc_increments_count() {
+        let (doc, page_id) = make_minimal_doc(vec![]);
+        let ops = vec![spot_name_op("cs", "CS1"), tint_op("sc", 0.8)];
+        let (_, count) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn flatten_spot_uppercase_sc_after_spot_cs_becomes_uppercase_k() {
+        let (doc, page_id) = make_minimal_doc(vec![]);
+        let ops = vec![spot_name_op("CS", "CS1"), tint_op("SC", 0.5)];
+        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        assert!(
+            out.iter().any(|o| o.operator == "K"),
+            "SC after spot CS must become K"
+        );
+    }
+
+    #[test]
+    fn flatten_spot_sc_without_prior_spot_cs_passes_through() {
+        let (doc, page_id) = make_minimal_doc(vec![]);
+        let ops = vec![tint_op("sc", 0.5)];
+        let (out, count) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].operator, "sc");
+        assert_eq!(count, 0);
     }
 
     // ── spot_tint_to_cmyk ─────────────────────────────────────────────────────

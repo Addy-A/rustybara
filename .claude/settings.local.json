@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo test *)",
+      "Bash(grep -n \"endstream\\\\|stream\\\\b\\\\|obj\\\\b\\\\|>>$\\\\|/Type\\\\|/Filter\\\\|/ColorSpace\\\\|/BitsPerComponent\\\\|BI\\\\b\\\\|EI\\\\b\\\\|/Subtype\\\\|/Length\\\\b\" \"c:\\\\Users\\\\mardo\\\\OneDrive\\\\Desktop\\\\rustybara\\\\rustybara\\\\tests\\\\fixtures\\\\pdf_test_data_print_v2.qdf\")"
+    ]
+  }
+}
