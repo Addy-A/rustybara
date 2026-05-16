@@ -1,5 +1,5 @@
 use crate::profiles::IccProfile;
-use crate::{IccError, intent::RenderingIntent};
+use crate::{intent::RenderingIntent, IccError};
 use image::DynamicImage;
 use lcms2::{Flags, Profile};
 
@@ -49,9 +49,9 @@ impl ColorTransform {
     /// ```
     pub fn new(src: &IccProfile, dst: &IccProfile, intent: RenderingIntent) -> crate::Result<Self> {
         let src_profile =
-            Profile::new_icc(src.bytes).map_err(|e| crate::IccError::Profile(e.to_string()))?;
+            Profile::new_icc(&src.bytes).map_err(|e| crate::IccError::Profile(e.to_string()))?;
         let dst_profile =
-            Profile::new_icc(dst.bytes).map_err(|e| crate::IccError::Profile(e.to_string()))?;
+            Profile::new_icc(&dst.bytes).map_err(|e| crate::IccError::Profile(e.to_string()))?;
 
         let src_fmt = crate::pixel_format::PixelFormat::from(src.color_space.clone());
         let dst_fmt = crate::pixel_format::PixelFormat::from(dst.color_space.clone());
@@ -236,50 +236,42 @@ mod tests {
 
     #[test]
     fn new_cmyk_to_cmyk_ok() {
-        assert!(
-            ColorTransform::new(
-                &COATED_FOGRA_39,
-                &COATED_GRACOL_2006,
-                RenderingIntent::RelativeColorimetric,
-            )
-            .is_ok()
-        );
+        assert!(ColorTransform::new(
+            &COATED_FOGRA_39,
+            &COATED_GRACOL_2006,
+            RenderingIntent::RelativeColorimetric,
+        )
+        .is_ok());
     }
 
     #[test]
     fn from_bytes_cmyk_to_cmyk_ok() {
-        assert!(
-            ColorTransform::from_bytes(
-                COATED_FOGRA_39.bytes,
-                COATED_GRACOL_2006.bytes,
-                RenderingIntent::RelativeColorimetric,
-            )
-            .is_ok()
-        );
+        assert!(ColorTransform::from_bytes(
+            &COATED_FOGRA_39.bytes,
+            &COATED_GRACOL_2006.bytes,
+            RenderingIntent::RelativeColorimetric,
+        )
+        .is_ok());
     }
 
     #[test]
     fn from_bytes_invalid_src_returns_err() {
-        assert!(
-            ColorTransform::from_bytes(
-                b"not an icc profile",
-                COATED_FOGRA_39.bytes,
-                RenderingIntent::Perceptual,
-            )
-            .is_err()
-        );
+        assert!(ColorTransform::from_bytes(
+            b"not an icc profile",
+            &COATED_FOGRA_39.bytes,
+            RenderingIntent::Perceptual,
+        )
+        .is_err());
     }
 
     #[test]
     fn from_bytes_invalid_dst_returns_err() {
-        assert!(
-            ColorTransform::from_bytes(
-                COATED_FOGRA_39.bytes,
-                b"not an icc profile",
-                RenderingIntent::Perceptual,
-            )
-            .is_err()
-        );
+        assert!(ColorTransform::from_bytes(
+            &COATED_FOGRA_39.bytes,
+            b"not an icc profile",
+            RenderingIntent::Perceptual,
+        )
+        .is_err());
     }
 
     // --- color space accessors ---
@@ -309,8 +301,8 @@ mod tests {
     #[test]
     fn from_bytes_detects_cmyk_color_spaces() {
         let t = ColorTransform::from_bytes(
-            COATED_FOGRA_39.bytes,
-            US_WEB_COATED_SWOP.bytes,
+            &COATED_FOGRA_39.bytes,
+            &US_WEB_COATED_SWOP.bytes,
             RenderingIntent::RelativeColorimetric,
         )
         .unwrap();
@@ -410,14 +402,12 @@ mod tests {
     // Verify that a different profile pair also builds cleanly (not just FOGRA39↔GRACoL).
     #[test]
     fn different_profile_pair_constructs_ok() {
-        assert!(
-            ColorTransform::new(
-                &US_WEB_COATED_SWOP,
-                &UNCOATED_FOGRA_29,
-                RenderingIntent::Perceptual,
-            )
-            .is_ok()
-        );
+        assert!(ColorTransform::new(
+            &US_WEB_COATED_SWOP,
+            &UNCOATED_FOGRA_29,
+            RenderingIntent::Perceptual,
+        )
+        .is_ok());
     }
 
     // --- all intents ---
@@ -452,7 +442,7 @@ mod tests {
     //      let srgb_bytes = lcms2::Profile::new_srgb().icc_data().unwrap().to_vec();
     //   2. Build the transform:
     //      let t = ColorTransform::from_bytes(
-    //          COATED_FOGRA_39.bytes, &srgb_bytes, RenderingIntent::RelativeColorimetric
+    //          &COATED_FOGRA_39.bytes, &srgb_bytes, RenderingIntent::RelativeColorimetric
     //      ).unwrap();
     //   3. Convert the patch and compare:
     //      let out = t.convert(&cmyk);

@@ -1,14 +1,74 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use rustybara::encode::OutputFormat;
 use rustybara::pages::PageBoxes;
 use rustybara::raster::RenderConfig;
 use rustybara::PdfPipeline;
-use tauri::State;
+use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 pub struct ProcessingLock(pub Mutex<bool>);
+
+pub(crate) struct CustomProfileEntry {
+    description: String,
+    color_space: String,
+    bytes: Arc<[u8]>,
+}
+
+pub struct ProfileRegistry(pub(crate) Mutex<HashMap<String, CustomProfileEntry>>);
+
+#[derive(serde::Serialize, Clone)]
+pub struct CustomProfileDto {
+    pub name: String,
+    pub description: String,
+    pub color_space: String,
+}
+
+fn profiles_dir<R: tauri::Runtime>(manager: &impl Manager<R>) -> Option<PathBuf> {
+    let dir = manager.path().app_data_dir().ok()?.join("profiles");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+pub(crate) fn load_persisted_profiles(app: &tauri::App) {
+    let Some(dir) = profiles_dir(app) else { return };
+    let registry = app.state::<ProfileRegistry>();
+    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if ext != "icc" && ext != "icm" { continue; }
+
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Custom")
+            .to_string();
+
+        let Ok(profile) = rustybara_icc::profiles::IccProfile::from_user_bytes(
+            name.clone(),
+            name,
+            bytes,
+        ) else { continue };
+
+        let color_space = match profile.color_space {
+            rustybara_icc::ColorSpaceKind::Cmyk => "CMYK",
+            rustybara_icc::ColorSpaceKind::Rgb  => "RGB",
+            rustybara_icc::ColorSpaceKind::Gray => "Gray",
+            _                                   => "Unknown",
+        }
+        .to_string();
+
+        registry.0.lock().unwrap().insert(
+            profile.name,
+            CustomProfileEntry { description: profile.description, color_space, bytes: profile.bytes },
+        );
+    }
+}
 
 #[derive(serde::Serialize)]
 pub struct ActionResult {
@@ -430,6 +490,24 @@ pub fn flatten_spots(
     })
 }
 
+fn resolve_profile_bytes(
+    name: &str,
+    registry: &State<'_, ProfileRegistry>,
+) -> Result<Arc<[u8]>, String> {
+    if let Some(p) = rustybara_icc::profiles::by_name(name) {
+        return Ok(p.bytes.clone());
+    }
+    registry
+        .0
+        .lock()
+        .unwrap()
+        .get(name)
+        .map(|e| e.bytes.clone())
+        .ok_or_else(|| {
+            format!("Unknown profile '{name}'. Load a custom profile or check the name.")
+        })
+}
+
 #[tauri::command]
 pub fn convert_color_space(
     paths: Vec<String>,
@@ -439,8 +517,11 @@ pub fn convert_color_space(
     output_dir: Option<String>,
     overwrite: bool,
     state: State<'_, ProcessingLock>,
+    profiles: State<'_, ProfileRegistry>,
 ) -> Result<ActionResult, String> {
     let _guard = LockGuard::acquire(&state.0)?;
+    let from_bytes = resolve_profile_bytes(&from_profile, &profiles)?;
+    let to_bytes = resolve_profile_bytes(&to_profile, &profiles)?;
     let output_dir = output_dir.map(PathBuf::from);
     let mut output_paths = Vec::new();
 
@@ -449,7 +530,7 @@ pub fn convert_color_space(
         let out = output_path(&path, &output_dir, None, overwrite);
         PdfPipeline::open(&path)
             .and_then(|mut p| {
-                p.convert_color_space(&from_profile, &to_profile, &intent)?;
+                p.convert_color_space_raw(&from_bytes, &to_bytes, &intent)?;
                 p.save_pdf(&out)?;
                 Ok(())
             })
@@ -468,6 +549,84 @@ pub fn convert_color_space(
         output_paths,
         timestamp: now_timestamp(),
     })
+}
+
+#[tauri::command]
+pub async fn load_icc_profile(
+    app: tauri::AppHandle,
+    profiles: State<'_, ProfileRegistry>,
+) -> Result<Option<CustomProfileDto>, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .add_filter("ICC Profile", &["icc", "icm"])
+        .pick_file(move |file| {
+            let _ = tx.send(file);
+        });
+
+    let file = rx.recv().map_err(|e| format!("Dialog error: {e}"))?;
+    let Some(file_path) = file else {
+        return Ok(None);
+    };
+
+    let path = file_path
+        .into_path()
+        .map_err(|e| format!("Invalid path: {e}"))?;
+    let bytes = std::fs::read(&path).map_err(|e| format!("Could not read file: {e}"))?;
+
+    let name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Custom")
+        .to_string();
+
+    let profile = rustybara_icc::profiles::IccProfile::from_user_bytes(
+        name.clone(),
+        name.clone(),
+        bytes,
+    )
+    .map_err(|e| format!("{e}"))?;
+
+    let color_space = match profile.color_space {
+        rustybara_icc::ColorSpaceKind::Cmyk    => "CMYK",
+        rustybara_icc::ColorSpaceKind::Rgb     => "RGB",
+        rustybara_icc::ColorSpaceKind::Gray    => "Gray",
+        _                                      => "Unknown",
+    }
+    .to_string();
+
+    let dto = CustomProfileDto {
+        name: profile.name.clone(),
+        description: profile.description.clone(),
+        color_space: color_space.clone(),
+    };
+
+    if let Some(dir) = profiles_dir(&app) {
+        let out = dir.join(format!("{}.icc", profile.name));
+        let _ = std::fs::write(out, &*profile.bytes);
+    }
+
+    profiles.0.lock().unwrap().insert(
+        profile.name,
+        CustomProfileEntry { description: profile.description, color_space, bytes: profile.bytes },
+    );
+
+    Ok(Some(dto))
+}
+
+#[tauri::command]
+pub fn list_custom_profiles(profiles: State<'_, ProfileRegistry>) -> Vec<CustomProfileDto> {
+    profiles
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(name, e)| CustomProfileDto {
+            name: name.clone(),
+            description: e.description.clone(),
+            color_space: e.color_space.clone(),
+        })
+        .collect()
 }
 
 #[tauri::command]

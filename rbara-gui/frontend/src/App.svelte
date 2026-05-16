@@ -36,6 +36,8 @@
     localStorage.setItem('rbara-theme', theme);
   });
 
+  let customProfiles = $state([]);  // [{name, description, color_space}]
+
   let params = $state({
     bleedInches: 0.125,
     exportFormat: 'jpg',
@@ -287,6 +289,11 @@
     };
     window.addEventListener('resize', onResize);
     document.addEventListener('keydown', handleKey);
+
+    api.listCustomProfiles().then(saved => {
+      customProfiles = saved;
+    }).catch(() => {});
+
     return () => {
       window.removeEventListener('resize', onResize);
       document.removeEventListener('keydown', handleKey);
@@ -308,6 +315,8 @@
     set outputDir(v) { outputDir = v; },
     get actionLog() { return actionLog; },
     get params() { return params; },
+    get customProfiles() { return customProfiles; },
+    addCustomProfile(p) { customProfiles = [...customProfiles, p]; },
     get layout() { return layout; },
     get canTrim() { return canTrim; },
     get canResize() { return canResize; },

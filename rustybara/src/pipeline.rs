@@ -344,19 +344,47 @@ impl PdfPipeline {
         use rustybara_icc::pdf::PdfColorConverter;
         use rustybara_icc::{profiles, ColorTransform, IccError, RenderingIntent};
 
-        let from = profiles::by_name(from_profile).ok_or_else(|| {
-            IccError::Profile(format!("unknown source profile: {from_profile}"))
-        })?;
+        let from = profiles::by_name(from_profile)
+            .ok_or_else(|| IccError::Profile(format!("unknown source profile: {from_profile}")))?;
         let to = profiles::by_name(to_profile).ok_or_else(|| {
             IccError::Profile(format!("unknown destination profile: {to_profile}"))
         })?;
         let ri = match intent {
-            "Perceptual"           => RenderingIntent::Perceptual,
-            "Saturation"           => RenderingIntent::Saturation,
+            "Perceptual" => RenderingIntent::Perceptual,
+            "Saturation" => RenderingIntent::Saturation,
             "AbsoluteColorimetric" => RenderingIntent::AbsoluteColorimetric,
-            _                      => RenderingIntent::RelativeColorimetric,
+            _ => RenderingIntent::RelativeColorimetric,
         };
         let transform = ColorTransform::new(from, to, ri)?;
+        PdfColorConverter::new(&mut self.doc, transform).convert_document()?;
+        Ok(())
+    }
+
+    /// Applies an ICC color space conversion using raw profile bytes.
+    ///
+    /// Accepts pre-resolved bytes for both profiles, allowing callers to supply
+    /// bundled or user-imported profiles without going through name lookup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the lcms2 transform cannot be built or if any page's
+    /// content stream cannot be decoded or re-encoded.
+    #[cfg(feature = "color")]
+    pub fn convert_color_space_raw(
+        &mut self,
+        from_bytes: &[u8],
+        to_bytes: &[u8],
+        intent: &str,
+    ) -> crate::Result<()> {
+        use rustybara_icc::pdf::PdfColorConverter;
+        use rustybara_icc::{ColorTransform, RenderingIntent};
+        let ri = match intent {
+            "Perceptual" => RenderingIntent::Perceptual,
+            "Saturation" => RenderingIntent::Saturation,
+            "AbsoluteColorimetric" => RenderingIntent::AbsoluteColorimetric,
+            _ => RenderingIntent::RelativeColorimetric,
+        };
+        let transform = ColorTransform::from_bytes(from_bytes, to_bytes, ri)?;
         PdfColorConverter::new(&mut self.doc, transform).convert_document()?;
         Ok(())
     }

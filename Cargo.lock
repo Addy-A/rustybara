@@ -4598,6 +4598,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "rustybara 0.1.2",
+ "rustybara-icc",
  "serde",
  "serde_json",
  "tauri",

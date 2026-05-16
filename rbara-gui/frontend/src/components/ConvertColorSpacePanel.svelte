@@ -1,5 +1,6 @@
 <script>
   import { useAppState } from '../lib/context.js';
+  import { loadIccProfile } from '../lib/api.js';
   import Notice from './Notice.svelte';
   import RunButton from './RunButton.svelte';
   const app = useAppState();
@@ -56,14 +57,37 @@
   ];
 
   let sameProfile = $derived(app.params.fromProfile === app.params.toProfile);
+  let importing = $state(false);
+  let importError = $state('');
+
+  async function importProfile() {
+    importing = true;
+    importError = '';
+    try {
+      const dto = await loadIccProfile();
+      if (!dto) return;
+      app.addCustomProfile(dto);
+    } catch (e) {
+      importError = typeof e === 'string' ? e : String(e);
+    } finally {
+      importing = false;
+    }
+  }
+
+  let customCmyk = $derived(app.customProfiles.filter(p => p.color_space === 'CMYK'));
+  let customRgb  = $derived(app.customProfiles.filter(p => p.color_space === 'RGB'));
+  let customOther = $derived(app.customProfiles.filter(p => p.color_space !== 'CMYK' && p.color_space !== 'RGB'));
 </script>
 
 <div class="header">
   <span class="title-icon">◈</span>
-  <div>
+  <div class="header-text">
     <div class="params-title">Convert Color Space</div>
     <div class="params-desc">Applies an ICC transform to every CMYK/RGB paint operator in the document's content streams.</div>
   </div>
+  <button class="import-btn" disabled={importing} onclick={importProfile}>
+    {importing ? '…' : '+ Import ICC'}
+  </button>
 </div>
 
 <div class="param-group">
@@ -73,12 +97,25 @@
       {#each cmykProfiles as p (p.value)}
         <option value={p.value}>{p.label}</option>
       {/each}
+      {#each customCmyk as p (p.name)}
+        <option value={p.name}>{p.description} ★</option>
+      {/each}
     </optgroup>
     <optgroup label="RGB">
       {#each rgbProfiles as p (p.value)}
         <option value={p.value}>{p.label}</option>
       {/each}
+      {#each customRgb as p (p.name)}
+        <option value={p.name}>{p.description} ★</option>
+      {/each}
     </optgroup>
+    {#if customOther.length > 0}
+      <optgroup label="Other">
+        {#each customOther as p (p.name)}
+          <option value={p.name}>{p.description} ★</option>
+        {/each}
+      </optgroup>
+    {/if}
   </select>
 </div>
 
@@ -93,12 +130,25 @@
       {#each cmykProfiles as p (p.value)}
         <option value={p.value}>{p.label}</option>
       {/each}
+      {#each customCmyk as p (p.name)}
+        <option value={p.name}>{p.description} ★</option>
+      {/each}
     </optgroup>
     <optgroup label="RGB">
       {#each rgbProfiles as p (p.value)}
         <option value={p.value}>{p.label}</option>
       {/each}
+      {#each customRgb as p (p.name)}
+        <option value={p.name}>{p.description} ★</option>
+      {/each}
     </optgroup>
+    {#if customOther.length > 0}
+      <optgroup label="Other">
+        {#each customOther as p (p.name)}
+          <option value={p.name}>{p.description} ★</option>
+        {/each}
+      </optgroup>
+    {/if}
   </select>
 </div>
 
@@ -121,7 +171,9 @@
   </div>
 </div>
 
-{#if sameProfile}
+{#if importError}
+  <Notice ok={false}>{importError}</Notice>
+{:else if sameProfile}
   <Notice ok={false}>Source and destination profiles are the same — no conversion will occur.</Notice>
 {:else if !app.metadata}
   <Notice ok={false}>Load a file to validate.</Notice>
@@ -136,8 +188,9 @@
 <RunButton label="Run Conversion" icon="◈" />
 
 <style>
-  .header { display: flex; align-items: center; gap: 10px; }
-  .title-icon { font-size: 20px; color: var(--orange); flex-shrink: 0; }
+  .header { display: flex; align-items: flex-start; gap: 10px; }
+  .header-text { flex: 1; }
+  .title-icon { font-size: 20px; color: var(--orange); flex-shrink: 0; padding-top: 1px; }
   .params-title { font-size: 13px; font-weight: 700; color: var(--text); }
   .params-desc { font-size: 11.5px; color: var(--muted-hi); line-height: 1.5; margin-top: 2px; }
   .param-group { display: flex; flex-direction: column; gap: 7px; }
@@ -148,6 +201,18 @@
     text-transform: uppercase;
     letter-spacing: 0.08em;
   }
+  .import-btn {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--muted-hi);
+    cursor: pointer;
+    font-family: var(--mono);
+  }
+  .import-btn:hover:not(:disabled) { border-color: var(--orange); color: var(--orange-hi); }
+  .import-btn:disabled { opacity: 0.5; cursor: default; }
   .param-select {
     background: var(--panel);
     border: 1px solid var(--border);

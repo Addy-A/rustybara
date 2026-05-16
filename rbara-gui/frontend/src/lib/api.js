@@ -50,6 +50,14 @@ export async function extractPages(paths, pageNums, outputDir, overwrite) {
   return await invoke('extract_pages', { paths, pageNums, outputDir, overwrite });
 }
 
+export async function loadIccProfile() {
+  return await invoke('load_icc_profile');
+}
+
+export async function listCustomProfiles() {
+  return await invoke('list_custom_profiles');
+}
+
 // Parses a 1-indexed page string like "1, 3-5, 7" into 0-indexed numbers for the backend.
 export function parsePageNums(input) {
   return [...new Set(
