@@ -5,13 +5,27 @@ name: release
 #
 # if on powershell use the below
 # git tag v0.1.3 ; if ($LASTEXITCODE -eq 0) { git push --tags }
-# 
+#
 # Artifacts produced (one tag → one Release):
 #   rbara-setup-<version>-x64.exe                    (Windows, Inno Setup)
 #   rbara-<version>-linux-x64.tar.gz                 (Linux glibc, x86_64)
 #   rbara-<version>-macos-arm64.tar.gz               (macOS Apple silicon)
 #   rbara-<version>-macos-x86_64.tar.gz              (macOS Intel)
 #   rbara:<version> + rbara:latest                   (GHCR Docker image)
+#   rustybara-icc-<version>-windows-x64.exe          (ICC CLI, Windows)
+#   rustybara-icc-<version>-linux-x64.tar.gz         (ICC CLI, Linux)
+#   rustybara-icc-<version>-macos-arm64.tar.gz       (ICC CLI, macOS Apple silicon)
+#   rustybara-icc-<version>-macos-x86_64.tar.gz      (ICC CLI, macOS Intel)
+#
+# ICC CLI bundled-profiles: set the ICC_PROFILES_ZIP repository secret to a
+# base64-encoded ZIP of the Adobe ICC profile data directory (CMYK/ + RGB/).
+# When present, the binary is built with --features bundled-profiles so named
+# print profiles (--from CoatedFOGRA39 etc.) work out of the box.
+# Without the secret the binary still builds; only --to srgb is available.
+#
+# To create the secret (PowerShell):
+#   $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes("icc-profiles.zip"))
+#   # Paste $b64 into Settings → Secrets → ICC_PROFILES_ZIP
 #
 # Each artifact bundles its own pdfium (chromium/7776) — no system pdfium needed.
 # All four installers are independent and can run/release in parallel.
@@ -19,20 +33,20 @@ name: release
 on:
   push:
     tags:
-      - "v*"
+      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: "Version tag to release (e.g. v0.1.3). Must already exist."
+        description: 'Version tag to release (e.g. v0.1.3). Must already exist.'
         required: true
         type: string
 
 permissions:
-  contents: write   # create the release + upload assets
-  packages: write   # push the Docker image to ghcr.io
+  contents: write # create the release + upload assets
+  packages: write # push the Docker image to ghcr.io
 
 env:
-  PDFIUM_CHROMIUM: "7776"
+  PDFIUM_CHROMIUM: '7776'
 
 jobs:
   # -------------------------------------------------------------------------
@@ -107,7 +121,7 @@ jobs:
       matrix:
         include:
           - arch: arm64
-            runner: macos-14   # Apple silicon
+            runner: macos-14 # Apple silicon
             target: aarch64-apple-darwin
           - arch: x86_64
             # Cross-compile Intel from Apple silicon: macos-13 (Intel) runners
@@ -149,8 +163,8 @@ jobs:
     # docker/build-push-action — its name contains '~' which breaks
     # actions/download-artifact path handling in publish-release.
     env:
-      DOCKER_BUILD_SUMMARY: "false"
-      DOCKER_BUILD_RECORD_UPLOAD: "false"
+      DOCKER_BUILD_SUMMARY: 'false'
+      DOCKER_BUILD_RECORD_UPLOAD: 'false'
     steps:
       - uses: actions/checkout@v4
 
@@ -282,7 +296,6 @@ jobs:
           path: installer/gui/dist/*
           if-no-files-found: error
 
-
   build-gui-linux:
     name: GUI — Linux AppImage + deb
     runs-on: ubuntu-22.04
@@ -374,7 +387,6 @@ jobs:
           name: gui-linux
           path: installer/gui/dist/*
           if-no-files-found: error
-
 
   build-gui-macos:
     name: GUI — macOS dmg (${{ matrix.arch }})
@@ -472,12 +484,117 @@ jobs:
           if-no-files-found: error
 
   # -------------------------------------------------------------------------
+  # rustybara-icc CLI binary (all platforms)
+  # -------------------------------------------------------------------------
+  build-icc-cli:
+    name: rustybara-icc CLI (${{ matrix.label }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: rustybara-icc.exe
+            archive_ext: exe
+          - label: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            binary: rustybara-icc
+            archive_ext: tar.gz
+          - label: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+            binary: rustybara-icc
+            archive_ext: tar.gz
+          - label: macos-x86_64
+            os: macos-14
+            target: x86_64-apple-darwin
+            binary: rustybara-icc
+            archive_ext: tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable, ${{ matrix.target }})
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install build deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends liblcms2-dev pkg-config
+
+      - name: Install build deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install little-cms2
+
+      - name: Unpack ICC profiles
+        if: ${{ secrets.ICC_PROFILES_ZIP != '' }}
+        shell: bash
+        env:
+          ICC_ZIP_B64: ${{ secrets.ICC_PROFILES_ZIP }}
+        run: |
+          echo "$ICC_ZIP_B64" | base64 -d > icc.zip
+          python3 -c "
+import zipfile
+with zipfile.ZipFile('icc.zip') as z:
+    z.extractall('rustybara-icc/src/profiles/data')
+"
+
+      - name: Resolve feature flags
+        id: feats
+        shell: bash
+        env:
+          ICC_ZIP_B64: ${{ secrets.ICC_PROFILES_ZIP }}
+        run: |
+          if [ -n "$ICC_ZIP_B64" ]; then
+            echo "flags=--features bundled-profiles" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build
+        env:
+          PKG_CONFIG_ALLOW_CROSS: '1'
+        run: cargo build --release -p rustybara-icc --target ${{ matrix.target }} ${{ steps.feats.outputs.flags }}
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          mkdir -p icc-dist
+          src="target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          base="rustybara-icc-${version}-${{ matrix.label }}"
+          if [ "${{ matrix.archive_ext }}" = "exe" ]; then
+            cp "$src" "icc-dist/${base}.exe"
+          else
+            tar -czf "icc-dist/${base}.tar.gz" -C "$(dirname $src)" "$(basename $src)"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: icc-cli-${{ matrix.label }}
+          path: icc-dist/*
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
   # Publish: gather every artifact and attach to a GitHub Release
   # -------------------------------------------------------------------------
   publish-release:
     name: Publish GitHub Release
-    needs: [build-windows, build-linux, build-macos, build-docker,
-            build-gui-windows, build-gui-linux, build-gui-macos]
+    needs:
+      [
+        build-windows,
+        build-linux,
+        build-macos,
+        build-docker,
+        build-gui-windows,
+        build-gui-linux,
+        build-gui-macos,
+        build-icc-cli,
+      ]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -489,7 +606,7 @@ jobs:
           # Only our explicit installer artifacts. docker/build-push-action
           # auto-uploads a "*.dockerbuild" build-record artifact whose name
           # contains '~' and breaks download paths — skip it.
-          pattern: "{windows-installer,linux-tarball,macos-tarball-*,gui-windows,gui-linux,gui-macos-*}"
+          pattern: '{windows-installer,linux-tarball,macos-tarball-*,gui-windows,gui-linux,gui-macos-*,icc-cli-*}'
 
       - name: Flatten artifact tree
         run: |
@@ -536,6 +653,10 @@ jobs:
             | Linux (GUI) | `rbara-gui-*.AppImage` or `rbara-gui-*.deb` |
             | macOS Apple silicon (GUI) | `rbara-gui-arm64.dmg` |
             | macOS Intel (GUI) | `rbara-gui-x86_64.dmg` |
+            | Windows (ICC CLI) | `rustybara-icc-*-windows-x64.exe` |
+            | Linux (ICC CLI) | `rustybara-icc-*-linux-x64.tar.gz` |
+            | macOS Apple silicon (ICC CLI) | `rustybara-icc-*-macos-arm64.tar.gz` |
+            | macOS Intel (ICC CLI) | `rustybara-icc-*-macos-x86_64.tar.gz` |
 
             See `SHA256SUMS.txt` for checksums.
 
