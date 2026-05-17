@@ -6,4 +6,5 @@
 /rustybara-icc/.claude/
 /rbara-gui/frontend/node_modules
 /rbara-gui/resources/
+/rustybara-website/
 .env
