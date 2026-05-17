@@ -11,8 +11,6 @@ on:
 jobs:
   build-wasm:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -28,17 +26,18 @@ jobs:
         working-directory: rustybara-wasm
         run: wasm-pack build --target web --out-dir pkg --release
 
-      - name: Copy wasm artifact to website
+      - name: Deploy wasm artifact to website repo
+        env:
+          DEPLOY_TOKEN: ${{ secrets.WEBSITE_DEPLOY_TOKEN }}
         run: |
-          mkdir -p rustybara-website/static/wasm
-          cp rustybara-wasm/pkg/rustybara_wasm.js       rustybara-website/static/wasm/
-          cp rustybara-wasm/pkg/rustybara_wasm_bg.wasm  rustybara-website/static/wasm/
-          cp rustybara-wasm/pkg/rustybara_wasm.d.ts     rustybara-website/static/wasm/
-
-      - name: Commit updated wasm artifact
-        run: |
+          git clone --depth=1 https://x-access-token:${DEPLOY_TOKEN}@github.com/Addy-A/rustybara-website.git _website
+          mkdir -p _website/static/wasm
+          cp rustybara-wasm/pkg/rustybara_wasm.js      _website/static/wasm/
+          cp rustybara-wasm/pkg/rustybara_wasm_bg.wasm _website/static/wasm/
+          cp rustybara-wasm/pkg/rustybara_wasm.d.ts    _website/static/wasm/
+          cd _website
           git config user.name  "rustybara-ci"
           git config user.email "ci@rustybara.dev"
-          git add -f rustybara-website/static/wasm/
+          git add static/wasm/
           git diff --cached --quiet || git commit -m "chore: update wasm artifact from rustybara@${{ github.sha }}"
           git push
