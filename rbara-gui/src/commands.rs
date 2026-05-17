@@ -555,63 +555,68 @@ pub fn convert_color_space(
 pub async fn load_icc_profile(
     app: tauri::AppHandle,
     profiles: State<'_, ProfileRegistry>,
-) -> Result<Option<CustomProfileDto>, String> {
+) -> Result<Vec<CustomProfileDto>, String> {
     let (tx, rx) = std::sync::mpsc::channel();
     app.dialog()
         .file()
         .add_filter("ICC Profile", &["icc", "icm"])
-        .pick_file(move |file| {
-            let _ = tx.send(file);
+        .pick_files(move |files| {
+            let _ = tx.send(files);
         });
 
-    let file = rx.recv().map_err(|e| format!("Dialog error: {e}"))?;
-    let Some(file_path) = file else {
-        return Ok(None);
+    let files = rx.recv().map_err(|e| format!("Dialog error: {e}"))?;
+    let Some(file_paths) = files else {
+        return Ok(Vec::new());
     };
 
-    let path = file_path
-        .into_path()
-        .map_err(|e| format!("Invalid path: {e}"))?;
-    let bytes = std::fs::read(&path).map_err(|e| format!("Could not read file: {e}"))?;
+    let mut results = Vec::new();
+    for file_path in file_paths {
+        let path = file_path
+            .into_path()
+            .map_err(|e| format!("Invalid path: {e}"))?;
+        let bytes = std::fs::read(&path).map_err(|e| format!("Could not read file: {e}"))?;
 
-    let name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Custom")
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Custom")
+            .to_string();
+
+        let profile = rustybara_icc::profiles::IccProfile::from_user_bytes(
+            name.clone(),
+            name.clone(),
+            bytes,
+        )
+        .map_err(|e| format!("{e}"))?;
+
+        let color_space = match profile.color_space {
+            rustybara_icc::ColorSpaceKind::Cmyk    => "CMYK",
+            rustybara_icc::ColorSpaceKind::Rgb     => "RGB",
+            rustybara_icc::ColorSpaceKind::Gray    => "Gray",
+            _                                      => "Unknown",
+        }
         .to_string();
 
-    let profile = rustybara_icc::profiles::IccProfile::from_user_bytes(
-        name.clone(),
-        name.clone(),
-        bytes,
-    )
-    .map_err(|e| format!("{e}"))?;
+        let dto = CustomProfileDto {
+            name: profile.name.clone(),
+            description: profile.description.clone(),
+            color_space: color_space.clone(),
+        };
 
-    let color_space = match profile.color_space {
-        rustybara_icc::ColorSpaceKind::Cmyk    => "CMYK",
-        rustybara_icc::ColorSpaceKind::Rgb     => "RGB",
-        rustybara_icc::ColorSpaceKind::Gray    => "Gray",
-        _                                      => "Unknown",
-    }
-    .to_string();
+        if let Some(dir) = profiles_dir(&app) {
+            let out = dir.join(format!("{}.icc", profile.name));
+            let _ = std::fs::write(out, &*profile.bytes);
+        }
 
-    let dto = CustomProfileDto {
-        name: profile.name.clone(),
-        description: profile.description.clone(),
-        color_space: color_space.clone(),
-    };
+        profiles.0.lock().unwrap().insert(
+            profile.name,
+            CustomProfileEntry { description: profile.description, color_space, bytes: profile.bytes },
+        );
 
-    if let Some(dir) = profiles_dir(&app) {
-        let out = dir.join(format!("{}.icc", profile.name));
-        let _ = std::fs::write(out, &*profile.bytes);
+        results.push(dto);
     }
 
-    profiles.0.lock().unwrap().insert(
-        profile.name,
-        CustomProfileEntry { description: profile.description, color_space, bytes: profile.bytes },
-    );
-
-    Ok(Some(dto))
+    Ok(results)
 }
 
 #[tauri::command]

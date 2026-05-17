@@ -1,37 +1,37 @@
 <script>
-  import { useAppState } from '../lib/context.js';
-  import { loadIccProfile } from '../lib/api.js';
-  import Notice from './Notice.svelte';
-  import RunButton from './RunButton.svelte';
-  const app = useAppState();
+  import { useAppState } from '../lib/context.js'
+  import { loadIccProfile } from '../lib/api.js'
+  import Notice from './Notice.svelte'
+  import RunButton from './RunButton.svelte'
+  const app = useAppState()
 
   const cmykProfiles = [
-    { value: 'CoatedFOGRA27',           label: 'Coated FOGRA 27' },
-    { value: 'CoatedFOGRA39',           label: 'Coated FOGRA 39' },
-    { value: 'CoatedGRACoL2006',        label: 'Coated GRACoL 2006' },
-    { value: 'JapanColor2001Coated',    label: 'Japan Color 2001 Coated' },
-    { value: 'JapanColor2001Uncoated',  label: 'Japan Color 2001 Uncoated' },
+    { value: 'CoatedFOGRA27', label: 'Coated FOGRA 27' },
+    { value: 'CoatedFOGRA39', label: 'Coated FOGRA 39' },
+    { value: 'CoatedGRACoL2006', label: 'Coated GRACoL 2006' },
+    { value: 'JapanColor2001Coated', label: 'Japan Color 2001 Coated' },
+    { value: 'JapanColor2001Uncoated', label: 'Japan Color 2001 Uncoated' },
     { value: 'JapanColor2002Newspaper', label: 'Japan Color 2002 Newspaper' },
     { value: 'JapanColor2003WebCoated', label: 'Japan Color 2003 Web Coated' },
-    { value: 'JapanWebCoated',          label: 'Japan Web Coated' },
-    { value: 'UncoatedFOGRA29',         label: 'Uncoated FOGRA 29' },
-    { value: 'USWebCoatedSWOP',         label: 'US Web Coated SWOP' },
-    { value: 'USWebUncoated',           label: 'US Web Uncoated' },
-    { value: 'WebCoatedFOGRA28',        label: 'Web Coated FOGRA 28' },
+    { value: 'JapanWebCoated', label: 'Japan Web Coated' },
+    { value: 'UncoatedFOGRA29', label: 'Uncoated FOGRA 29' },
+    { value: 'USWebCoatedSWOP', label: 'US Web Coated SWOP' },
+    { value: 'USWebUncoated', label: 'US Web Uncoated' },
+    { value: 'WebCoatedFOGRA28', label: 'Web Coated FOGRA 28' },
     { value: 'WebCoatedSWOP2006Grade3', label: 'Web Coated SWOP 2006 Grade 3' },
     { value: 'WebCoatedSWOP2006Grade5', label: 'Web Coated SWOP 2006 Grade 5' },
-  ];
+  ]
 
   const rgbProfiles = [
-    { value: 'AdobeRGB1998',  label: 'Adobe RGB (1998)' },
-    { value: 'AppleRGB',      label: 'Apple RGB' },
+    { value: 'AdobeRGB1998', label: 'Adobe RGB (1998)' },
+    { value: 'AppleRGB', label: 'Apple RGB' },
     { value: 'ColorMatchRGB', label: 'ColorMatch RGB' },
-    { value: 'PAL_SECAM',     label: 'PAL/SECAM' },
-    { value: 'SMPTE-C',       label: 'SMPTE-C' },
-    { value: 'VideoHD',       label: 'HDTV (Rec. 709)' },
-    { value: 'VideoNTSC',     label: 'NTSC (1953)' },
-    { value: 'VideoPAL',      label: 'PAL (Video)' },
-  ];
+    { value: 'PAL_SECAM', label: 'PAL/SECAM' },
+    { value: 'SMPTE-C', label: 'SMPTE-C' },
+    { value: 'VideoHD', label: 'HDTV (Rec. 709)' },
+    { value: 'VideoNTSC', label: 'NTSC (1953)' },
+    { value: 'VideoPAL', label: 'PAL (Video)' },
+  ]
 
   const intents = [
     {
@@ -54,36 +54,48 @@
       label: 'Absolute Colorimetric',
       desc: 'Like Relative but does not adjust the white point. Used for soft-proofing to simulate one substrate on another.',
     },
-  ];
+  ]
 
-  let sameProfile = $derived(app.params.fromProfile === app.params.toProfile);
-  let importing = $state(false);
-  let importError = $state('');
+  let sameProfile = $derived(app.params.fromProfile === app.params.toProfile)
+  let importing = $state(false)
+  let importError = $state('')
 
   async function importProfile() {
-    importing = true;
-    importError = '';
+    importing = true
+    importError = ''
     try {
-      const dto = await loadIccProfile();
-      if (!dto) return;
-      app.addCustomProfile(dto);
+      const dtos = await loadIccProfile()
+      for (const dto of dtos) {
+        app.addCustomProfile(dto)
+      }
     } catch (e) {
-      importError = typeof e === 'string' ? e : String(e);
+      importError = typeof e === 'string' ? e : String(e)
     } finally {
-      importing = false;
+      importing = false
     }
   }
 
-  let customCmyk = $derived(app.customProfiles.filter(p => p.color_space === 'CMYK'));
-  let customRgb  = $derived(app.customProfiles.filter(p => p.color_space === 'RGB'));
-  let customOther = $derived(app.customProfiles.filter(p => p.color_space !== 'CMYK' && p.color_space !== 'RGB'));
+  let customCmyk = $derived(
+    app.customProfiles.filter((p) => p.color_space === 'CMYK'),
+  )
+  let customRgb = $derived(
+    app.customProfiles.filter((p) => p.color_space === 'RGB'),
+  )
+  let customOther = $derived(
+    app.customProfiles.filter(
+      (p) => p.color_space !== 'CMYK' && p.color_space !== 'RGB',
+    ),
+  )
 </script>
 
 <div class="header">
   <span class="title-icon">◈</span>
   <div class="header-text">
     <div class="params-title">Convert Color Space</div>
-    <div class="params-desc">Applies an ICC transform to every CMYK/RGB paint operator in the document's content streams.</div>
+    <div class="params-desc">
+      Applies an ICC transform to every CMYK/RGB paint operator in the
+      document's content streams.
+    </div>
   </div>
   <button class="import-btn" disabled={importing} onclick={importProfile}>
     {importing ? '…' : '+ Import ICC'}
@@ -174,7 +186,9 @@
 {#if importError}
   <Notice ok={false}>{importError}</Notice>
 {:else if sameProfile}
-  <Notice ok={false}>Source and destination profiles are the same — no conversion will occur.</Notice>
+  <Notice ok={false}
+    >Source and destination profiles are the same — no conversion will occur.</Notice
+  >
 {:else if !app.metadata}
   <Notice ok={false}>Load a file to validate.</Notice>
 {:else}
@@ -188,12 +202,36 @@
 <RunButton label="Run Conversion" icon="◈" />
 
 <style>
-  .header { display: flex; align-items: flex-start; gap: 10px; }
-  .header-text { flex: 1; }
-  .title-icon { font-size: 20px; color: var(--orange); flex-shrink: 0; padding-top: 1px; }
-  .params-title { font-size: 13px; font-weight: 700; color: var(--text); }
-  .params-desc { font-size: 11.5px; color: var(--muted-hi); line-height: 1.5; margin-top: 2px; }
-  .param-group { display: flex; flex-direction: column; gap: 7px; }
+  .header {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .header-text {
+    flex: 1;
+  }
+  .title-icon {
+    font-size: 20px;
+    color: var(--orange);
+    flex-shrink: 0;
+    padding-top: 1px;
+  }
+  .params-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .params-desc {
+    font-size: 11.5px;
+    color: var(--muted-hi);
+    line-height: 1.5;
+    margin-top: 2px;
+  }
+  .param-group {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
   .param-label {
     font-size: 10.5px;
     font-weight: 600;
@@ -211,8 +249,14 @@
     cursor: pointer;
     font-family: var(--mono);
   }
-  .import-btn:hover:not(:disabled) { border-color: var(--orange); color: var(--orange-hi); }
-  .import-btn:disabled { opacity: 0.5; cursor: default; }
+  .import-btn:hover:not(:disabled) {
+    border-color: var(--orange);
+    color: var(--orange-hi);
+  }
+  .import-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
   .param-select {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -223,12 +267,29 @@
     outline: none;
     width: 100%;
   }
-  .param-select:focus { border-color: var(--orange); }
-  .arrow-row { display: flex; justify-content: center; padding: 2px 0; }
-  .arrow { font-size: 20px; color: var(--orange); }
-  .hint { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .param-select:focus {
+    border-color: var(--orange);
+  }
+  .arrow-row {
+    display: flex;
+    justify-content: center;
+    padding: 2px 0;
+  }
+  .arrow {
+    font-size: 20px;
+    color: var(--orange);
+  }
+  .hint {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
 
-  .intent-list { display: flex; flex-direction: column; gap: 5px; }
+  .intent-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
   .intent-card {
     display: flex;
     align-items: flex-start;
@@ -242,7 +303,9 @@
     transition: 0.1s;
     width: 100%;
   }
-  .intent-card:hover { border-color: var(--muted-hi); }
+  .intent-card:hover {
+    border-color: var(--muted-hi);
+  }
   .intent-card.sel {
     border-color: var(--orange);
     background: var(--orange-dim);
@@ -261,8 +324,22 @@
     border-color: var(--orange);
     background: var(--orange);
   }
-  .intent-text { display: flex; flex-direction: column; gap: 2px; }
-  .intent-name { font-size: 12px; font-weight: 600; color: var(--text); }
-  .intent-card.sel .intent-name { color: var(--orange-hi); }
-  .intent-desc { font-size: 11px; color: var(--muted-hi); line-height: 1.5; }
+  .intent-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .intent-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .intent-card.sel .intent-name {
+    color: var(--orange-hi);
+  }
+  .intent-desc {
+    font-size: 11px;
+    color: var(--muted-hi);
+    line-height: 1.5;
+  }
 </style>
