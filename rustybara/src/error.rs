@@ -1,3 +1,4 @@
+#[cfg(feature = "raster")]
 use image::ImageError;
 #[cfg(feature = "color")]
 use rustybara_icc::IccError;
@@ -38,6 +39,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// ```
 #[derive(Debug)]
 pub enum Error {
+    #[cfg(feature = "raster")]
     Image(ImageError),
     Io(IoError),
     Pdf(LopdfError),
@@ -50,6 +52,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            #[cfg(feature = "raster")]
             Error::Image(e) => write!(f, "image error: {e}"),
             Error::Io(e) => write!(f, "I/O error: {e}"),
             Error::Pdf(e) => write!(f, "PDF error: {e}"),
@@ -64,6 +67,7 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            #[cfg(feature = "raster")]
             Error::Image(e) => Some(e),
             Error::Io(e) => Some(e),
             Error::Pdf(e) => Some(e),
@@ -75,6 +79,7 @@ impl std::error::Error for Error {
     }
 }
 
+#[cfg(feature = "raster")]
 impl From<ImageError> for Error {
     fn from(err: ImageError) -> Error {
         Error::Image(err)

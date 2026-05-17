@@ -62,6 +62,7 @@
 
 #[cfg(feature = "color")]
 pub mod color;
+#[cfg(feature = "raster")]
 pub mod encode;
 pub mod error;
 pub mod geometry;
