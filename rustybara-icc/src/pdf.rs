@@ -4,7 +4,18 @@ use lopdf::{Document, Object};
 use crate::ColorSpaceKind;
 use crate::transform::ColorTransform;
 
-/// Summary of what [`PdfColorConverter`] changed during a conversion run.
+/// Summary of changes made during a PDF color space conversion.
+///
+/// This struct tracks the operations performed by [`PdfColorConverter::convert_document`]
+/// across all pages of a PDF.
+///
+/// # Fields
+///
+/// * `pages_processed` — Number of pages visited by the converter
+/// * `images_converted` — Number of image XObjects whose pixel data was ICC-transformed (not yet implemented)
+/// * `spot_colors_flattened` — Number of Separation spot color uses flattened to device CMYK
+/// * `color_spaces_rewritten` — Number of color space resource dictionary entries rewritten (not yet implemented)
+/// * `warnings` — Non-fatal warnings encountered during conversion (e.g., skipped DeviceN color spaces)
 pub struct ConversionReport {
     /// Number of pages visited by the converter.
     pub pages_processed: u32,
@@ -18,12 +29,50 @@ pub struct ConversionReport {
     pub warnings: Vec<String>,
 }
 
+/// Converts PDF documents between color spaces using ICC profiles.
+///
+/// `PdfColorConverter` walks through a PDF's content streams and applies ICC-based
+/// color transformations to device color operators (e.g., `k`, `K`, `rg`, `RG`). It also
+/// flattens spot colors (Separation color spaces) to their device equivalents before
+/// applying the transform.
+///
+/// # Example
+///
+/// ```no_run
+/// use rustybara_icc::{ColorTransform, RenderingIntent, profiles};
+/// use rustybara_icc::pdf::PdfColorConverter;
+///
+/// # fn main() -> rustybara_icc::Result<()> {
+/// let mut doc = lopdf::Document::load("input.pdf").unwrap();
+///
+/// let transform = ColorTransform::new(
+///     &profiles::COATED_FOGRA_39,
+///     &profiles::COATED_GRACOL_2006,
+///     RenderingIntent::RelativeColorimetric,
+/// )?;
+///
+/// let report = PdfColorConverter::new(&mut doc, transform)
+///     .convert_document()?;
+///
+/// println!("{} pages, {} spots flattened",
+///     report.pages_processed, report.spot_colors_flattened);
+///
+/// doc.save("output.pdf").unwrap();
+/// # Ok(())
+/// # }
+/// ```
 pub struct PdfColorConverter<'a> {
     doc: &'a mut lopdf::Document,
     transform: ColorTransform,
 }
 
 impl<'a> PdfColorConverter<'a> {
+    /// Creates a new PDF color converter with the given document and ICC transform.
+    ///
+    /// # Arguments
+    ///
+    /// * `doc` — Mutable reference to the PDF document to convert
+    /// * `transform` — ICC color transform defining source and destination profiles
     pub fn new(doc: &'a mut lopdf::Document, transform: ColorTransform) -> Self {
         PdfColorConverter { doc, transform }
     }

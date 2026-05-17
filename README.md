@@ -185,6 +185,7 @@ rustybara/src/
     matrix.rs     — Matrix (2D affine CTM transformations)
   pages/
     boxes.rs      — PageBoxes: TrimBox, MediaBox, BleedBox, CropBox reader
+    split.rs      — Page extraction and splitting utilities
   stream/
     filter.rs     — ContentFilter: CTM-walking content stream filter
     color_ops.rs  — ColorRemap: CMYK→CMYK value substitution in content streams
@@ -193,9 +194,19 @@ rustybara/src/
     config.rs     — RenderConfig (DPI, annotation toggles)
   encode/
     save.rs       — OutputFormat enum, image encoding (JPG/PNG/WebP/TIFF)
-  color/            (feature-gated: "color")
-    icc.rs        — ColorSpace, IccProfile (ICC profile loading + detection)
-    transform.rs  — ColorTransform, RenderingIntent (lcms2 bridge)
+  color/          — (feature-gated: "color")
+    icc.rs        — Re-exports from rustybara-icc crate
+    transform.rs  — Re-exports from rustybara-icc crate
+
+rustybara-icc/src/  (separate crate, optionally used via "color" feature)
+  lib.rs          — ICC color management engine
+  color_space.rs  — ColorSpaceKind enum (CMYK, RGB, Gray, Lab)
+  error.rs        — IccError type for color operations
+  intent.rs       — RenderingIntent enum for ICC transforms
+  pixel_format.rs — PixelFormat enum (RGB8, CMYK8, etc.)
+  transform.rs    — ColorTransform: pixel-level ICC profile transforms
+  pdf.rs          — PdfColorConverter: document-level color space conversion
+  profiles/       — Bundled ICC profiles (FOGRA39, GRACoL2006, etc.)
 ```
 
 ### Public API
@@ -219,6 +230,20 @@ pipeline.save_page_image(0, path, &format, &config)?;       // → file
 let boxes = PageBoxes::read(&doc, page_id)?;
 boxes.trim_or_media()           // TrimBox if present, else MediaBox
 boxes.bleed_rect(9.0)           // Expand trim by bleed amount
+
+// Color space conversion (requires "color" feature)
+#[cfg(feature = "color")]
+{
+    use rustybara::color::{ColorTransform, RenderingIntent, profiles};
+
+    let transform = ColorTransform::new(
+        &profiles::COATED_FOGRA_39,
+        &profiles::COATED_GRACOL_2006,
+        RenderingIntent::RelativeColorimetric,
+    )?;
+
+    pipeline.convert_color_space(&transform)?;  // Convert entire document
+}
 ```
 
 ### Renderer Trait
@@ -245,7 +270,8 @@ pub struct CpuRenderer;   // pdfium-render — ships today
 | [`pdfium-render`](https://docs.rs/pdfium-render) 0.9 | PDF rasterization via PDFium |
 | [`image`](https://docs.rs/image) 0.25 | Bitmap encoding (JPEG, PNG, WebP, TIFF) |
 | [`rayon`](https://docs.rs/rayon) 1.11 | Parallel page rendering |
-| [`lcms2`](https://docs.rs/lcms2) 6.1 | ICC color management (optional, `color` feature) |
+| [`rustybara-icc`](https://github.com/Addy-A/rustybara/tree/main/rustybara-icc) 0.1 | ICC color management (optional, `color` feature) |
+| [`lcms2`](https://docs.rs/lcms2) 6.1 | Little CMS color engine (via rustybara-icc, `color` feature) |
 
 ### Runtime Requirement — PDFium
 
