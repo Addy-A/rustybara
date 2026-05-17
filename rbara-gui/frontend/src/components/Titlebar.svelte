@@ -1,12 +1,12 @@
 <script>
-  import { useAppState } from '../lib/context.js';
-  const app = useAppState();
+  import { useAppState } from '../lib/context.js'
+  const app = useAppState()
 </script>
 
 <div class="titlebar">
   <span class="app-name">rustybara</span>
   <span class="app-sub">— Prepress Toolkit</span>
-  <span class="version-badge">v0.1.0-alpha</span>
+  <span class="version-badge">v0.1.4-alpha</span>
 </div>
 
 <style>
@@ -21,8 +21,15 @@
     flex-shrink: 0;
     user-select: none;
   }
-  .traffic { display: flex; gap: 6px; }
-  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .traffic {
+    display: flex;
+    gap: 6px;
+  }
+  .dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+  }
   .app-name {
     font-size: 12px;
     font-weight: 700;
