@@ -57,6 +57,8 @@ COPY rbv/           rbv/
 RUN mkdir -p rbara-gui
 COPY rustybara-icc/           rustybara-icc/
 COPY rbara-gui/Cargo.toml     rbara-gui/Cargo.toml
+RUN mkdir -p rustybara-wasm
+COPY rustybara-wasm/Cargo.toml rustybara-wasm/Cargo.toml
 COPY README.md LICENSE-LGPL-3.0 LICENSE-GPL-3.0 ./
 
 # Build only the `rbara` binary (skip rbv stub).
