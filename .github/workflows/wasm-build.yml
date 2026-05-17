@@ -1,0 +1,41 @@
+name: Build WASM
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'rustybara-wasm/**'
+      - 'rustybara/src/**'
+
+jobs:
+  build-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust wasm32 target
+        run: |
+          rustup toolchain install stable
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build wasm
+        working-directory: rustybara-wasm
+        run: wasm-pack build --target web --out-dir pkg --release
+
+      - name: Copy wasm artifact to website
+        run: |
+          mkdir -p rustybara-website/static/wasm
+          cp rustybara-wasm/pkg/rustybara_wasm.js       rustybara-website/static/wasm/
+          cp rustybara-wasm/pkg/rustybara_wasm_bg.wasm  rustybara-website/static/wasm/
+          cp rustybara-wasm/pkg/rustybara_wasm.d.ts     rustybara-website/static/wasm/
+
+      - name: Commit updated wasm artifact
+        run: |
+          git config user.name  "rustybara-ci"
+          git config user.email "ci@rustybara.dev"
+          git add rustybara-website/static/wasm/
+          git diff --cached --quiet || git commit -m "chore: update wasm artifact from rustybara@${{ github.sha }}"
+          git push

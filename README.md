@@ -10,28 +10,41 @@ Rustybara is the convergence of three standalone prepress CLI tools into a
 unified Rust library and interactive toolset, built on the same primitives
 those tools proved in production:
 
-| Origin Tool | Primitive |
-|---|---|
-| `pdf-mark-removal` | Content stream filtering, CTM math |
+| Origin Tool                   | Primitive                                       |
+| ----------------------------- | ----------------------------------------------- |
+| `pdf-mark-removal`            | Content stream filtering, CTM math              |
 | `resize_to_bleed_or_trim_pdf` | Page box geometry (MediaBox, TrimBox, BleedBox) |
-| `pdf-2-image` | PDF rasterization and image encoding |
+| `pdf-2-image`                 | PDF rasterization and image encoding            |
 
 It ships as a library crate (`rustybara`), a CLI/TUI binary (`rbara`), and a
 GPU-accelerated PDF page viewer (`rbv`).
 
 ---
 
+## Workspace
+
+| Crate            | Description                                    | License |
+| ---------------- | ---------------------------------------------- | ------- |
+| `rustybara`      | Core PDF manipulation library                  | LGPLv3  |
+| `rustybara-icc`  | ICC color management — 22 bundled profiles     | LGPLv3  |
+| `rustybara-wasm` | WebAssembly bindings — browser, Node.js, edge  | LGPLv3  |
+| `rbara`          | Terminal UI (Ratatui TUI)                      | GPLv3   |
+| `rbara-gui`      | Native desktop GUI                             | GPLv3   |
+| `rbv`            | GPU-accelerated PDF page viewer (wgpu + winit) | GPLv3   |
+
+---
+
 ## Features
 
-- **Trim print marks** — Strip printer marks, slug content, and anything outside
-  the TrimBox from PDF pages.
-- **Resize to bleed** — Expand MediaBox (and CropBox) by a specified bleed margin
-  to prepare files for print production.
-- **Export to image** — Rasterize PDF pages to JPEG, PNG, WebP, or TIFF at any DPI.
-- **Remap CMYK colors** — Substitute specific CMYK values in PDF content streams with
-  tolerance-based matching.
-- **ICC color management** — Feature-gated (`color`) lcms2 integration for ICC profile
-  loading and color space transforms (RGB, CMYK, Gray).
+| Feature                | rustybara | rustybara-icc | rustybara-wasm |
+| ---------------------- | --------- | ------------- | -------------- |
+| Page trim & resize     | ✓         | —             | ✓              |
+| CMYK remap             | ✓         | —             | ✓              |
+| Rasterization (pdfium) | ✓         | —             | —              |
+| ICC color transforms   | —         | ✓             | —              |
+| WebAssembly / browser  | —         | —             | ✓              |
+| Node.js / edge runtime | —         | —             | ✓              |
+
 - **Pipeline API** — Chain operations fluently: `open → trim → resize → remap → save`.
 - **Batch processing** — Process entire directories of PDFs from CLI or TUI.
 - **Interactive TUI** — App-style terminal interface for designers who prefer guided
@@ -171,6 +184,52 @@ shown in the footer bar. Press `?` for the full keyboard reference.
 
 ---
 
+## rustybara-wasm
+
+WebAssembly bindings for rustybara. Run PDF manipulation in any JavaScript
+or TypeScript environment — browser, Node.js, Deno, or Cloudflare Workers —
+with no native dependencies.
+
+**Exposes the pure-Rust pipeline subset:**
+
+- `trim()` — strip content outside TrimBox
+- `resize(bleed_pts)` — expand page boxes by a bleed margin
+- `remap_color(from, to, tolerance)` — substitute CMYK values in content streams
+- `to_pdf_bytes()` — serialize result as bytes for download or further processing
+
+Rasterization (pdfium) and ICC color transforms (lcms2) require the native
+crate and are not available in the wasm build.
+
+### Browser quickstart
+
+```js
+import init, { PipelineHandle } from './pkg/rustybara_wasm.js'
+
+await init('./pkg/rustybara_wasm_bg.wasm')
+
+const bytes = new Uint8Array(
+  await fetch('input.pdf').then((r) => r.arrayBuffer()),
+)
+let handle = new PipelineHandle(bytes)
+handle = handle.trim()
+handle = handle.resize(8.504)
+const result = handle.to_pdf_bytes()
+```
+
+### Build
+
+```bash
+cd rustybara-wasm
+wasm-pack build --target web --out-dir pkg --release
+```
+
+### npm
+
+npm distribution coming soon. Pre-built artifacts are available via the
+[rustybara playground](https://rustybara.com/playground) on the marketing site.
+
+---
+
 ## Architecture
 
 ### Module Map
@@ -264,25 +323,25 @@ pub struct CpuRenderer;   // pdfium-render — ships today
 
 ## Dependencies
 
-| Crate | Role |
-|---|---|
-| [`lopdf`](https://docs.rs/lopdf) 0.40 | PDF object graph manipulation |
-| [`pdfium-render`](https://docs.rs/pdfium-render) 0.9 | PDF rasterization via PDFium |
-| [`image`](https://docs.rs/image) 0.25 | Bitmap encoding (JPEG, PNG, WebP, TIFF) |
-| [`rayon`](https://docs.rs/rayon) 1.11 | Parallel page rendering |
-| [`rustybara-icc`](https://github.com/Addy-A/rustybara/tree/main/rustybara-icc) 0.1 | ICC color management (optional, `color` feature) |
-| [`lcms2`](https://docs.rs/lcms2) 6.1 | Little CMS color engine (via rustybara-icc, `color` feature) |
+| Crate                                                                              | Role                                                         |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| [`lopdf`](https://docs.rs/lopdf) 0.40                                              | PDF object graph manipulation                                |
+| [`pdfium-render`](https://docs.rs/pdfium-render) 0.9                               | PDF rasterization via PDFium                                 |
+| [`image`](https://docs.rs/image) 0.25                                              | Bitmap encoding (JPEG, PNG, WebP, TIFF)                      |
+| [`rayon`](https://docs.rs/rayon) 1.11                                              | Parallel page rendering                                      |
+| [`rustybara-icc`](https://github.com/Addy-A/rustybara/tree/main/rustybara-icc) 0.1 | ICC color management (optional, `color` feature)             |
+| [`lcms2`](https://docs.rs/lcms2) 6.1                                               | Little CMS color engine (via rustybara-icc, `color` feature) |
 
 ### Runtime Requirement — PDFium
 
 The `render_page` and `save_page_image` functions require the PDFium shared library
 at runtime. Place the appropriate binary alongside your executable:
 
-| Platform | File |
-|---|---|
-| Windows | `pdfium.dll` |
-| macOS | `libpdfium.dylib` |
-| Linux | `libpdfium.so` |
+| Platform | File              |
+| -------- | ----------------- |
+| Windows  | `pdfium.dll`      |
+| macOS    | `libpdfium.dylib` |
+| Linux    | `libpdfium.so`    |
 
 Pre-built binaries: [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries)
 
@@ -303,21 +362,21 @@ flag-based CLI for scripting and a TUI for guided workflows.
 
 ### Keyboard Reference (TUI)
 
-| Key | Action |
-|---|---|
-| `↑` / `↓` | Navigate menu |
-| `Enter` | Select / confirm |
-| `Esc` | Back / quit |
-| `t` | Trim print marks |
-| `r` | Resize to bleed |
-| `x` | Export to image |
-| `m` | Remap colors |
-| `p` | Preview page |
-| `o` | Toggle overwrite mode |
-| `/` | Output path |
-| `f` | Change files |
-| `q` | Quit |
-| `?` | Keyboard reference overlay |
+| Key       | Action                     |
+| --------- | -------------------------- |
+| `↑` / `↓` | Navigate menu              |
+| `Enter`   | Select / confirm           |
+| `Esc`     | Back / quit                |
+| `t`       | Trim print marks           |
+| `r`       | Resize to bleed            |
+| `x`       | Export to image            |
+| `m`       | Remap colors               |
+| `p`       | Preview page               |
+| `o`       | Toggle overwrite mode      |
+| `/`       | Output path                |
+| `f`       | Change files               |
+| `q`       | Quit                       |
+| `?`       | Keyboard reference overlay |
 
 ### UX Model
 
@@ -346,13 +405,13 @@ rbv <file_path> <page_index> [--dpi <n>]
 
 ## Known Limitations
 
-| Limitation | Notes |
-|---|---|
-| sRGB rasterization only | CMYK→sRGB via PDFium. ICC color transforms available via `color` feature for stream-level operations. |
-| JPEG quality not configurable | Fixed encoder quality. `--quality` flag planned. |
-| Spot color approximation | PDFium renders spot inks as CMYK approximations. |
-| No Form XObject ColorSpace pruning | Inherited limitation from content stream filtering. |
-| `rbv` requires display server | No headless preview. Graceful error on missing GPU. |
+| Limitation                         | Notes                                                                                                 |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| sRGB rasterization only            | CMYK→sRGB via PDFium. ICC color transforms available via `color` feature for stream-level operations. |
+| JPEG quality not configurable      | Fixed encoder quality. `--quality` flag planned.                                                      |
+| Spot color approximation           | PDFium renders spot inks as CMYK approximations.                                                      |
+| No Form XObject ColorSpace pruning | Inherited limitation from content stream filtering.                                                   |
+| `rbv` requires display server      | No headless preview. Graceful error on missing GPU.                                                   |
 
 ---
 
@@ -377,6 +436,7 @@ cargo test --workspace
 ```
 
 - MSRV is Rust 1.85 (edition 2024). Do not raise this floor without discussion.
+- **Targets:** `x86_64`, `aarch64`, `wasm32-unknown-unknown` (via rustybara-wasm)
 - The TrimBox is always the source-of-truth reference box. It is never modified
   by any operation.
 - Public API additions require documentation and at least one integration test.
@@ -402,6 +462,14 @@ To cut a new version:
 The pdfium chromium build is pinned via `PDFIUM_CHROMIUM` env var in the
 workflow (currently `7776`). Bump it there to refresh pdfium across all
 artifacts in lockstep.
+
+---
+
+## Playground
+
+Try rustybara-wasm live in the browser at [rustybara.com/playground](https://rustybara.com/playground).
+Upload a PDF or use a sample file — trim, resize, and remap CMYK values entirely
+client-side via WebAssembly. No account, no upload, no server.
 
 ---
 
