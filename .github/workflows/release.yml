@@ -12,6 +12,12 @@ name: release
 #   rbara-<version>-macos-arm64.tar.gz               (macOS Apple silicon)
 #   rbara-<version>-macos-x86_64.tar.gz              (macOS Intel)
 #   rbara:<version> + rbara:latest                   (GHCR Docker image)
+#   rbara-gui-<version>-windows-x64-setup.exe        (GUI, Windows NSIS)
+#   rbara-gui-<version>-windows-x64.msi              (GUI, Windows MSI)
+#   rbara-gui-<version>-linux-x64.AppImage           (GUI, Linux AppImage)
+#   rbara-gui-<version>-linux-x64.deb                (GUI, Linux deb)
+#   rbara-gui-<version>-macos-arm64.dmg              (GUI, macOS Apple silicon)
+#   rbara-gui-<version>-macos-x86_64.dmg             (GUI, macOS Intel)
 #   rustybara-icc-<version>-windows-x64.exe          (ICC CLI, Windows)
 #   rustybara-icc-<version>-linux-x64.tar.gz         (ICC CLI, Linux)
 #   rustybara-icc-<version>-macos-arm64.tar.gz       (ICC CLI, macOS Apple silicon)
@@ -280,10 +286,19 @@ jobs:
       - name: Collect installer
         shell: pwsh
         run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $version = $tag -replace '^v', ''
           New-Item -ItemType Directory -Force -Path installer\gui\dist
           Get-ChildItem -Recurse target\x86_64-pc-windows-msvc\release\bundle `
             -Include *.msi, *.exe |
-            Copy-Item -Destination installer\gui\dist\
+            ForEach-Object {
+              $dest = if ($_.Extension -eq '.exe') {
+                "installer\gui\dist\rbara-gui-${version}-windows-x64-setup.exe"
+              } else {
+                "installer\gui\dist\rbara-gui-${version}-windows-x64.msi"
+              }
+              Copy-Item $_.FullName $dest
+            }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -372,10 +387,13 @@ jobs:
 
       - name: Collect bundles
         run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#v}"
           mkdir -p installer/gui/dist
-          find target/release/bundle \
-            -type f \( -name "*.AppImage" -o -name "*.deb" \) \
-            -exec cp {} installer/gui/dist/ \;
+          find target/release/bundle -type f -name "*.AppImage" \
+            -exec cp {} "installer/gui/dist/rbara-gui-${version}-linux-x64.AppImage" \;
+          find target/release/bundle -type f -name "*.deb" \
+            -exec cp {} "installer/gui/dist/rbara-gui-${version}-linux-x64.deb" \;
 
       - uses: actions/upload-artifact@v4
         with:
@@ -467,10 +485,12 @@ jobs:
 
       - name: Collect dmg
         run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          version="${tag#v}"
           mkdir -p installer/gui/dist
           find target/${{ matrix.target }}/release/bundle \
             -name "*.dmg" \
-            -exec cp {} installer/gui/dist/rbara-gui-${{ matrix.arch }}.dmg \;
+            -exec cp {} "installer/gui/dist/rbara-gui-${version}-macos-${{ matrix.arch }}.dmg" \;
 
       - uses: actions/upload-artifact@v4
         with:
@@ -618,10 +638,10 @@ jobs:
             | macOS (Apple silicon) | `rbara-*-macos-arm64.tar.gz` |
             | macOS (Intel) | `rbara-*-macos-x86_64.tar.gz` |
             | Docker | `ghcr.io/addy-a/rbara:${{ steps.tag.outputs.tag }}` |
-            | Windows (GUI) | `rbara-gui-*_x64-setup.exe` or `rbara-gui-*.msi` |
-            | Linux (GUI) | `rbara-gui-*.AppImage` or `rbara-gui-*.deb` |
-            | macOS Apple silicon (GUI) | `rbara-gui-arm64.dmg` |
-            | macOS Intel (GUI) | `rbara-gui-x86_64.dmg` |
+            | Windows (GUI) | `rbara-gui-*-windows-x64-setup.exe` or `rbara-gui-*-windows-x64.msi` |
+            | Linux (GUI) | `rbara-gui-*-linux-x64.AppImage` or `rbara-gui-*-linux-x64.deb` |
+            | macOS Apple silicon (GUI) | `rbara-gui-*-macos-arm64.dmg` |
+            | macOS Intel (GUI) | `rbara-gui-*-macos-x86_64.dmg` |
             | Windows (ICC CLI) | `rustybara-icc-*-windows-x64.exe` |
             | Linux (ICC CLI) | `rustybara-icc-*-linux-x64.tar.gz` |
             | macOS Apple silicon (ICC CLI) | `rustybara-icc-*-macos-arm64.tar.gz` |
