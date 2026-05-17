@@ -20,6 +20,7 @@ gen-samples = ["dep:lopdf"]
 rustybara = { path = "../rustybara", default-features = false, features = ["wasm"] }
 wasm-bindgen = "0.2"
 js-sys = "0.3"
+getrandom = { version = "0.4", features = ["wasm_js"] }
 web-sys = { version = "0.3", features = ["console"] }
 serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"
