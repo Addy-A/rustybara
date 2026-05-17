@@ -31,13 +31,16 @@ jobs:
           DEPLOY_TOKEN: ${{ secrets.WEBSITE_DEPLOY_TOKEN }}
         run: |
           git clone --depth=1 https://x-access-token:${DEPLOY_TOKEN}@github.com/Addy-A/rustybara-website.git _website
-          mkdir -p _website/static/wasm
+          mkdir -p _website/static/wasm _website/static/samples
           cp rustybara-wasm/pkg/rustybara_wasm.js      _website/static/wasm/
           cp rustybara-wasm/pkg/rustybara_wasm_bg.wasm _website/static/wasm/
           cp rustybara-wasm/pkg/rustybara_wasm.d.ts    _website/static/wasm/
+          cargo run --manifest-path rustybara-wasm/Cargo.toml \
+            --bin gen-samples --features gen-samples \
+            -- _website/static/samples
           cd _website
           git config user.name  "rustybara-ci"
           git config user.email "ci@rustybara.dev"
-          git add -f static/wasm/
+          git add -f static/wasm/ static/samples/
           git diff --cached --quiet || git commit -m "chore: update wasm artifact from rustybara@${{ github.sha }}"
           git push
