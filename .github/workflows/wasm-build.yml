@@ -38,6 +38,6 @@ jobs:
           cd _website
           git config user.name  "rustybara-ci"
           git config user.email "ci@rustybara.dev"
-          git add static/wasm/
+          git add -f static/wasm/
           git diff --cached --quiet || git commit -m "chore: update wasm artifact from rustybara@${{ github.sha }}"
           git push
