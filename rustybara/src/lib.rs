@@ -66,6 +66,7 @@ pub mod encode;
 pub mod error;
 pub mod geometry;
 pub mod pages;
+#[cfg(feature = "raster")]
 pub mod raster;
 pub mod stream;
 pub mod pipeline;

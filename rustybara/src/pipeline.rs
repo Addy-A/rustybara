@@ -1,7 +1,10 @@
+#[cfg(feature = "raster")]
 use crate::encode::OutputFormat;
 use crate::pages::PageBoxes;
+#[cfg(feature = "raster")]
 use crate::raster::RenderConfig;
 use crate::stream::{ColorRemap, ContentFilter};
+#[cfg(feature = "raster")]
 use image::DynamicImage;
 use lopdf::Document;
 use std::path::Path;
@@ -96,6 +99,15 @@ impl PdfPipeline {
     /// ```
     pub fn open(path: impl AsRef<Path>) -> crate::Result<Self> {
         let doc = Document::load(path)?;
+        Ok(Self { doc })
+    }
+
+    /// Opens a document from raw PDF bytes.
+    ///
+    /// Use this in environments without a filesystem (e.g., WebAssembly) where the PDF
+    /// data is already in memory.
+    pub fn from_bytes(bytes: &[u8]) -> crate::Result<Self> {
+        let doc = Document::load_mem(bytes)?;
         Ok(Self { doc })
     }
 
@@ -468,6 +480,16 @@ impl PdfPipeline {
         Ok(())
     }
 
+    /// Serializes the document to PDF bytes.
+    ///
+    /// Use this in environments without a filesystem (e.g., WebAssembly) to get the
+    /// result as an in-memory byte vector rather than writing to a file.
+    pub fn to_bytes(&mut self) -> crate::Result<Vec<u8>> {
+        let mut buf = Vec::new();
+        self.doc.save_to(&mut buf).map_err(crate::Error::Io)?;
+        Ok(buf)
+    }
+
     /// Renders a specific page from the PDF document as an image.
     ///
     /// This function takes a page number and rendering configuration, then generates
@@ -512,6 +534,7 @@ impl PdfPipeline {
     ///   borrowing conflicts
     /// * Pdfium library must be available at runtime in the same directory as
     ///   the executable
+    #[cfg(feature = "raster")]
     pub fn render_page(&self, page_num: u32, config: &RenderConfig) -> crate::Result<DynamicImage> {
         use pdfium_render::prelude::*;
 
@@ -578,6 +601,7 @@ impl PdfPipeline {
     ///
     /// renderer.save_page_image(0, "output/page_1.png", &format, &config)?;
     /// ```
+    #[cfg(feature = "raster")]
     pub fn save_page_image(
         &self,
         page_num: u32,
@@ -699,6 +723,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "raster")]
     #[ignore = "requires pdfium runtime library"]
     fn render_page_produces_image() {
         let p = PdfPipeline::open(fixture()).unwrap();

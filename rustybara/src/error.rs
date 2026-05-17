@@ -2,6 +2,7 @@ use image::ImageError;
 #[cfg(feature = "color")]
 use rustybara_icc::IccError;
 use lopdf::Error as LopdfError;
+#[cfg(feature = "raster")]
 use pdfium_render::prelude::PdfiumError;
 use std::fmt;
 use std::io::Error as IoError;
@@ -40,6 +41,7 @@ pub enum Error {
     Image(ImageError),
     Io(IoError),
     Pdf(LopdfError),
+    #[cfg(feature = "raster")]
     Render(PdfiumError),
     #[cfg(feature = "color")]
     Color(IccError),
@@ -51,6 +53,7 @@ impl fmt::Display for Error {
             Error::Image(e) => write!(f, "image error: {e}"),
             Error::Io(e) => write!(f, "I/O error: {e}"),
             Error::Pdf(e) => write!(f, "PDF error: {e}"),
+            #[cfg(feature = "raster")]
             Error::Render(e) => write!(f, "Render error: {e}"),
             #[cfg(feature = "color")]
             Error::Color(e) => write!(f, "Color error: {e}"),
@@ -64,6 +67,7 @@ impl std::error::Error for Error {
             Error::Image(e) => Some(e),
             Error::Io(e) => Some(e),
             Error::Pdf(e) => Some(e),
+            #[cfg(feature = "raster")]
             Error::Render(e) => Some(e),
             #[cfg(feature = "color")]
             Error::Color(e) => Some(e),
@@ -89,6 +93,7 @@ impl From<LopdfError> for Error {
     }
 }
 
+#[cfg(feature = "raster")]
 impl From<PdfiumError> for Error {
     fn from(err: PdfiumError) -> Self {
         Error::Render(err)

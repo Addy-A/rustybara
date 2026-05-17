@@ -13,15 +13,18 @@ exclude = ["tests/fixtures/"]
 
 [dependencies]
 lopdf = "0.40.0"
-pdfium-render = { version = "0.9.0", features = ["thread_safe"] }
+pdfium-render = { version = "0.9.0", features = ["thread_safe"], optional = true }
 image = { version = "0.25.10", features = ["jpeg", "tiff", "png", "webp"] }
 webp = "0.3.1"
 rustybara-icc = { path = "../rustybara-icc", version = "0.1.0", optional = true }
-rayon = "1.11.0"
+rayon = { version = "1.11.0", optional = true }
 
 [features]
-color = ["dep:rustybara-icc"]
-gpu = []   # stubbed, planned for GPU renderer
+default = ["raster"]
+raster  = ["dep:pdfium-render"]
+wasm    = []
+color   = ["dep:rustybara-icc"]
+gpu     = []   # stubbed, planned for GPU renderer
 
 [dev-dependencies]
 # test-only deps here as needed
