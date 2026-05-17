@@ -6,10 +6,13 @@ on:
     paths:
       - 'rustybara-wasm/**'
       - 'rustybara/src/**'
+      - '.github/workflows/wasm-build.yml'
 
 jobs:
   build-wasm:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
