@@ -57,7 +57,7 @@ COPY rbv/           rbv/
 RUN mkdir -p rbara-gui
 COPY rustybara-icc/           rustybara-icc/
 COPY rbara-gui/Cargo.toml     rbara-gui/Cargo.toml
-RUN mkdir -p rustybara-wasm
+RUN mkdir -p rustybara-wasm/src && touch rustybara-wasm/src/lib.rs
 COPY rustybara-wasm/Cargo.toml rustybara-wasm/Cargo.toml
 COPY README.md LICENSE-LGPL-3.0 LICENSE-GPL-3.0 ./
 
