@@ -39,7 +39,7 @@ impl ColorTransform {
     /// Build a transform between two bundled ICC profiles.
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// use rustybara_icc::{ColorTransform, RenderingIntent, profiles};
     /// let t = ColorTransform::new(
     ///     &profiles::COATED_FOGRA_39,

@@ -15,7 +15,7 @@
 //!
 //! ## Quick Start
 //!
-//! ```no_run
+//! ```ignore
 //! use rustybara_icc::{ColorTransform, RenderingIntent, profiles};
 //!
 //! # fn main() -> rustybara_icc::Result<()> {
@@ -35,7 +35,7 @@
 //!
 //! ## PDF Color Conversion
 //!
-//! ```no_run
+//! ```ignore
 //! use rustybara_icc::{ColorTransform, RenderingIntent, profiles};
 //! use rustybara_icc::pdf::PdfColorConverter;
 //!

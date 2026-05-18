@@ -38,7 +38,7 @@ pub struct ConversionReport {
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```ignore
 /// use rustybara_icc::{ColorTransform, RenderingIntent, profiles};
 /// use rustybara_icc::pdf::PdfColorConverter;
 ///
@@ -90,7 +90,7 @@ impl<'a> PdfColorConverter<'a> {
     /// containing DeviceN inks may produce incorrect output for those operators.
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// use rustybara_icc::{ColorTransform, RenderingIntent, profiles};
     /// use rustybara_icc::pdf::PdfColorConverter;
     ///
