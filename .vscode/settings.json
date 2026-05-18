@@ -9,7 +9,8 @@
     "./rustybara-icc/Cargo.toml",
     "./rustybara/Cargo.toml",
     "./rbara-gui/Cargo.toml",
-    "./rbara/Cargo.toml"
+    "./rbara/Cargo.toml",
+    "./rbv/Cargo.toml"
   ],
   "folder-color.pathColors": []
 }

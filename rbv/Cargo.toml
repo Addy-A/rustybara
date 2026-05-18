@@ -5,6 +5,10 @@ edition = "2024"
 license = "GPL-3.0-only"
 
 [dependencies]
-rustybara = { path = "../rustybara" }
+image = "0.25.10"
+rustybara = { path = "../rustybara", features = ["raster"] }
 winit = "0.30.13"
+pollster = "0.4.0"
 wgpu = "29.0.1"
+bytemuck = { version = "1", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
