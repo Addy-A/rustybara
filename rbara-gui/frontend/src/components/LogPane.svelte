@@ -1,13 +1,13 @@
 <script>
-  import { useAppState } from '../lib/context.js';
-  const app = useAppState();
+  import { useAppState } from '../lib/context.js'
+  const app = useAppState()
 
   function badgeClass(entry) {
-    if (entry.ok) return 'log-ok';
-    return 'log-fail';
+    if (entry.ok) return 'log-ok'
+    return 'log-fail'
   }
   function badgeText(entry) {
-    return entry.ok ? 'OK' : 'FAIL';
+    return entry.ok ? 'OK' : 'FAIL'
   }
 </script>
 
@@ -30,7 +30,9 @@
   <div class="output-row">
     <div class="output-row-label">Output Directory</div>
     <div class="output-path-value">
-      {app.overwrite ? '(overwriting source)' : (app.outputDir ?? '~/source folder')}
+      {app.overwrite
+        ? '(overwriting source)'
+        : (app.outputDir ?? '~/source folder')}
     </div>
   </div>
 </div>
@@ -55,7 +57,9 @@
     font-family: var(--mono);
     font-size: 11px;
   }
-  .log-entry:hover { background: var(--panel); }
+  .log-entry:hover {
+    background: var(--panel);
+  }
   .log-header-row {
     display: flex;
     align-items: center;
@@ -69,12 +73,32 @@
     border-radius: 3px;
     letter-spacing: 0.06em;
   }
-  .log-ok { background: #022c1e; color: #4ade80; border: 1px solid #065f46; }
-  .log-fail { background: #2a0f0f; color: #f87171; border: 1px solid #5a1f1f; }
-  .log-time { font-size: 10px; color: var(--muted); margin-left: auto; }
-  .log-action { color: var(--text); }
-  .log-detail { font-size: 10.5px; color: var(--muted); line-height: 1.4; }
-  .log-detail.err { color: var(--fail); }
+  .log-ok {
+    background: color-mix(in srgb, var(--ok) 12%, transparent);
+    color: var(--ok);
+    border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent);
+  }
+  .log-fail {
+    background: color-mix(in srgb, var(--fail) 12%, transparent);
+    color: var(--fail);
+    border: 1px solid color-mix(in srgb, var(--fail) 40%, transparent);
+  }
+  .log-time {
+    font-size: 10px;
+    color: var(--muted);
+    margin-left: auto;
+  }
+  .log-action {
+    color: var(--text);
+  }
+  .log-detail {
+    font-size: 10.5px;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+  .log-detail.err {
+    color: var(--fail);
+  }
   .log-empty {
     padding: 16px;
     color: var(--muted);

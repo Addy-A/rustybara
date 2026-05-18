@@ -1,16 +1,17 @@
 <script>
-  import { useAppState } from '../lib/context.js';
-  import TrimPanel from './TrimPanel.svelte';
-  import ResizePanel from './ResizePanel.svelte';
-  import ExportPanel from './ExportPanel.svelte';
-  import RemapPanel from './RemapPanel.svelte';
-  import ConvertColorSpacePanel from './ConvertColorSpacePanel.svelte';
-  import FlattenSpotsPanel from './FlattenSpotsPanel.svelte';
-  import AddTrimBoxPanel from './AddTrimBoxPanel.svelte';
-  import SplitPagesPanel from './SplitPagesPanel.svelte';
-  import ExtractPagesPanel from './ExtractPagesPanel.svelte';
-  import OutputPanel from './OutputPanel.svelte';
-  const app = useAppState();
+  import { useAppState } from '../lib/context.js'
+  import TrimPanel from './TrimPanel.svelte'
+  import ResizePanel from './ResizePanel.svelte'
+  import ExportPanel from './ExportPanel.svelte'
+  import RemapPanel from './RemapPanel.svelte'
+  import ConvertColorSpacePanel from './ConvertColorSpacePanel.svelte'
+  import FlattenSpotsPanel from './FlattenSpotsPanel.svelte'
+  import AddTrimBoxPanel from './AddTrimBoxPanel.svelte'
+  import SplitPagesPanel from './SplitPagesPanel.svelte'
+  import StitchPagesPanel from './StitchPagesPanel.svelte'
+  import ExtractPagesPanel from './ExtractPagesPanel.svelte'
+  import OutputPanel from './OutputPanel.svelte'
+  const app = useAppState()
 </script>
 
 <div class="params-panel">
@@ -30,6 +31,8 @@
     <AddTrimBoxPanel />
   {:else if app.activeAction === 'splitpages'}
     <SplitPagesPanel />
+  {:else if app.activeAction === 'stitchpages'}
+    <StitchPagesPanel />
   {:else if app.activeAction === 'extractpages'}
     <ExtractPagesPanel />
   {:else if app.activeAction === 'output'}

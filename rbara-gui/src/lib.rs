@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use commands::{
-    add_trim_box, convert_color_space, export_images, extract_pages, flatten_spots,
+    add_trim_box, convert_color_space, exit_app, export_images, extract_pages, flatten_spots,
     list_custom_profiles, load_icc_profile, load_metadata, load_persisted_profiles,
-    open_file_dialog, open_in_viewer, remap_colors, resize_to_bleed, split_pages, trim_marks,
-    ProcessingLock, ProfileRegistry,
+    open_file_dialog, open_in_viewer, remap_colors, resize_to_bleed, split_pages, stitch_pages,
+    trim_marks, ProcessingLock, ProfileRegistry,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -25,6 +25,7 @@ pub fn run() {
             resize_to_bleed,
             add_trim_box,
             split_pages,
+            stitch_pages,
             extract_pages,
             export_images,
             remap_colors,
@@ -35,6 +36,7 @@ pub fn run() {
             load_metadata,
             open_file_dialog,
             open_in_viewer,
+            exit_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running rbara-gui");

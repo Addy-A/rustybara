@@ -1,47 +1,69 @@
 <script>
-  import { useAppState } from '../lib/context.js';
-  const app = useAppState();
+  import { useAppState } from '../lib/context.js'
+  const app = useAppState()
 
   const trimActions = [
-    { id: 'trim',       icon: '✂', label: 'Trim Marks',  key: 't' },
+    { id: 'trim', icon: '✂', label: 'Trim Marks', key: 't' },
     { id: 'addtrimbox', icon: '⊞', label: 'Add Trim Box', key: 'b' },
-  ];
+  ]
 
   const mainActions = [
     { id: 'resize', icon: '⊡', label: 'Resize to Bleed', key: 'r' },
-    { id: 'export', icon: '⇲', label: 'Export Images',   key: 'x' },
-    { id: 'output', icon: '⊘', label: 'Output',          key: '/' },
-  ];
+    { id: 'export', icon: '⇲', label: 'Export Images', key: 'x' },
+    { id: 'output', icon: '⊘', label: 'Output', key: '/' },
+  ]
 
   const pagesActions = [
-    { id: 'splitpages',   icon: '⧉', label: 'Split Pages',   key: 'p' },
+    { id: 'splitpages', icon: '⧉', label: 'Split Pages', key: 'p' },
+    {
+      id: 'stitchpages',
+      icon: '⧈',
+      label: 'Stitch Pages',
+      key: 'g',
+      exp: true,
+    },
     { id: 'extractpages', icon: '⊟', label: 'Extract Pages', key: 'e' },
-  ];
+  ]
 
   const colorActions = [
-    { id: 'remap',      icon: '⬡', label: 'Remap Colors',       key: 'm' },
+    { id: 'remap', icon: '⬡', label: 'Remap Colors', key: 'm' },
     { id: 'colorspace', icon: '◈', label: 'Convert Color Space', key: 'c' },
-    { id: 'spots',      icon: '✦', label: 'Flatten Spot Colors', key: 's' },
-  ];
+    { id: 'spots', icon: '✦', label: 'Flatten Spot Colors', key: 's' },
+  ]
 
-  const trimIds  = new Set(['trim', 'addtrimbox']);
-  const pagesIds = new Set(['splitpages', 'extractpages']);
-  const colorIds = new Set(['remap', 'colorspace', 'spots']);
+  const trimIds = new Set(['trim', 'addtrimbox'])
+  const pagesIds = new Set(['splitpages', 'stitchpages', 'extractpages'])
+  const colorIds = new Set(['remap', 'colorspace', 'spots'])
 
-  let trimMenuOpen  = $state(false);
-  let pagesMenuOpen = $state(false);
-  let colorMenuOpen = $state(false);
+  let trimMenuOpen = $state(false)
+  let pagesMenuOpen = $state(false)
+  let colorMenuOpen = $state(false)
 
-  let isTrimActive  = $derived(trimIds.has(app.activeAction));
-  let isPagesActive = $derived(pagesIds.has(app.activeAction));
-  let isColorActive = $derived(colorIds.has(app.activeAction));
-  let activeTrimAction  = $derived(trimActions.find(a => a.id === app.activeAction));
-  let activePagesAction = $derived(pagesActions.find(a => a.id === app.activeAction));
-  let activeColorAction = $derived(colorActions.find(a => a.id === app.activeAction));
+  let isTrimActive = $derived(trimIds.has(app.activeAction))
+  let isPagesActive = $derived(pagesIds.has(app.activeAction))
+  let isColorActive = $derived(colorIds.has(app.activeAction))
+  let activeTrimAction = $derived(
+    trimActions.find((a) => a.id === app.activeAction),
+  )
+  let activePagesAction = $derived(
+    pagesActions.find((a) => a.id === app.activeAction),
+  )
+  let activeColorAction = $derived(
+    colorActions.find((a) => a.id === app.activeAction),
+  )
 
-  function selectTrim(id)  { app.activeAction = id; trimMenuOpen  = false; }
-  function selectPages(id) { app.activeAction = id; pagesMenuOpen = false; }
-  function selectColor(id) { app.activeAction = id; colorMenuOpen = false; }
+  function selectTrim(id) {
+    app.activeAction = id
+    trimMenuOpen = false
+  }
+  function selectPages(id) {
+    app.activeAction = id
+    pagesMenuOpen = false
+  }
+  function selectColor(id) {
+    app.activeAction = id
+    colorMenuOpen = false
+  }
 </script>
 
 <div class="tab-bar">
@@ -57,7 +79,11 @@
     </button>
 
     {#if trimMenuOpen}
-      <div class="overlay" onclick={() => (trimMenuOpen = false)} role="presentation"></div>
+      <div
+        class="overlay"
+        onclick={() => (trimMenuOpen = false)}
+        role="presentation"
+      ></div>
       <div class="color-menu">
         {#each trimActions as a (a.id)}
           <button
@@ -98,7 +124,11 @@
     </button>
 
     {#if pagesMenuOpen}
-      <div class="overlay" onclick={() => (pagesMenuOpen = false)} role="presentation"></div>
+      <div
+        class="overlay"
+        onclick={() => (pagesMenuOpen = false)}
+        role="presentation"
+      ></div>
       <div class="color-menu">
         {#each pagesActions as a (a.id)}
           <button
@@ -107,7 +137,10 @@
             onclick={() => selectPages(a.id)}
           >
             <span class="cm-icon">{a.icon}</span>
-            <span class="cm-label">{a.label}</span>
+            <span class="cm-label"
+              >{a.label}{#if a.exp}&nbsp;<span class="exp-badge">exp</span
+                >{/if}</span
+            >
             <span class="cm-key">{a.key}</span>
           </button>
         {/each}
@@ -127,7 +160,11 @@
     </button>
 
     {#if colorMenuOpen}
-      <div class="overlay" onclick={() => (colorMenuOpen = false)} role="presentation"></div>
+      <div
+        class="overlay"
+        onclick={() => (colorMenuOpen = false)}
+        role="presentation"
+      ></div>
       <div class="color-menu">
         {#each colorActions as a (a.id)}
           <button
@@ -167,16 +204,27 @@
     font-size: 12px;
     white-space: nowrap;
   }
-  .tab:hover { color: var(--text); background: var(--panel); }
+  .tab:hover {
+    color: var(--text);
+    background: var(--panel);
+  }
   .tab.active {
     color: var(--orange-hi);
     border-bottom-color: var(--orange);
     background: var(--orange-dim);
   }
-  .t-icon { font-size: 14px; }
+  .t-icon {
+    font-size: 14px;
+  }
 
-  .tab-color-wrap { position: relative; flex: 1; display: flex; }
-  .tab-color-wrap .tab { width: 100%; }
+  .tab-color-wrap {
+    position: relative;
+    flex: 1;
+    display: flex;
+  }
+  .tab-color-wrap .tab {
+    width: 100%;
+  }
 
   .overlay {
     position: fixed;
@@ -192,7 +240,7 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-top: none;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   }
   .cm-item {
     display: flex;
@@ -208,11 +256,37 @@
     text-align: left;
     white-space: nowrap;
   }
-  .cm-item:last-child { border-bottom: none; }
-  .cm-item:hover { background: var(--panel); color: var(--text); }
-  .cm-item.active { color: var(--orange-hi); background: var(--orange-dim); }
-  .cm-icon { font-size: 14px; width: 18px; text-align: center; flex-shrink: 0; }
-  .cm-label { flex: 1; }
+  .cm-item:last-child {
+    border-bottom: none;
+  }
+  .cm-item:hover {
+    background: var(--panel);
+    color: var(--text);
+  }
+  .cm-item.active {
+    color: var(--orange-hi);
+    background: var(--orange-dim);
+  }
+  .cm-icon {
+    font-size: 14px;
+    width: 18px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .cm-label {
+    flex: 1;
+  }
+  .exp-badge {
+    font-size: 7.5px;
+    font-family: var(--mono);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 0 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    vertical-align: middle;
+  }
   .cm-key {
     font-family: var(--mono);
     font-size: 10px;

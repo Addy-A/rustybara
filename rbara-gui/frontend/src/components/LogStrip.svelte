@@ -1,12 +1,14 @@
 <script>
-  import { useAppState } from '../lib/context.js';
-  const app = useAppState();
-  let last = $derived(app.actionLog[0]);
+  import { useAppState } from '../lib/context.js'
+  const app = useAppState()
+  let last = $derived(app.actionLog[0])
 </script>
 
 <div class="strip">
   {#if last}
-    <span class="badge" class:ok={last.ok} class:fail={!last.ok}>{last.ok ? 'OK' : 'FAIL'}</span>
+    <span class="badge" class:ok={last.ok} class:fail={!last.ok}
+      >{last.ok ? 'OK' : 'FAIL'}</span
+    >
     <span class="action">{last.action}</span>
     <span class="msg">{last.message}</span>
     <span class="time">{last.timestamp}</span>
@@ -36,10 +38,33 @@
     border-radius: 3px;
     flex-shrink: 0;
   }
-  .badge.ok { background: #022c1e; color: #4ade80; border: 1px solid #065f46; }
-  .badge.fail { background: #2a0f0f; color: #f87171; border: 1px solid #5a1f1f; }
-  .action { color: var(--text); flex-shrink: 0; }
-  .msg { color: var(--muted-hi); overflow: hidden; text-overflow: ellipsis; flex: 1; }
-  .time { color: var(--muted); margin-left: auto; flex-shrink: 0; }
-  .idle { color: var(--muted); font-style: italic; }
+  .badge.ok {
+    background: color-mix(in srgb, var(--ok) 12%, transparent);
+    color: var(--ok);
+    border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent);
+  }
+  .badge.fail {
+    background: color-mix(in srgb, var(--fail) 12%, transparent);
+    color: var(--fail);
+    border: 1px solid color-mix(in srgb, var(--fail) 40%, transparent);
+  }
+  .action {
+    color: var(--text);
+    flex-shrink: 0;
+  }
+  .msg {
+    color: var(--muted-hi);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+  }
+  .time {
+    color: var(--muted);
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+  .idle {
+    color: var(--muted);
+    font-style: italic;
+  }
 </style>

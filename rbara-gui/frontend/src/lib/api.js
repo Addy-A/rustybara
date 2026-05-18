@@ -80,8 +80,12 @@ export async function addTrimBox(paths, bleedInches, outputDir, overwrite) {
   })
 }
 
-export async function splitPages(paths, panelWidthPts, outputDir) {
-  return await invoke('split_pages', { paths, panelWidthPts, outputDir })
+export async function splitPages(paths, panelWidthPts, outputDir, overwrite) {
+  return await invoke('split_pages', { paths, panelWidthPts, outputDir, overwrite })
+}
+
+export async function stitchPages(paths, spreadWidthPts, outputDir, overwrite) {
+  return await invoke('stitch_pages', { paths, spreadWidthPts, outputDir, overwrite })
 }
 
 export async function extractPages(paths, pageNums, outputDir, overwrite) {
@@ -91,6 +95,15 @@ export async function extractPages(paths, pageNums, outputDir, overwrite) {
     outputDir,
     overwrite,
   })
+}
+
+export async function exitApp() {
+  return await invoke('exit_app')
+}
+
+export async function pickOutputDir() {
+  const selected = await open({ directory: true, multiple: false })
+  return typeof selected === 'string' ? selected : null
 }
 
 export async function loadIccProfile() {

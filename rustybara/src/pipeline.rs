@@ -227,6 +227,23 @@ impl PdfPipeline {
         Ok(Self { doc })
     }
 
+    pub fn stitch_pages(&self, spread_width_pts: f64) -> crate::Result<Self> {
+        let doc = crate::pages::stitch_pages(&self.doc, spread_width_pts)?;
+        Ok(Self { doc })
+    }
+
+    /// Returns approximate text and image bounding boxes for a page, as `[x, y, w, h]` in pts.
+    ///
+    /// `page_idx` is zero-based. Returns empty vecs if the page does not exist or has no
+    /// parseable content. Positions are mid-tolerance estimates for layout preview use.
+    pub fn page_layout_hint(&self, page_idx: u32) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
+        let pages = self.doc.get_pages();
+        match pages.get(&(page_idx + 1)).copied() {
+            Some(id) => crate::stream::page_layout(&self.doc, id),
+            None => (vec![], vec![]),
+        }
+    }
+
     /// Analyzes a PDF document and classifies the color spaces used across all pages.
     ///
     /// Iterates through every page's content stream, inspecting PDF paint operators to

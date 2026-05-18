@@ -14,11 +14,12 @@
     ['s', 'Flatten Spot Colors'],
     ['b', 'Add Trim Box'],
     ['p', 'Split Pages'],
+    ['g', 'Stitch Pages (exp)'],
     ['e', 'Extract Pages'],
     ['/', 'Output Path'],
     ['o', 'Toggle overwrite'],
     ['f', 'Add files…'],
-    ['v', 'View in rbv viewer'],
+    ['v', 'View active file in rbv'],
     ['a', 'Scope all files'],
     ['n', 'Scope no files'],
     ['i', 'Invert file scope'],
@@ -40,19 +41,30 @@
     { cmd: 'N-M bd', desc: 'Delete a range of buffers  (e.g. 1-3bd)' },
     { cmd: 'N,M,K bd', desc: 'Delete specific buffers  (e.g. 1,3,5bd)' },
     { cmd: 'ba', desc: 'Delete all buffers' },
+    { cmd: 'sa', desc: 'Scope all buffers' },
+    { cmd: 'sd', desc: 'Scope out all buffers' },
+    { cmd: 's', desc: 'Scope active file + next file' },
+    { cmd: 'sN', desc: 'Scope only file N  (e.g. s2)' },
+    { cmd: 'v', desc: 'Open viewer for all scoped files' },
+    { cmd: 'vN', desc: 'Open viewer for file N  (e.g. v2)' },
+    { cmd: '/n', desc: 'Pick custom output folder' },
+    { cmd: '/s', desc: 'Set output → same folder as source' },
+    { cmd: 'theme', desc: 'Toggle dark / light theme' },
     { cmd: 'nq', desc: 'Load a fresh set of random quips' },
+    { cmd: 'q / quit / exit', desc: 'Close rbara' },
   ]
 
   const chords = [
-    {
-      chord: 'Ctrl/Cmd + B  →  D',
-      desc: 'Open command bar pre-filled with :bd',
-    },
-    {
-      chord: 'Ctrl/Cmd + B  →  A',
-      desc: 'Open command bar pre-filled with :ba',
-    },
+    { chord: 'Ctrl/Cmd + B  →  D', desc: 'Open command bar pre-filled with :bd' },
+    { chord: 'Ctrl/Cmd + B  →  A', desc: 'Open command bar pre-filled with :ba' },
     { chord: 'Ctrl/Cmd + Q', desc: 'Refresh quip directly (no command bar)' },
+    { chord: 'Ctrl/Cmd + /  →  N', desc: 'Pick custom output folder' },
+    { chord: 'Ctrl/Cmd + /  →  S', desc: 'Set output → same folder as source' },
+    { chord: 'Ctrl/Cmd + S  →  A', desc: 'Scope all files' },
+    { chord: 'Ctrl/Cmd + S  →  D', desc: 'Scope out all files' },
+    { chord: 'Ctrl/Cmd + S  →  [1-9]', desc: 'Scope only file at position N' },
+    { chord: 'Ctrl/Cmd + S  (alone)', desc: 'Scope active file + next file' },
+    { chord: 'Ctrl/Cmd + V', desc: 'Open :v command bar (viewer preview)' },
   ]
 
   let q = $derived(search.trim().toLowerCase())

@@ -15,6 +15,8 @@
 
 mod color_ops;
 mod filter;
+mod layout;
 
 pub use color_ops::ColorRemap;
 pub use filter::ContentFilter;
+pub use layout::page_layout;

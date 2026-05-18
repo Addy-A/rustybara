@@ -57,6 +57,7 @@
     trimBoxBleedInches: 0.125,
     extractPagesInput: '1',
     splitPanelInches: 5.83,
+    stitchSpreadInches: 8.5,
   })
 
   // ---------- layout state ----------
@@ -86,8 +87,10 @@
   let outputHint = $derived.by(() => {
     if (!activeFileObj) return ''
     const stem = activeFileObj.name.replace(/\.pdf$/i, '')
-    if (overwrite) return activeFileObj.name
     const dir = outputDir ? outputDir + '/' : ''
+    if (activeAction === 'splitpages') return `→ ${dir}${stem}_split.pdf`
+    if (activeAction === 'stitchpages') return `→ ${dir}${stem}_stitch.pdf`
+    if (overwrite) return activeFileObj.name
     const ext = activeAction === 'export' ? params.exportFormat : 'pdf'
     const suffix = activeAction === 'export' ? '_processed_1' : '_processed'
     return `→ ${dir}${stem}${suffix}.${ext}`
@@ -173,12 +176,43 @@
     quip = randomQuip()
   }
 
-  function executeCmdBar(parsed) {
+  async function executeCmdBar(parsed) {
     if (parsed.cmd === 'ba') {
       clearAll()
     } else if (parsed.cmd === 'nq') {
       refreshQuip()
-    } else {
+    } else if (parsed.cmd === 'exit') {
+      closeCmdBar()
+      api.exitApp().catch(() => window.close())
+      return
+    } else if (parsed.cmd === 'theme') {
+      theme = theme === 'dark' ? 'light' : 'dark'
+    } else if (parsed.cmd === '/n') {
+      closeCmdBar()
+      try {
+        const dir = await api.pickOutputDir()
+        if (dir) outputDir = dir
+      } catch (e) { console.error(e) }
+      return
+    } else if (parsed.cmd === '/s') {
+      outputDir = null
+    } else if (parsed.cmd === 'sa') {
+      scopeAll()
+    } else if (parsed.cmd === 'sd') {
+      scopeNone()
+    } else if (parsed.cmd === 's') {
+      if (parsed.index != null) {
+        files = files.map((f, i) => ({ ...f, scoped: i === parsed.index }))
+      } else {
+        const base = activeFile ?? 0
+        files = files.map((f, i) => ({ ...f, scoped: i === base || i === base + 1 }))
+      }
+    } else if (parsed.cmd === 'v') {
+      const targets = parsed.index != null
+        ? [files[parsed.index]].filter(Boolean)
+        : files.filter(f => f.scoped)
+      targets.forEach(f => api.openInViewer(f.path).catch(console.error))
+    } else if (parsed.cmd === 'bd') {
       const sorted = [...parsed.indices].sort((a, b) => b - a)
       for (const idx of sorted) removeFile(idx)
     }
@@ -296,7 +330,11 @@
           break
         case 'splitpages':
           actionLabel = 'SplitPages'
-          result = await api.splitPages(paths, params.splitPanelInches * 72, outputDir)
+          result = await api.splitPages(paths, params.splitPanelInches * 72, outputDir, overwrite)
+          break
+        case 'stitchpages':
+          actionLabel = 'StitchPages'
+          result = await api.stitchPages(paths, params.stitchSpreadInches * 72, outputDir, overwrite)
           break
         case 'extractpages': {
           actionLabel = 'ExtractPages'
@@ -311,7 +349,7 @@
       actionLog = [{ ...result, action: actionLabel }, ...actionLog]
 
       const SWAP_ACTIONS = new Set([
-        'trim', 'resize', 'remap', 'colorspace', 'spots', 'addtrimbox', 'extractpages',
+        'trim', 'resize', 'remap', 'colorspace', 'spots', 'addtrimbox', 'extractpages', 'splitpages', 'stitchpages',
       ])
       if (SWAP_ACTIONS.has(activeAction) && result.output_paths.length > 0) {
         await replaceProcessedFiles(result.output_paths)
@@ -354,6 +392,36 @@
       return
     }
 
+    // Ctrl/Cmd+/ chord: output path
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key === '/') {
+      clearTimeout(chordTimer)
+      chordPending = '/'
+      chordTimer = setTimeout(() => { chordPending = null }, 2000)
+      e.preventDefault()
+      return
+    }
+
+    // Ctrl/Cmd+S chord: scope (fires scope current+next after 800ms if no follow-up)
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 's') {
+      clearTimeout(chordTimer)
+      chordPending = 's'
+      chordTimer = setTimeout(() => {
+        chordPending = null
+        if (files.length === 0) return
+        const base = activeFile ?? 0
+        files = files.map((f, i) => ({ ...f, scoped: i === base || i === base + 1 }))
+      }, 800)
+      e.preventDefault()
+      return
+    }
+
+    // Ctrl/Cmd+V: open viewer cmdbar for scoped files
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'v') {
+      openCmdBar('v')
+      e.preventDefault()
+      return
+    }
+
     // Chord completion: d → delete buffer, a → delete all
     if (chordPending === 'b') {
       clearTimeout(chordTimer)
@@ -362,6 +430,38 @@
       const k = e.key.toLowerCase()
       if (k === 'd') { openCmdBar('bd'); e.preventDefault(); return }
       if (k === 'a') { openCmdBar('ba'); e.preventDefault(); return }
+    }
+
+    // Chord completion for /: n → pick custom dir, s → same as source
+    if (chordPending === '/') {
+      clearTimeout(chordTimer)
+      chordTimer = null
+      chordPending = null
+      const k = e.key.toLowerCase()
+      if (k === 'n') {
+        api.pickOutputDir().then(dir => { if (dir) outputDir = dir }).catch(console.error)
+        e.preventDefault(); return
+      }
+      if (k === 's') { outputDir = null; e.preventDefault(); return }
+    }
+
+    // Chord completion for s: a → scope all, d → scope none, digit → scope file N
+    if (chordPending === 's') {
+      clearTimeout(chordTimer)
+      chordTimer = null
+      chordPending = null
+      if (files.length > 0) {
+        const k = e.key.toLowerCase()
+        if (k === 'a') { scopeAll(); e.preventDefault(); return }
+        if (k === 'd') { scopeNone(); e.preventDefault(); return }
+        if (/^\d$/.test(e.key)) {
+          const idx = parseInt(e.key, 10) - 1
+          if (idx >= 0) files = files.map((f, i) => ({ ...f, scoped: i === idx }))
+          e.preventDefault(); return
+        }
+        const base = activeFile ?? 0
+        files = files.map((f, i) => ({ ...f, scoped: i === base || i === base + 1 }))
+      }
     }
 
     if (e.ctrlKey || e.metaKey || e.altKey) return
@@ -393,6 +493,9 @@
         break
       case 'p':
         activeAction = 'splitpages'
+        break
+      case 'g':
+        activeAction = 'stitchpages'
         break
       case 'e':
         activeAction = 'extractpages'

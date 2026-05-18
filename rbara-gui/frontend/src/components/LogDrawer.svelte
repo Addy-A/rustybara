@@ -1,7 +1,7 @@
 <script>
-  import { useAppState } from '../lib/context.js';
-  const app = useAppState();
-  let open = $state(false);
+  import { useAppState } from '../lib/context.js'
+  const app = useAppState()
+  let open = $state(false)
 </script>
 
 <div class="drawer" class:open>
@@ -51,8 +51,13 @@
     letter-spacing: 0.1em;
     font-weight: 700;
   }
-  .arrow { color: var(--orange); transition: transform 0.15s; }
-  .arrow.open { transform: rotate(180deg); }
+  .arrow {
+    color: var(--orange);
+    transition: transform 0.15s;
+  }
+  .arrow.open {
+    transform: rotate(180deg);
+  }
   .list {
     overflow-y: auto;
     border-top: 1px solid var(--border);
@@ -73,16 +78,31 @@
     padding: 1px 5px;
     border-radius: 3px;
   }
-  .badge.ok { background: #022c1e; color: #4ade80; border: 1px solid #065f46; }
-  .badge.fail { background: #2a0f0f; color: #f87171; border: 1px solid #5a1f1f; }
-  .action { color: var(--text); }
-  .time { color: var(--muted); font-size: 10px; }
+  .badge.ok {
+    background: color-mix(in srgb, var(--ok) 12%, transparent);
+    color: var(--ok);
+    border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent);
+  }
+  .badge.fail {
+    background: color-mix(in srgb, var(--fail) 12%, transparent);
+    color: var(--fail);
+    border: 1px solid color-mix(in srgb, var(--fail) 40%, transparent);
+  }
+  .action {
+    color: var(--text);
+  }
+  .time {
+    color: var(--muted);
+    font-size: 10px;
+  }
   .detail {
     grid-column: 1 / -1;
     color: var(--muted);
     font-size: 10.5px;
   }
-  .detail.err { color: var(--fail); }
+  .detail.err {
+    color: var(--fail);
+  }
   .empty {
     padding: 16px;
     color: var(--muted);

@@ -6,75 +6,79 @@
 
   let unit = $state('in')
 
-  const inPresets = [3.675, 5.83, 8.5]
-  const mmPresets = [99, 148.5, 210]
+  const inPresets = [8.5, 11, 17]
+  const mmPresets = [210, 297, 420]
 
   let presets = $derived(unit === 'in' ? inPresets : mmPresets)
   let step = $derived(unit === 'in' ? 0.01 : 0.5)
   let displayValue = $derived(
     unit === 'in'
-      ? app.params.splitPanelInches
-      : +(app.params.splitPanelInches * 25.4).toFixed(2),
+      ? app.params.stitchSpreadInches
+      : +(app.params.stitchSpreadInches * 25.4).toFixed(2),
   )
-  let panelPts = $derived(app.params.splitPanelInches * 72)
+  let spreadPts = $derived(app.params.stitchSpreadInches * 72)
   let otherHint = $derived(
     unit === 'in'
-      ? (app.params.splitPanelInches * 25.4).toFixed(1) + ' mm'
-      : app.params.splitPanelInches.toFixed(3) + '"',
+      ? (app.params.stitchSpreadInches * 25.4).toFixed(1) + ' mm'
+      : app.params.stitchSpreadInches.toFixed(3) + '"',
   )
   let pageCount = $derived(app.metadata?.page_count ?? null)
-  let valid = $derived(app.params.splitPanelInches > 0)
+  let valid = $derived(app.params.stitchSpreadInches > 0)
 
-  // diagram
-  let pageBox = $derived(app.metadata?.trimbox ?? app.metadata?.mediabox ?? null)
+  // spread count estimate
+  let pageBox = $derived(
+    app.metadata?.trimbox ?? app.metadata?.mediabox ?? null,
+  )
   let pw = $derived(pageBox ? pageBox[2] - pageBox[0] : 0)
   let ph = $derived(pageBox ? pageBox[3] - pageBox[1] : 0)
-  let pageOriginX = $derived(pageBox ? pageBox[0] : 0)
-  let pageOriginY = $derived(pageBox ? pageBox[1] : 0)
-  let splitPts = $derived(app.params.splitPanelInches * 72)
-  let dividers = $derived(
-    pw > 0 && splitPts > 0
-      ? Array.from({ length: Math.ceil(pw / splitPts) - 1 }, (_, i) => (i + 1) * splitPts).filter(
-          (x) => x < pw,
-        )
-      : [],
+  let panelsPerSpread = $derived(
+    pw > 0 && spreadPts > 0 ? Math.max(1, Math.round(spreadPts / pw)) : null,
   )
-  let textBlocks = $derived(app.metadata?.text_blocks ?? [])
-  let imageBlocks = $derived(app.metadata?.image_blocks ?? [])
+  let spreadCount = $derived(
+    pageCount != null && panelsPerSpread != null
+      ? Math.ceil(pageCount / panelsPerSpread)
+      : null,
+  )
+
+  // diagram: show panels side by side up to panelsPerSpread
+  let diagramPanels = $derived(
+    panelsPerSpread != null ? Math.min(panelsPerSpread, 8) : 0,
+  )
 
   function isPresetActive(p) {
     const inches = unit === 'in' ? p : p / 25.4
-    return Math.abs(app.params.splitPanelInches - inches) < 0.005
+    return Math.abs(app.params.stitchSpreadInches - inches) < 0.005
   }
 
   function applyPreset(p) {
-    app.params.splitPanelInches = unit === 'in' ? p : p / 25.4
+    app.params.stitchSpreadInches = unit === 'in' ? p : p / 25.4
   }
 
   function handleInput(e) {
     const v = parseFloat(e.target.value)
     if (!isNaN(v) && v > 0) {
-      app.params.splitPanelInches = unit === 'in' ? v : v / 25.4
+      app.params.stitchSpreadInches = unit === 'in' ? v : v / 25.4
     }
   }
 </script>
 
 <div class="header">
-  <span class="title-icon">⧉</span>
+  <span class="title-icon">⧈</span>
   <div>
-    <div class="params-title">Split Pages</div>
+    <div class="params-title">Stitch Pages</div>
     <div class="params-desc">
-      Splits each spread page into individual panels at the specified width. All
-      panels are saved as pages in a single output file. Output is always named
-      <code>_split.pdf</code> — the source file is never overwritten. The overwrite
-      toggle replaces any existing <code>_split</code> file.
+      Combines consecutive panels side-by-side into spread pages at the
+      specified width. The number of panels per spread is inferred from the
+      source page width. Output is always named
+      <code>_stitch.pdf</code> — the source file is never overwritten. The
+      overwrite toggle replaces any existing <code>_stitch</code> file.
     </div>
   </div>
 </div>
 
 <div class="param-group">
   <div class="param-label-row">
-    <div class="param-label">Panel width</div>
+    <div class="param-label">Spread width</div>
     <div class="unit-toggle">
       <button class:active={unit === 'in'} onclick={() => (unit = 'in')}
         >in</button
@@ -108,60 +112,65 @@
     </div>
   </div>
   <div class="param-hint">
-    = <span>{panelPts.toFixed(2)}</span> pts · <span>{otherHint}</span>
+    = <span>{spreadPts.toFixed(2)}</span> pts · <span>{otherHint}</span>
+    {#if panelsPerSpread != null}
+      · <span>{panelsPerSpread}</span> panel{panelsPerSpread === 1
+        ? ''
+        : 's'}/spread
+    {/if}
   </div>
 </div>
 
-{#if app.metadata && pw > 0}
+{#if app.metadata && pw > 0 && diagramPanels > 0}
   <div class="diagram-wrap">
     <svg
-      viewBox="0 0 {pw} {ph}"
+      viewBox="0 0 {pw * diagramPanels} {ph}"
       width="100%"
       style="max-height: 160px; display: block;"
       preserveAspectRatio="xMidYMid meet"
     >
-      <!-- page background -->
-      <rect x="0" y="0" width={pw} height={ph} fill="var(--panel)" rx={ph * 0.012} />
-
-      <!-- image blocks from PDF -->
-      {#each imageBlocks as [bx, by, bw, bh]}
+      {#each Array.from({ length: diagramPanels }) as _, i}
+        <!-- panel background -->
         <rect
-          x={bx - pageOriginX}
-          y={ph - (by - pageOriginY) - bh}
-          width={bw}
-          height={bh}
-          fill="var(--muted)"
-          rx={ph * 0.008}
+          x={pw * i}
+          y="0"
+          width={pw}
+          height={ph}
+          fill="var(--panel)"
+          rx={ph * 0.012}
         />
-      {/each}
-
-      <!-- text blocks from PDF -->
-      {#each textBlocks as [bx, by, bw, bh]}
+        <!-- panel border -->
         <rect
-          x={bx - pageOriginX}
-          y={ph - (by - pageOriginY) - bh}
-          width={bw}
-          height={bh}
-          fill="var(--border-hi)"
-          rx={ph * 0.003}
-        />
-      {/each}
-
-      <!-- panel dividers -->
-      {#each dividers as x}
-        <line
-          x1={x} y1="0" x2={x} y2={ph}
+          x={pw * i}
+          y="0"
+          width={pw}
+          height={ph}
+          fill="none"
           stroke="var(--orange)"
           stroke-width={Math.max(pw, ph) * 0.004}
+          rx={ph * 0.012}
         />
+        <!-- panel number label -->
+        <text
+          x={pw * i + pw / 2}
+          y={ph / 2}
+          text-anchor="middle"
+          dominant-baseline="middle"
+          font-size={ph * 0.12}
+          fill="var(--muted)">{i + 1}</text
+        >
       {/each}
 
-      <!-- page border -->
+      <!-- spread boundary line covering full spread -->
       <rect
-        x="0" y="0" width={pw} height={ph}
+        x="0"
+        y="0"
+        width={pw * diagramPanels}
+        height={ph}
         fill="none"
-        stroke="var(--orange)"
-        stroke-width={Math.max(pw, ph) * 0.004}
+        stroke="var(--orange-hi)"
+        stroke-width={Math.max(pw, ph) * 0.006}
+        stroke-dasharray={Math.max(pw, ph) * 0.02}
         rx={ph * 0.012}
       />
     </svg>
@@ -171,20 +180,23 @@
 {#if !app.metadata}
   <Notice ok={false}>Load a file to validate.</Notice>
 {:else if !valid}
-  <Notice ok={false}>Panel width must be greater than 0.</Notice>
+  <Notice ok={false}>Spread width must be greater than 0.</Notice>
 {:else}
   <Notice ok
-    >Ready — {pageCount} source page{pageCount === 1 ? '' : 's'} →
+    >Ready — {pageCount} panel{pageCount === 1 ? '' : 's'} →
+    {#if spreadCount != null}
+      <span>{spreadCount} spread{spreadCount === 1 ? '' : 's'}</span> ·
+    {/if}
     <code
       >{unit === 'in'
-        ? app.params.splitPanelInches.toFixed(2) + '"'
-        : (app.params.splitPanelInches * 25.4).toFixed(1) + 'mm'}</code
+        ? app.params.stitchSpreadInches.toFixed(2) + '"'
+        : (app.params.stitchSpreadInches * 25.4).toFixed(1) + 'mm'}</code
     >
-    panels → <code>_split.pdf</code></Notice
+    wide → <code>_stitch.pdf</code></Notice
   >
 {/if}
 
-<RunButton label="Split Pages" icon="⧉" disabled={!app.metadata || !valid} />
+<RunButton label="Stitch Pages" icon="⧈" disabled={!app.metadata || !valid} />
 
 <style>
   .header {

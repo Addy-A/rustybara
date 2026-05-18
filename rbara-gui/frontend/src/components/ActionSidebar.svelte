@@ -15,6 +15,7 @@
 
   const pagesActions = [
     { id: 'splitpages', icon: '⧉', label: 'Split Pages', key: 'p' },
+    { id: 'stitchpages', icon: '⧈', label: 'Stitch Pages', key: 'g', exp: true },
     { id: 'extractpages', icon: '⊟', label: 'Extract Pages', key: 'e' },
   ]
 
@@ -25,7 +26,7 @@
   ]
 
   const trimIds = new Set(['trim', 'addtrimbox'])
-  const pagesIds = new Set(['splitpages', 'extractpages'])
+  const pagesIds = new Set(['splitpages', 'stitchpages', 'extractpages'])
   const colorIds = new Set(['remap', 'colorspace', 'spots'])
 
   let trimExpanded = $state(trimIds.has(app.activeAction))
@@ -110,7 +111,7 @@
         tabindex="0"
       >
         <span class="ai-icon">{a.icon}</span>
-        <span class="ai-label">{a.label}</span>
+        <span class="ai-label">{a.label}{#if a.exp}&nbsp;<span class="exp-badge">exp</span>{/if}</span>
         <span class="ai-key">{a.key}</span>
       </div>
     {/each}
@@ -235,6 +236,17 @@
     padding: 0 4px;
     border-radius: 3px;
     opacity: 0.7;
+  }
+  .exp-badge {
+    font-size: 7.5px;
+    font-family: var(--mono);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    padding: 0 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    vertical-align: middle;
   }
 
   .group-header {

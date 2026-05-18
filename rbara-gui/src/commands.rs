@@ -90,6 +90,8 @@ pub struct PdfMetadataDto {
     pub file_size_kb: u64,
     pub has_trimbox: bool,
     pub has_bleedbox: bool,
+    pub text_blocks: Vec<[f32; 4]>,
+    pub image_blocks: Vec<[f32; 4]>,
 }
 
 fn output_path(
@@ -389,9 +391,11 @@ pub fn split_pages(
     paths: Vec<String>,
     panel_width_pts: f64,
     output_dir: Option<String>,
+    overwrite: bool,
     state: State<'_, ProcessingLock>,
 ) -> Result<ActionResult, String> {
     let _guard = LockGuard::acquire(&state.0)?;
+    let _ = overwrite; // path is always _split; overwrite signals intent, not path selection
     let output_dir = output_dir.map(PathBuf::from);
     let mut output_paths = Vec::new();
     let mut total_pages = 0u32;
@@ -404,6 +408,8 @@ pub fn split_pages(
             .or_else(|| path.parent().filter(|p| !p.as_os_str().is_empty()))
             .unwrap_or(std::path::Path::new("."));
         let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+        // Always uses _split suffix — overwrite controls whether an existing _split file
+        // is replaced. The source file is never touched regardless of overwrite state.
         let out = dir.join(format!("{}_split.pdf", stem));
         let page_count = result.page_count() as u32;
         result.save_pdf(&out).map_err(friendly_error)?;
@@ -674,6 +680,8 @@ pub fn load_metadata(path: String) -> Result<PdfMetadataDto, String> {
 
     let file_size_kb = std::fs::metadata(&path).map(|m| m.len() / 1024).unwrap_or(0);
 
+    let (text_blocks, image_blocks) = pipeline.page_layout_hint(0);
+
     Ok(PdfMetadataDto {
         has_trimbox: trimbox.is_some(),
         has_bleedbox: bleedbox.is_some(),
@@ -685,6 +693,42 @@ pub fn load_metadata(path: String) -> Result<PdfMetadataDto, String> {
         color_space,
         page_count: pipeline.page_count() as u32,
         file_size_kb,
+        text_blocks,
+        image_blocks,
+    })
+}
+
+#[tauri::command]
+pub fn stitch_pages(
+    paths: Vec<String>,
+    spread_width_pts: f64,
+    output_dir: Option<String>,
+    overwrite: bool,
+    state: State<'_, ProcessingLock>,
+) -> Result<ActionResult, String> {
+    let _guard = LockGuard::acquire(&state.0)?;
+    let _ = overwrite; // path is always _stitch; overwrite controls replacement, not source
+    let output_dir = output_dir.map(PathBuf::from);
+    let mut output_paths = Vec::new();
+
+    for path_str in &paths {
+        let path = PathBuf::from(path_str);
+        let pipeline = PdfPipeline::open(&path).map_err(friendly_error)?;
+        let mut result = pipeline.stitch_pages(spread_width_pts).map_err(friendly_error)?;
+        let dir: &std::path::Path = output_dir.as_deref()
+            .or_else(|| path.parent().filter(|p| !p.as_os_str().is_empty()))
+            .unwrap_or(std::path::Path::new("."));
+        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+        let out = dir.join(format!("{}_stitch.pdf", stem));
+        result.save_pdf(&out).map_err(friendly_error)?;
+        output_paths.push(out.to_string_lossy().into_owned());
+    }
+
+    Ok(ActionResult {
+        ok: true,
+        message: format!("Stitched {} file(s) into spreads", paths.len()),
+        output_paths,
+        timestamp: now_timestamp(),
     })
 }
 
@@ -703,6 +747,11 @@ pub fn open_in_viewer(path: String, page: u32, dpi: u32) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("Failed to launch rbv ({}): {e}", rbv.display()))?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn exit_app() {
+    std::process::exit(0);
 }
 
 #[tauri::command]
