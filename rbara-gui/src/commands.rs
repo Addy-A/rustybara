@@ -689,6 +689,23 @@ pub fn load_metadata(path: String) -> Result<PdfMetadataDto, String> {
 }
 
 #[tauri::command]
+pub fn open_in_viewer(path: String, page: u32, dpi: u32) -> Result<(), String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("Cannot locate executable: {e}"))?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| "Cannot determine executable directory".to_string())?;
+    let rbv = dir.join(if cfg!(windows) { "rbv.exe" } else { "rbv" });
+    std::process::Command::new(&rbv)
+        .arg(&path)
+        .arg(page.to_string())
+        .args(["--dpi", &dpi.to_string()])
+        .spawn()
+        .map_err(|e| format!("Failed to launch rbv ({}): {e}", rbv.display()))?;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn open_file_dialog(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     let (tx, rx) = std::sync::mpsc::channel();
     app.dialog()

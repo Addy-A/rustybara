@@ -1,10 +1,8 @@
 <script>
-  import { useAppState } from '../lib/context.js';
-  import { randomQuip } from '../lib/quips.js';
-  const app = useAppState();
+  import { useAppState } from '../lib/context.js'
+  const app = useAppState()
 
-  let quip = $state(randomQuip());
-  let f = $derived(app.activeFileObj);
+  let f = $derived(app.activeFileObj)
 
   const labels = {
     trim: 'Trim Marks',
@@ -12,19 +10,24 @@
     export: 'Export Images',
     remap: 'Remap Colors',
     output: 'Output Path',
-  };
+  }
 </script>
 
 <div class="statusbar">
   <div class="sb-item">
-    <div class="sb-dot" style="background: {app.files.length ? 'var(--ok)' : 'var(--muted)'}"></div>
+    <div
+      class="sb-dot"
+      style="background: {app.files.length ? 'var(--ok)' : 'var(--muted)'}"
+    ></div>
     {app.scopedCount}/{app.files.length} scoped
   </div>
   {#if f}
     <div class="sb-item">{f.name}</div>
-    <div class="sb-item" style="color: #f97316">{app.metadata?.color_space ?? '—'}</div>
+    <div class="sb-item" style="color: #f97316">
+      {app.metadata?.color_space ?? '—'}
+    </div>
   {:else}
-    <div class="sb-item idle">Last Action: {quip}</div>
+    <div class="sb-item idle">Last Action: {app.quip}</div>
   {/if}
   <div class="sb-right">
     {#if app.processing}
@@ -57,9 +60,24 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .sb-dot { width: 6px; height: 6px; border-radius: 50%; }
-  .sb-right { margin-left: auto; display: flex; gap: 16px; }
-  .sb-item.action { color: var(--orange); }
-  .sb-item.idle { color: var(--orange); font-style: italic; }
-  .sb-item.processing { color: var(--warn); }
+  .sb-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+  .sb-right {
+    margin-left: auto;
+    display: flex;
+    gap: 16px;
+  }
+  .sb-item.action {
+    color: var(--orange);
+  }
+  .sb-item.idle {
+    color: var(--orange);
+    font-style: italic;
+  }
+  .sb-item.processing {
+    color: var(--warn);
+  }
 </style>

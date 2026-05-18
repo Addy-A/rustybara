@@ -1,45 +1,46 @@
 <script>
-  import { useAppState } from '../lib/context.js';
-  const app = useAppState();
+  import { useAppState } from '../lib/context.js'
+  import { openInViewer } from '../lib/api.js'
+  const app = useAppState()
 
   const trimActions = [
-    { id: 'trim',       icon: '✂', label: 'Trim Marks',  key: 't' },
+    { id: 'trim', icon: '✂', label: 'Trim Marks', key: 't' },
     { id: 'addtrimbox', icon: '⊞', label: 'Add Trim Box', key: 'b' },
-  ];
+  ]
 
   const mainActions = [
     { id: 'resize', icon: '⊡', label: 'Resize to Bleed', key: 'r' },
-    { id: 'export', icon: '⇲', label: 'Export Images',   key: 'x' },
-  ];
+    { id: 'export', icon: '⇲', label: 'Export Images', key: 'x' },
+  ]
 
   const pagesActions = [
-    { id: 'splitpages',   icon: '⧉', label: 'Split Pages',   key: 'p' },
+    { id: 'splitpages', icon: '⧉', label: 'Split Pages', key: 'p' },
     { id: 'extractpages', icon: '⊟', label: 'Extract Pages', key: 'e' },
-  ];
+  ]
 
   const colorActions = [
-    { id: 'remap',      icon: '⬡', label: 'Remap Colors',       key: 'm' },
+    { id: 'remap', icon: '⬡', label: 'Remap Colors', key: 'm' },
     { id: 'colorspace', icon: '◈', label: 'Convert Color Space', key: 'c' },
-    { id: 'spots',      icon: '✦', label: 'Flatten Spot Colors', key: 's' },
-  ];
+    { id: 'spots', icon: '✦', label: 'Flatten Spot Colors', key: 's' },
+  ]
 
-  const trimIds  = new Set(['trim', 'addtrimbox']);
-  const pagesIds = new Set(['splitpages', 'extractpages']);
-  const colorIds = new Set(['remap', 'colorspace', 'spots']);
+  const trimIds = new Set(['trim', 'addtrimbox'])
+  const pagesIds = new Set(['splitpages', 'extractpages'])
+  const colorIds = new Set(['remap', 'colorspace', 'spots'])
 
-  let trimExpanded  = $state(trimIds.has(app.activeAction));
-  let pagesExpanded = $state(pagesIds.has(app.activeAction));
-  let colorExpanded = $state(colorIds.has(app.activeAction));
+  let trimExpanded = $state(trimIds.has(app.activeAction))
+  let pagesExpanded = $state(pagesIds.has(app.activeAction))
+  let colorExpanded = $state(colorIds.has(app.activeAction))
 
-  let isTrimActive  = $derived(trimIds.has(app.activeAction));
-  let isPagesActive = $derived(pagesIds.has(app.activeAction));
-  let isColorActive = $derived(colorIds.has(app.activeAction));
+  let isTrimActive = $derived(trimIds.has(app.activeAction))
+  let isPagesActive = $derived(pagesIds.has(app.activeAction))
+  let isColorActive = $derived(colorIds.has(app.activeAction))
 
   $effect(() => {
-    if (trimIds.has(app.activeAction))  trimExpanded  = true;
-    if (pagesIds.has(app.activeAction)) pagesExpanded = true;
-    if (colorIds.has(app.activeAction)) colorExpanded = true;
-  });
+    if (trimIds.has(app.activeAction)) trimExpanded = true
+    if (pagesIds.has(app.activeAction)) pagesExpanded = true
+    if (colorIds.has(app.activeAction)) colorExpanded = true
+  })
 </script>
 
 <div class="actions-pane">
@@ -145,6 +146,18 @@
 
   <div class="actions-footer">
     <div
+      class="action-item view-btn"
+      class:disabled={!app.activeFileObj}
+      onclick={() => app.activeFileObj && openInViewer(app.activeFileObj.path)}
+      role="button"
+      tabindex="0"
+      title="Open active file in rbv viewer"
+    >
+      <span class="ai-icon">⊙</span>
+      <span class="ai-label">View in rbv</span>
+      <span class="ai-key">v</span>
+    </div>
+    <div
       class="action-item muted"
       class:active={app.activeAction === 'output'}
       onclick={() => (app.activeAction = 'output')}
@@ -180,16 +193,39 @@
     transition: 0.1s;
     border-left: 2px solid transparent;
   }
-  .action-item:hover { background: var(--panel); color: var(--text); }
+  .action-item:hover {
+    background: var(--panel);
+    color: var(--text);
+  }
   .action-item.active {
     background: var(--orange-dim);
     color: var(--orange-hi);
     border-left-color: var(--orange);
   }
-  .action-item.muted { color: var(--muted); font-size: 12px; }
-  .action-item.nested { padding-left: 28px; font-size: 12px; }
-  .ai-icon { font-size: 15px; width: 18px; text-align: center; flex-shrink: 0; }
-  .ai-label { flex: 1; }
+  .action-item.muted {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .action-item.view-btn {
+    border-top: 1px solid var(--border);
+  }
+  .action-item.view-btn.disabled {
+    opacity: 0.35;
+    pointer-events: none;
+  }
+  .action-item.nested {
+    padding-left: 28px;
+    font-size: 12px;
+  }
+  .ai-icon {
+    font-size: 15px;
+    width: 18px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .ai-label {
+    flex: 1;
+  }
   .ai-key {
     font-family: var(--mono);
     font-size: 10px;
@@ -217,12 +253,19 @@
     transition: 0.1s;
     user-select: none;
   }
-  .group-header:hover { background: var(--panel); color: var(--text); }
+  .group-header:hover {
+    background: var(--panel);
+    color: var(--text);
+  }
   .group-header.active {
     color: var(--orange-hi);
     border-left-color: var(--orange);
   }
-  .chevron { margin-left: auto; font-size: 10px; color: var(--muted); }
+  .chevron {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--muted);
+  }
 
   .actions-footer {
     margin-top: auto;

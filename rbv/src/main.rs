@@ -2,7 +2,7 @@ pub mod texture;
 pub mod viewer;
 
 use clap::Parser;
-use rustybara::{raster::RenderConfig, PdfPipeline};
+use rustybara::raster::RenderConfig;
 
 #[cfg(test)]
 mod tests {
@@ -47,22 +47,10 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    let pipeline = PdfPipeline::open(&args.file).unwrap_or_else(|e| {
-        eprintln!("Unable to open file: {}", e.to_string());
-        std::process::exit(1);
-    });
-
     let config = RenderConfig {
         dpi: args.dpi,
         render_annotations: true,
         render_form_data: false,
     };
-    let image = pipeline
-        .render_page(args.page, &config)
-        .unwrap_or_else(|e| {
-            eprintln!("Unable to render file: {}", e.to_string());
-            std::process::exit(1);
-        });
-
-    viewer::run(image);
+    viewer::run(args.file, args.page, config);
 }

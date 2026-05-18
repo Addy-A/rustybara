@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { provideAppState } from './lib/context.js'
   import * as api from './lib/api.js'
-
+  import { randomQuip } from './lib/quips.js'
   import Titlebar from './components/Titlebar.svelte'
   import Toolbar from './components/Toolbar.svelte'
   import FileStrip from './components/FileStrip.svelte'
@@ -18,6 +18,7 @@
   import LogStrip from './components/LogStrip.svelte'
   import StatusBar from './components/StatusBar.svelte'
   import HelpOverlay from './components/HelpOverlay.svelte'
+  import CmdBar from './components/CmdBar.svelte'
 
   // ---------- core state ----------
   let files = $state([]) // [{path, name, colorSpace, sizeKb}]
@@ -30,6 +31,11 @@
   let actionLog = $state([]) // {ok, message, output_paths, timestamp, action}
   let helpVisible = $state(false)
   let theme = $state(localStorage.getItem('rbara-theme') ?? 'dark')
+  let cmdBarVisible = $state(false)
+  let cmdBarInput = $state('')
+  let chordPending = $state(null)
+  let chordTimer = null
+  let quip = $state(randomQuip())
 
   $effect(() => {
     document.body.classList.toggle('light', theme === 'light')
@@ -152,6 +158,32 @@
     metadata = null
   }
 
+  function openCmdBar(initial = '') {
+    cmdBarInput = initial
+    cmdBarVisible = true
+  }
+
+  function closeCmdBar() {
+    cmdBarVisible = false
+    cmdBarInput = ''
+  }
+
+  function refreshQuip() {
+    quip = randomQuip()
+  }
+
+  function executeCmdBar(parsed) {
+    if (parsed.cmd === 'ba') {
+      clearAll()
+    } else if (parsed.cmd === 'nq') {
+      refreshQuip()
+    } else {
+      const sorted = [...parsed.indices].sort((a, b) => b - a)
+      for (const idx of sorted) removeFile(idx)
+    }
+    closeCmdBar()
+  }
+
   function toggleScope(idx) {
     files = files.map((f, i) => (i === idx ? { ...f, scoped: !f.scoped } : f))
   }
@@ -166,6 +198,32 @@
   }
 
   // ---------- run actions ----------
+  async function replaceProcessedFiles(outputPaths) {
+    const scopedIndices = files.map((f, i) => (f.scoped ? i : -1)).filter((i) => i !== -1)
+    const updated = [...files]
+    for (let j = 0; j < scopedIndices.length && j < outputPaths.length; j++) {
+      const idx = scopedIndices[j]
+      const newPath = outputPaths[j]
+      try {
+        const meta = await api.loadMetadata(newPath)
+        updated[idx] = {
+          path: newPath,
+          name: api.basename(newPath),
+          colorSpace: meta.color_space,
+          sizeKb: meta.file_size_kb,
+          metadata: meta,
+          scoped: true,
+        }
+      } catch {
+        // keep original entry if the output file can't be read
+      }
+    }
+    files = updated
+    if (activeFile !== null) {
+      metadata = files[activeFile]?.metadata ?? null
+    }
+  }
+
   async function runAction() {
     if (processing || files.length === 0) return
     if (activeAction === 'output') return
@@ -250,6 +308,13 @@
           return
       }
       actionLog = [{ ...result, action: actionLabel }, ...actionLog]
+
+      const SWAP_ACTIONS = new Set([
+        'trim', 'resize', 'remap', 'colorspace', 'spots', 'addtrimbox', 'extractpages',
+      ])
+      if (SWAP_ACTIONS.has(activeAction) && result.output_paths.length > 0) {
+        await replaceProcessedFiles(result.output_paths)
+      }
     } catch (e) {
       actionLog = [
         {
@@ -270,9 +335,40 @@
   function handleKey(e) {
     const tag = document.activeElement?.tagName
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+    if (cmdBarVisible) return
+
+    // Ctrl/Cmd+B chord initiation
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'b') {
+      clearTimeout(chordTimer)
+      chordPending = 'b'
+      chordTimer = setTimeout(() => { chordPending = null }, 2000)
+      e.preventDefault()
+      return
+    }
+
+    // Ctrl/Cmd+Q — refresh quip directly
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'q') {
+      refreshQuip()
+      e.preventDefault()
+      return
+    }
+
+    // Chord completion: d → delete buffer, a → delete all
+    if (chordPending === 'b') {
+      clearTimeout(chordTimer)
+      chordTimer = null
+      chordPending = null
+      const k = e.key.toLowerCase()
+      if (k === 'd') { openCmdBar('bd'); e.preventDefault(); return }
+      if (k === 'a') { openCmdBar('ba'); e.preventDefault(); return }
+    }
+
     if (e.ctrlKey || e.metaKey || e.altKey) return
 
     switch (e.key) {
+      case ':':
+        openCmdBar('')
+        break
       case 't':
         activeAction = 'trim'
         break
@@ -308,6 +404,9 @@
         break
       case 'f':
         addFiles()
+        break
+      case 'v':
+        if (activeFileObj) api.openInViewer(activeFileObj.path).catch(console.error)
         break
       case 'a':
         scopeAll()
@@ -434,6 +533,22 @@
     set theme(v) {
       theme = v
     },
+    get cmdBarVisible() {
+      return cmdBarVisible
+    },
+    get cmdBarInput() {
+      return cmdBarInput
+    },
+    set cmdBarInput(v) {
+      cmdBarInput = v
+    },
+    openCmdBar,
+    closeCmdBar,
+    executeCmdBar,
+    get quip() {
+      return quip
+    },
+    refreshQuip,
     get scopedFiles() {
       return scopedFiles
     },
@@ -492,6 +607,8 @@
 {#if helpVisible}
   <HelpOverlay />
 {/if}
+
+<CmdBar />
 
 <style>
   .app-body {

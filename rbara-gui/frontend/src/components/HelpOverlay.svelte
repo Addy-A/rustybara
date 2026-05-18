@@ -1,34 +1,165 @@
 <script>
-  import { useAppState } from '../lib/context.js';
-  const app = useAppState();
+  import { useAppState } from '../lib/context.js'
+  const app = useAppState()
+
+  let page = $state('shortcuts')
+  let search = $state('')
 
   const shortcuts = [
     ['t', 'Trim Marks'],
     ['r', 'Resize to Bleed'],
     ['x', 'Export Images'],
     ['m', 'Remap Colors'],
+    ['c', 'Convert Color Space'],
+    ['s', 'Flatten Spot Colors'],
+    ['b', 'Add Trim Box'],
+    ['p', 'Split Pages'],
+    ['e', 'Extract Pages'],
     ['/', 'Output Path'],
     ['o', 'Toggle overwrite'],
     ['f', 'Add files…'],
+    ['v', 'View in rbv viewer'],
     ['a', 'Scope all files'],
     ['n', 'Scope no files'],
     ['i', 'Invert file scope'],
     ['Enter', 'Run active action'],
-    ['?', 'Toggle this help'],
-    ['Esc', 'Close help'],
-  ];
+    ['?', 'Toggle help'],
+    ['Esc', 'Close help / cancel'],
+  ]
+
+  const cmdBarCommands = [
+    { cmd: 'bd', desc: 'Delete the first buffer' },
+    { cmd: 'N bd', desc: 'Delete buffer N  (1-indexed, e.g. 2bd)' },
+    { cmd: 'N-M bd', desc: 'Delete a range of buffers  (e.g. 1-3bd)' },
+    { cmd: 'N,M,K bd', desc: 'Delete specific buffers  (e.g. 1,3,5bd)' },
+    { cmd: 'ba', desc: 'Delete all buffers' },
+    { cmd: 'nq', desc: 'Load a fresh set of random quips' },
+  ]
+
+  const chords = [
+    {
+      chord: 'Ctrl/Cmd + B  →  D',
+      desc: 'Open command bar pre-filled with :bd',
+    },
+    {
+      chord: 'Ctrl/Cmd + B  →  A',
+      desc: 'Open command bar pre-filled with :ba',
+    },
+    { chord: 'Ctrl/Cmd + Q', desc: 'Refresh quip directly (no command bar)' },
+  ]
+
+  let q = $derived(search.trim().toLowerCase())
+
+  let filteredCmds = $derived(
+    q
+      ? cmdBarCommands.filter(
+          (c) =>
+            c.cmd.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q),
+        )
+      : cmdBarCommands,
+  )
+
+  let filteredChords = $derived(
+    q
+      ? chords.filter(
+          (c) =>
+            c.chord.toLowerCase().includes(q) ||
+            c.desc.toLowerCase().includes(q),
+        )
+      : chords,
+  )
+
+  let noResults = $derived(
+    page === 'cmdbar' &&
+      q &&
+      filteredCmds.length === 0 &&
+      filteredChords.length === 0,
+  )
+
+  function close() {
+    app.helpVisible = false
+    page = 'shortcuts'
+    search = ''
+  }
 </script>
 
-<div class="overlay" onclick={() => (app.helpVisible = false)} role="presentation">
+<div class="overlay" onclick={close} role="presentation">
   <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog">
-    <div class="title">Keyboard Shortcuts</div>
-    <div class="grid">
-      {#each shortcuts as [k, label]}
-        <div class="key">{k}</div>
-        <div class="label">{label}</div>
-      {/each}
+    <div class="tabs">
+      <button
+        class="tab"
+        class:active={page === 'shortcuts'}
+        onclick={() => {
+          page = 'shortcuts'
+          search = ''
+        }}>Shortcuts</button
+      >
+      <button
+        class="tab"
+        class:active={page === 'cmdbar'}
+        onclick={() => (page = 'cmdbar')}>Command Bar</button
+      >
     </div>
-    <button class="close" onclick={() => (app.helpVisible = false)}>Close</button>
+
+    {#if page === 'shortcuts'}
+      <div class="grid">
+        {#each shortcuts as [k, label]}
+          <div class="key">{k}</div>
+          <div class="label">{label}</div>
+        {/each}
+      </div>
+    {:else}
+      <p class="desc">
+        Press <kbd>:</kbd> anywhere to enter command mode. Type a command and
+        press
+        <kbd>Enter</kbd> to execute — a live preview highlights affected buffers
+        before you confirm. Press <kbd>Esc</kbd> to cancel at any time.
+        <br /><br />
+        Chord shortcuts (e.g. <kbd>Ctrl+B</kbd> then <kbd>D</kbd>) pre-fill the
+        command bar so you always get a preview before anything is deleted.
+      </p>
+
+      <div class="search-row">
+        <span class="search-icon">⌕</span>
+        <input
+          class="search"
+          type="text"
+          placeholder="Search commands…"
+          bind:value={search}
+          spellcheck="false"
+          autocomplete="off"
+        />
+        {#if search}
+          <button class="search-clear" onclick={() => (search = '')}>×</button>
+        {/if}
+      </div>
+
+      {#if noResults}
+        <div class="no-results">No matching commands for "{search}"</div>
+      {:else}
+        {#if filteredCmds.length > 0}
+          <div class="section-label">Commands</div>
+          <div class="cmd-grid">
+            {#each filteredCmds as c}
+              <div class="cmd-key">:{c.cmd}</div>
+              <div class="cmd-desc">{c.desc}</div>
+            {/each}
+          </div>
+        {/if}
+
+        {#if filteredChords.length > 0}
+          <div class="section-label">Chord Shortcuts</div>
+          <div class="cmd-grid">
+            {#each filteredChords as c}
+              <div class="cmd-key chord">{c.chord}</div>
+              <div class="cmd-desc">{c.desc}</div>
+            {/each}
+          </div>
+        {/if}
+      {/if}
+    {/if}
+
+    <button class="close" onclick={close}>Close</button>
   </div>
 </div>
 
@@ -46,21 +177,51 @@
     background: var(--surface);
     border: 1px solid var(--border-hi);
     border-radius: 8px;
-    padding: 20px 24px;
-    min-width: 320px;
+    padding: 0 0 16px;
+    width: 480px;
+    max-width: 94vw;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
     box-shadow: 0 10px 40px #000a;
+    overflow: hidden;
   }
-  .title {
-    font-size: 14px;
-    font-weight: 700;
+
+  /* tabs */
+  .tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .tab {
+    flex: 1;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 10px 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted-hi);
+    cursor: pointer;
+    transition: 0.1s;
+    letter-spacing: 0.03em;
+  }
+  .tab:hover {
+    color: var(--text);
+    background: var(--panel);
+  }
+  .tab.active {
     color: var(--orange);
-    margin-bottom: 14px;
+    border-bottom-color: var(--orange);
   }
+
+  /* shortcuts page */
   .grid {
     display: grid;
     grid-template-columns: auto 1fr;
     gap: 8px 18px;
-    margin-bottom: 16px;
+    padding: 16px 20px;
+    overflow-y: auto;
   }
   .key {
     font-family: var(--mono);
@@ -71,9 +232,120 @@
     padding: 2px 8px;
     border-radius: 3px;
     text-align: center;
+    align-self: center;
   }
-  .label { font-size: 12px; color: var(--muted-hi); }
+  .label {
+    font-size: 12px;
+    color: var(--muted-hi);
+    align-self: center;
+  }
+
+  /* cmdbar page */
+  .desc {
+    font-size: 11.5px;
+    color: var(--muted-hi);
+    line-height: 1.6;
+    padding: 14px 20px 10px;
+    margin: 0;
+    flex-shrink: 0;
+  }
+  kbd {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    background: var(--bg);
+    border: 1px solid var(--border-hi);
+    border-radius: 3px;
+    padding: 1px 5px;
+    color: var(--orange-hi);
+  }
+  .search-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 20px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 5px 10px;
+    flex-shrink: 0;
+  }
+  .search-icon {
+    color: var(--muted);
+    font-size: 14px;
+    user-select: none;
+  }
+  .search {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 12px;
+    color: var(--text);
+    font-family: var(--sans);
+  }
+  .search::placeholder {
+    color: var(--muted);
+  }
+  .search-clear {
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+  }
+  .search-clear:hover {
+    color: var(--text);
+  }
+  .section-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    padding: 6px 20px 4px;
+    flex-shrink: 0;
+  }
+  .cmd-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 14px;
+    padding: 4px 20px 8px;
+    overflow-y: auto;
+  }
+  .cmd-key {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--orange-hi);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 2px 8px;
+    border-radius: 3px;
+    white-space: nowrap;
+    align-self: center;
+  }
+  .cmd-key.chord {
+    color: var(--text);
+    font-size: 10px;
+  }
+  .cmd-desc {
+    font-size: 11.5px;
+    color: var(--muted-hi);
+    align-self: center;
+  }
+  .no-results {
+    padding: 20px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+    font-style: italic;
+  }
+
+  /* footer */
   .close {
+    margin: 8px 20px 0;
+    align-self: flex-end;
     background: var(--orange);
     color: #fff;
     border: none;
@@ -81,6 +353,9 @@
     padding: 6px 16px;
     font-weight: 700;
     font-size: 12px;
+    flex-shrink: 0;
   }
-  .close:hover { background: var(--orange-hi); }
+  .close:hover {
+    background: var(--orange-hi);
+  }
 </style>

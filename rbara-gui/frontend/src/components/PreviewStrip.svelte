@@ -1,32 +1,38 @@
 <script>
-  import { useAppState } from '../lib/context.js';
-  import { randomQuip } from '../lib/quips.js';
-  import { colorSpaceLabel, colorSpaceTagClass } from '../lib/api.js';
+  import { useAppState } from '../lib/context.js'
+  import { colorSpaceLabel, colorSpaceTagClass } from '../lib/api.js'
 
-  const app = useAppState();
-  let quip = $state(randomQuip());
-  let f = $derived(app.activeFileObj);
-  let m = $derived(app.metadata);
+  const app = useAppState()
+  let f = $derived(app.activeFileObj)
+  let m = $derived(app.metadata)
 </script>
 
 <div class="preview-strip">
   {#if f}
     {#each Array(Math.min(3, m?.page_count ?? 1)) as _, i (i)}
       <div class="page-stack">
-        <div class="preview-page" class:active={i === 0} style="opacity:{1 - i * 0.22}">
+        <div
+          class="preview-page"
+          class:active={i === 0}
+          style="opacity:{1 - i * 0.22}"
+        >
           <div class="preview-page-inner">
             {#each Array(8) as _, j (j)}
               <div class="pl"></div>
             {/each}
           </div>
         </div>
-        <div class="page-badge">p.{i + 1}{i === 0 && m?.page_count ? ` / ${m.page_count}` : ''}</div>
+        <div class="page-badge">
+          p.{i + 1}{i === 0 && m?.page_count ? ` / ${m.page_count}` : ''}
+        </div>
       </div>
     {/each}
     <div class="preview-meta">
       <div class="preview-filename">{f.name}</div>
       <div class="preview-tags">
-        <span class="tag {colorSpaceTagClass(f.colorSpace)}">{colorSpaceLabel(f.colorSpace)}</span>
+        <span class="tag {colorSpaceTagClass(f.colorSpace)}"
+          >{colorSpaceLabel(f.colorSpace)}</span
+        >
         {#if m?.has_trimbox}
           <span class="tag ok">TrimBox ✓</span>
         {:else}
@@ -40,9 +46,8 @@
     </div>
   {:else}
     <div class="empty">
-      <div class="empty-line">No file loaded - Last Action: </div>
-      <div class="empty-quip">{quip}</div>
-    </div>``
+      <div class="empty-line">No file loaded</div>
+    </div>
   {/if}
 </div>
 
@@ -74,7 +79,9 @@
     position: relative;
     flex-shrink: 0;
   }
-  .preview-page.active { outline: 2px solid var(--orange); }
+  .preview-page.active {
+    outline: 2px solid var(--orange);
+  }
   .preview-page-inner {
     position: absolute;
     inset: 0;
@@ -86,7 +93,11 @@
     gap: 2px;
     overflow: hidden;
   }
-  .pl { height: 2px; background: #bbb; border-radius: 1px; }
+  .pl {
+    height: 2px;
+    background: #bbb;
+    border-radius: 1px;
+  }
   .page-badge {
     font-size: 9px;
     color: var(--muted);
@@ -111,8 +122,16 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .preview-tags { display: flex; gap: 5px; flex-wrap: wrap; }
-  .filesize { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+  .preview-tags {
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+  }
+  .filesize {
+    font-size: 11px;
+    color: var(--muted);
+    font-family: var(--mono);
+  }
   .empty {
     flex: 1;
     display: flex;
@@ -121,7 +140,10 @@
     justify-content: center;
     gap: 8px;
   }
-  .empty-line { font-size: 13px; color: var(--muted-hi); }
+  .empty-line {
+    font-size: 13px;
+    color: var(--muted-hi);
+  }
   .empty-quip {
     font-size: 11px;
     color: var(--orange);

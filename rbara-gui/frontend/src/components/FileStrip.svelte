@@ -1,7 +1,7 @@
 <script>
-  import { useAppState } from '../lib/context.js';
-  import { colorSpaceTagClass, colorSpaceLabel, formatSize } from '../lib/api.js';
-  const app = useAppState();
+  import { useAppState } from '../lib/context.js'
+  import { colorSpaceTagClass, colorSpaceLabel, formatSize } from '../lib/api.js'
+  const app = useAppState()
 </script>
 
 <div class="drop-zone">
@@ -15,9 +15,21 @@
 
   {#if app.files.length > 0}
     <div class="bulk">
-      <button class="bulk-btn" onclick={() => app.scopeAll()} title="Scope all (a)">All</button>
-      <button class="bulk-btn" onclick={() => app.scopeNone()} title="Scope none (n)">None</button>
-      <button class="bulk-btn" onclick={() => app.invertScope()} title="Invert scope (i)">Inv</button>
+      <button
+        class="bulk-btn"
+        onclick={() => app.scopeAll()}
+        title="Scope all (a)">All</button
+      >
+      <button
+        class="bulk-btn"
+        onclick={() => app.scopeNone()}
+        title="Scope none (n)">None</button
+      >
+      <button
+        class="bulk-btn"
+        onclick={() => app.invertScope()}
+        title="Invert scope (i)">Inv</button
+      >
     </div>
   {/if}
 
@@ -33,24 +45,38 @@
       <span
         class="chip-check"
         class:on={f.scoped}
-        onclick={(e) => { e.stopPropagation(); app.toggleScope(i); }}
+        onclick={(e) => {
+          e.stopPropagation()
+          app.toggleScope(i)
+        }}
         role="checkbox"
         aria-checked={f.scoped}
         tabindex="0"
-        title={f.scoped ? 'Scoped — click to exclude' : 'Excluded — click to scope'}
-      >{f.scoped ? '✓' : ''}</span>
+        title={f.scoped
+          ? 'Scoped — click to exclude'
+          : 'Excluded — click to scope'}>{f.scoped ? '✓' : ''}</span
+      >
       <span class="chip-name">{f.name}</span>
-      <span class="chip-cs {colorSpaceTagClass(f.colorSpace)}">{colorSpaceLabel(f.colorSpace)}</span>
+      <span class="chip-cs {colorSpaceTagClass(f.colorSpace)}"
+        >{colorSpaceLabel(f.colorSpace)}</span
+      >
       <span class="chip-size">{formatSize(f.sizeKb)}</span>
       <span
         class="chip-x"
-        onclick={(e) => { e.stopPropagation(); app.removeFile(i); }}
+        onclick={(e) => {
+          e.stopPropagation()
+          app.removeFile(i)
+        }}
         role="button"
-        tabindex="0"
-      >×</span>
+        tabindex="0">×</span
+      >
     </div>
   {/each}
-  <button class="add-file-btn" onclick={() => app.addFiles()} disabled={app.processing}>
+  <button
+    class="add-file-btn"
+    onclick={() => app.addFiles()}
+    disabled={app.processing}
+  >
     ＋ Add
   </button>
   <div class="overwrite-toggle">
@@ -62,7 +88,7 @@
       aria-checked={app.overwrite}
       tabindex="0"
     ></div>
-    Overwrite <span class="hk">o</span>
+    Overwrite<span class="hk">o</span>
   </div>
 </div>
 
@@ -104,7 +130,10 @@
     padding: 3px 7px;
     font-family: var(--sans);
   }
-  .bulk-btn:hover { background: var(--orange-dim); color: var(--orange-hi); }
+  .bulk-btn:hover {
+    background: var(--orange-dim);
+    color: var(--orange-hi);
+  }
   .file-chip {
     display: flex;
     align-items: center;
@@ -119,7 +148,9 @@
     cursor: pointer;
     transition: opacity 0.12s;
   }
-  .file-chip:hover { border-color: var(--border-hi); }
+  .file-chip:hover {
+    border-color: var(--border-hi);
+  }
   .file-chip.active {
     border-color: var(--orange);
     color: var(--orange-hi);
@@ -147,15 +178,47 @@
     border-color: var(--orange);
     color: #fff;
   }
-  .chip-check:hover { border-color: var(--orange); }
-  .chip-name { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
-  .chip-cs { font-size: 10px; padding: 1px 5px; border-radius: 3px; }
-  .chip-cs.cmyk  { background: #2a1500; color: #f97316; border: 1px solid #4a2500; }
-  .chip-cs.rgb   { background: #0f1e30; color: #60a5fa; border: 1px solid #1e3a5f; }
-  .chip-cs.mixed { background: #1a1a00; color: #fbbf24; border: 1px solid #3a3a00; }
-  .chip-size { font-size: 10px; color: var(--muted); }
-  .chip-x { color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; }
-  .chip-x:hover { color: var(--fail); }
+  .chip-check:hover {
+    border-color: var(--orange);
+  }
+  .chip-name {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .chip-cs {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .chip-cs.cmyk {
+    background: #2a1500;
+    color: #f97316;
+    border: 1px solid #4a2500;
+  }
+  .chip-cs.rgb {
+    background: #0f1e30;
+    color: #60a5fa;
+    border: 1px solid #1e3a5f;
+  }
+  .chip-cs.mixed {
+    background: #1a1a00;
+    color: #fbbf24;
+    border: 1px solid #3a3a00;
+  }
+  .chip-size {
+    font-size: 10px;
+    color: var(--muted);
+  }
+  .chip-x {
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+  }
+  .chip-x:hover {
+    color: var(--fail);
+  }
   .add-file-btn {
     display: flex;
     align-items: center;
@@ -200,6 +263,10 @@
     left: 2px;
     transition: left 0.15s;
   }
-  .toggle-pill.on { background: var(--orange); }
-  .toggle-pill.on::after { left: 15px; }
+  .toggle-pill.on {
+    background: var(--orange);
+  }
+  .toggle-pill.on::after {
+    left: 15px;
+  }
 </style>
