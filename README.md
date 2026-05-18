@@ -36,14 +36,17 @@ GPU-accelerated PDF page viewer (`rbv`).
 
 ## Features
 
-| Feature                | rustybara | rustybara-icc | rustybara-wasm |
-| ---------------------- | --------- | ------------- | -------------- |
-| Page trim & resize     | ✓         | —             | ✓              |
-| CMYK remap             | ✓         | —             | ✓              |
-| Rasterization (pdfium) | ✓         | —             | —              |
-| ICC color transforms   | —         | ✓             | —              |
-| WebAssembly / browser  | —         | —             | ✓              |
-| Node.js / edge runtime | —         | —             | ✓              |
+| Feature                     | rustybara | rustybara-icc | rustybara-wasm |
+| --------------------------- | --------- | ------------- | -------------- |
+| Page trim & resize          | ✓         | —             | ✓              |
+| CMYK remap                  | ✓         | —             | ✓              |
+| Split / stitch pages        | ✓         | —             | —              |
+| Extract page ranges         | ✓         | —             | —              |
+| Flatten spot colors         | ✓         | —             | —              |
+| Rasterization (pdfium)      | ✓         | —             | —              |
+| ICC color transforms        | —         | ✓             | —              |
+| WebAssembly / browser       | —         | —             | ✓              |
+| Node.js / edge runtime      | —         | —             | ✓              |
 
 - **Pipeline API** — Chain operations fluently: `open → trim → resize → remap → save`.
 - **Batch processing** — Process entire directories of PDFs from CLI or TUI.
@@ -135,6 +138,7 @@ fn main() -> rustybara::Result<()> {
     PdfPipeline::open("input.pdf")?
         .trim()?
         .resize(9.0)?
+        .split_pages(5.83 * 72.0)? // split spreads into 5.83" panels
         .save_pdf("output.pdf")?;
 
     Ok(())
@@ -362,21 +366,26 @@ flag-based CLI for scripting and a TUI for guided workflows.
 
 ### Keyboard Reference (TUI)
 
-| Key       | Action                     |
-| --------- | -------------------------- |
-| `↑` / `↓` | Navigate menu              |
-| `Enter`   | Select / confirm           |
-| `Esc`     | Back / quit                |
-| `t`       | Trim print marks           |
-| `r`       | Resize to bleed            |
-| `x`       | Export to image            |
-| `m`       | Remap colors               |
-| `p`       | Preview page               |
-| `o`       | Toggle overwrite mode      |
-| `/`       | Output path                |
-| `f`       | Change files               |
-| `q`       | Quit                       |
-| `?`       | Keyboard reference overlay |
+| Key                     | Action                           |
+| ----------------------- | -------------------------------- |
+| `t`                     | Trim print marks                 |
+| `r`                     | Resize to bleed                  |
+| `x`                     | Export to image                  |
+| `m`                     | Remap colors                     |
+| `c`                     | Convert color space              |
+| `s`                     | Flatten spot colors              |
+| `b`                     | Add trim box                     |
+| `p`                     | Split pages                      |
+| `g`                     | Stitch pages                     |
+| `e`                     | Extract pages                    |
+| `/`                     | Output path                      |
+| `o`                     | Toggle overwrite mode            |
+| `f`                     | Add files                        |
+| `a` / `n` / `i`         | Scope all / none / invert        |
+| `v`                     | View active file in rbv          |
+| `Enter`                 | Run active action                |
+| `:`                     | Open command bar                 |
+| `?`                     | Keyboard reference overlay       |
 
 ### UX Model
 
@@ -391,15 +400,18 @@ available. Directories auto-glob `*.pdf` files.
 
 ## rbv — PDF Page Viewer
 
-`rbv` is a minimal GPU-accelerated window for PDF page preview, built on
-`wgpu` + `winit`. It is spawned by `rbara` on demand and communicates via
-command-line arguments and exit codes.
+`rbv` is a GPU-accelerated window for PDF page preview, built on `wgpu` + `winit`.
+It is spawned by `rbara-gui` on demand for single-file previews.
 
 ```
-rbv <file_path> <page_index> [--dpi <n>]
+rbv <file_path>
 ```
 
-**Status:** Not yet implemented. See the roadmap below.
+Navigate pages with `H`/`←`/`K`/`↑` (prev) and `L`/`→`/`J`/`↓` (next). Jump to a
+page with `Ng` (e.g. `5g`). Close with `Esc`.
+
+Requires a GPU or software fallback adapter at runtime. Gracefully errors on headless
+environments.
 
 ---
 
@@ -421,9 +433,15 @@ rbv <file_path> <page_index> [--dpi <n>]
 - [x] CMYK→CMYK color remapping in content streams — v0.1.2
 - [x] Cross-platform installers (Windows / macOS / Linux / Docker) with bundled pdfium — v0.1.3
 - [x] GitHub Actions release pipeline (one tag → all installers + GHCR image) — v0.1.3
+- [x] `rbv` GPU-accelerated page viewer (wgpu + winit) — v0.1.4
+- [x] `rbara-gui` native desktop GUI (Tauri v2) — v0.1.4
+- [x] Split Pages — divide spreads into individual panels at a configurable width — v0.1.5
+- [x] Stitch Pages — combine panels back into spreads at a configurable spread width — v0.1.5
+- [x] Extract Pages — extract arbitrary page ranges into a new PDF — v0.1.5
+- [x] Flatten Spot Colors — flatten spot color inks to CMYK process — v0.1.5
+- [x] Command bar (`:` mode) with chord shortcuts and live preview — v0.1.5
 - [ ] RGB→CMYK conversion (vector graphics + embedded images)
 - [ ] Spot color detection service
-- [ ] `rbv` GPU-accelerated page viewer
 - [ ] PDF/X validation and preflight reports
 - [ ] Configurable JPEG quality (`--quality` flag)
 
@@ -452,7 +470,7 @@ To cut a new version:
 2. Commit and push.
 3. Tag and push the tag:
    ```sh
-   git tag v0.1.4
+   git tag v0.1.5
    git push --tags
    ```
 4. The workflow will build the Windows installer, the Linux tarball, both
