@@ -80,8 +80,8 @@ export async function addTrimBox(paths, bleedInches, outputDir, overwrite) {
   })
 }
 
-export async function splitPages(paths, outputDir) {
-  return await invoke('split_pages', { paths, outputDir })
+export async function splitPages(paths, panelWidthPts, outputDir) {
+  return await invoke('split_pages', { paths, panelWidthPts, outputDir })
 }
 
 export async function extractPages(paths, pageNums, outputDir, overwrite) {

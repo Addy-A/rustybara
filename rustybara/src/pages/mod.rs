@@ -14,5 +14,7 @@
 
 pub mod boxes;
 pub mod split;
+pub mod spread;
 pub use boxes::{set_trim_boxes, PageBoxes};
 pub use split::extract_pages;
+pub use spread::split_pages;

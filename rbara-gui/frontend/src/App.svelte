@@ -56,6 +56,7 @@
     convertIntent: 'RelativeColorimetric',
     trimBoxBleedInches: 0.125,
     extractPagesInput: '1',
+    splitPanelInches: 5.83,
   })
 
   // ---------- layout state ----------
@@ -295,7 +296,7 @@
           break
         case 'splitpages':
           actionLabel = 'SplitPages'
-          result = await api.splitPages(paths, outputDir)
+          result = await api.splitPages(paths, params.splitPanelInches * 72, outputDir)
           break
         case 'extractpages': {
           actionLabel = 'ExtractPages'

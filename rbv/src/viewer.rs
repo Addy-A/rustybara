@@ -69,6 +69,7 @@ struct Viewer {
     config:     rustybara::raster::RenderConfig,
     image:      image::DynamicImage,
     gpu:        Option<GpuState>,
+    digit_buf:  String,
 }
 
 struct GpuState {
@@ -147,6 +148,15 @@ impl Viewer {
             self.page = page;
             self.reload_current_page();
         }
+    }
+
+    fn consume_digit_buf(&mut self) -> Option<u32> {
+        if self.digit_buf.is_empty() {
+            return None;
+        }
+        let n = self.digit_buf.parse::<u32>().ok();
+        self.digit_buf.clear();
+        n
     }
 }
 
@@ -350,18 +360,38 @@ impl ApplicationHandler for Viewer {
                 event: KeyEvent {
                     physical_key: PhysicalKey::Code(code),
                     state: ElementState::Pressed,
+                    text,
                     ..
                 },
                 ..
             } => match code {
-                KeyCode::Escape | KeyCode::KeyQ => event_loop.exit(),
+                KeyCode::Escape | KeyCode::KeyQ => {
+                    self.digit_buf.clear();
+                    event_loop.exit();
+                }
                 KeyCode::ArrowRight | KeyCode::ArrowDown | KeyCode::KeyL | KeyCode::KeyJ => {
+                    self.digit_buf.clear();
                     self.go_to_page(self.page + 1);
                 }
                 KeyCode::ArrowLeft | KeyCode::ArrowUp | KeyCode::KeyH | KeyCode::KeyK => {
+                    self.digit_buf.clear();
                     self.go_to_page(self.page.saturating_sub(1));
                 }
-                _ => {}
+                KeyCode::KeyG => {
+                    if let Some(n) = self.consume_digit_buf() {
+                        self.go_to_page(n.saturating_sub(1));
+                    }
+                }
+                _ => {
+                    if let Some(ch) = text.as_deref()
+                        .and_then(|t| t.chars().next())
+                        .filter(|c| c.is_ascii_digit())
+                    {
+                        self.digit_buf.push(ch);
+                    } else {
+                        self.digit_buf.clear();
+                    }
+                }
             },
             WindowEvent::RedrawRequested => {
                 let Some(gpu) = &mut self.gpu else { return };
@@ -457,6 +487,6 @@ pub fn run(path: PathBuf, page: u32, config: rustybara::raster::RenderConfig) {
         }
     });
 
-    let mut app = Viewer { path, page, page_count, config, image, gpu: None };
+    let mut app = Viewer { path, page, page_count, config, image, gpu: None, digit_buf: String::new() };
     event_loop.run_app(&mut app).unwrap();
 }

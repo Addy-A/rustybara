@@ -222,24 +222,9 @@ impl PdfPipeline {
         Ok(Self { doc })
     }
 
-    /// Splits every page into its own [`PdfPipeline`].
-    ///
-    /// Returns a `Vec` where index `i` holds a single-page pipeline for zero-indexed page `i`.
-    /// Convenience wrapper around [`Self::extract_pages`].
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use rustybara::PdfPipeline;
-    /// let doc = PdfPipeline::open("spread.pdf").unwrap();
-    /// for (i, mut page) in doc.split_pages().unwrap().into_iter().enumerate() {
-    ///     page.save_pdf(format!("page_{}.pdf", i + 1)).unwrap();
-    /// }
-    /// ```
-    pub fn split_pages(&self) -> crate::Result<Vec<Self>> {
-        (0..self.page_count() as u32)
-            .map(|i| self.extract_pages(&[i]))
-            .collect()
+    pub fn split_pages(&self, panel_width_pts: f64) -> crate::Result<Self> {
+        let doc = crate::pages::split_pages(&self.doc, panel_width_pts)?;
+        Ok(Self { doc })
     }
 
     /// Analyzes a PDF document and classifies the color spaces used across all pages.

@@ -27,6 +27,13 @@
     ['Esc', 'Close help / cancel'],
   ]
 
+  const rbvShortcuts = [
+    ['Esc', 'Close viewer'],
+    ['H  K  ←  ↑', 'Previous page'],
+    ['L  J  →  ↓', 'Next page'],
+    ['N + g', 'Jump to page N  (e.g. 5g)'],
+  ]
+
   const cmdBarCommands = [
     { cmd: 'bd', desc: 'Delete the first buffer' },
     { cmd: 'N bd', desc: 'Delete buffer N  (1-indexed, e.g. 2bd)' },
@@ -104,6 +111,11 @@
     {#if page === 'shortcuts'}
       <div class="grid">
         {#each shortcuts as [k, label]}
+          <div class="key">{k}</div>
+          <div class="label">{label}</div>
+        {/each}
+        <div class="grid-section-label">rbv Viewer</div>
+        {#each rbvShortcuts as [k, label]}
           <div class="key">{k}</div>
           <div class="label">{label}</div>
         {/each}
@@ -222,6 +234,17 @@
     gap: 8px 18px;
     padding: 16px 20px;
     overflow-y: auto;
+  }
+  .grid-section-label {
+    grid-column: 1 / -1;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    padding: 10px 0 2px;
+    border-top: 1px solid var(--border);
+    margin-top: 2px;
   }
   .key {
     font-family: var(--mono);

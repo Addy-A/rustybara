@@ -387,6 +387,7 @@ pub fn add_trim_box(
 #[tauri::command]
 pub fn split_pages(
     paths: Vec<String>,
+    panel_width_pts: f64,
     output_dir: Option<String>,
     state: State<'_, ProcessingLock>,
 ) -> Result<ActionResult, String> {
@@ -398,17 +399,16 @@ pub fn split_pages(
     for path_str in &paths {
         let path = PathBuf::from(path_str);
         let pipeline = PdfPipeline::open(&path).map_err(friendly_error)?;
-        let pages = pipeline.split_pages().map_err(friendly_error)?;
+        let mut result = pipeline.split_pages(panel_width_pts).map_err(friendly_error)?;
         let dir: &std::path::Path = output_dir.as_deref()
             .or_else(|| path.parent().filter(|p| !p.as_os_str().is_empty()))
             .unwrap_or(std::path::Path::new("."));
         let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-        for (i, mut page) in pages.into_iter().enumerate() {
-            let out = dir.join(format!("{}_page_{}.pdf", stem, i + 1));
-            page.save_pdf(&out).map_err(friendly_error)?;
-            output_paths.push(out.to_string_lossy().into_owned());
-            total_pages += 1;
-        }
+        let out = dir.join(format!("{}_split.pdf", stem));
+        let page_count = result.page_count() as u32;
+        result.save_pdf(&out).map_err(friendly_error)?;
+        output_paths.push(out.to_string_lossy().into_owned());
+        total_pages += page_count;
     }
 
     Ok(ActionResult {
