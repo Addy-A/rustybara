@@ -68,8 +68,25 @@
       for (const dto of dtos) {
         app.addCustomProfile(dto)
       }
+      if (dtos.length > 0) {
+        app.logAction({
+          ok: true,
+          message: `Imported ${dtos.length} ICC profile(s): ${dtos.map((d) => d.description).join(', ')}`,
+          output_paths: [],
+          timestamp: new Date().toLocaleTimeString(),
+          action: 'ImportICC',
+        })
+      }
     } catch (e) {
-      importError = typeof e === 'string' ? e : String(e)
+      const msg = typeof e === 'string' ? e : String(e)
+      importError = msg
+      app.logAction({
+        ok: false,
+        message: msg,
+        output_paths: [],
+        timestamp: new Date().toLocaleTimeString(),
+        action: 'ImportICC',
+      })
     } finally {
       importing = false
     }
