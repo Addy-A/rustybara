@@ -275,6 +275,14 @@ jobs:
             exit 1
           }
 
+      - name: Build rbv
+        shell: pwsh
+        run: cargo build --release -p rbv --target x86_64-pc-windows-msvc
+
+      - name: Copy rbv to resources
+        shell: pwsh
+        run: Copy-Item target\x86_64-pc-windows-msvc\release\rbv.exe rbara-gui\resources\rbv.exe
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -378,6 +386,12 @@ jobs:
           cp "$SRC" "$DEST"
           test -f "$DEST" || { echo "ERROR: $DEST is not a regular file after copy"; ls -la rbara-gui/resources; exit 1; }
 
+      - name: Build rbv
+        run: cargo build --release -p rbv
+
+      - name: Copy rbv to resources
+        run: cp target/release/rbv rbara-gui/resources/rbv
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -474,6 +488,12 @@ jobs:
           rm -f "$DEST"
           cp "$SRC" "$DEST"
           test -f "$DEST" || { echo "ERROR: $DEST is not a regular file after copy"; ls -la rbara-gui/resources; exit 1; }
+
+      - name: Build rbv
+        run: cargo build --release -p rbv --target ${{ matrix.target }}
+
+      - name: Copy rbv to resources
+        run: cp target/${{ matrix.target }}/release/rbv rbara-gui/resources/rbv
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0

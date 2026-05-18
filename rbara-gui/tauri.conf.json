@@ -45,7 +45,9 @@
     "category": "GraphicsAndDesign",
     "shortDescription": "Prepress PDF toolkit",
     "longDescription": "Tauri v2 desktop GUI for the rustybara prepress PDF toolkit.",
-    "resources": {}
+    "resources": {
+      "resources/*": "./"
+    }
   },
   "plugins": {}
 }

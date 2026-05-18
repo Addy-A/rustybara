@@ -733,13 +733,16 @@ pub fn stitch_pages(
 }
 
 #[tauri::command]
-pub fn open_in_viewer(path: String, page: u32, dpi: u32) -> Result<(), String> {
-    let exe = std::env::current_exe()
-        .map_err(|e| format!("Cannot locate executable: {e}"))?;
-    let dir = exe
-        .parent()
-        .ok_or_else(|| "Cannot determine executable directory".to_string())?;
-    let rbv = dir.join(if cfg!(windows) { "rbv.exe" } else { "rbv" });
+pub fn open_in_viewer(app: tauri::AppHandle, path: String, page: u32, dpi: u32) -> Result<(), String> {
+    let rbv_name = if cfg!(windows) { "rbv.exe" } else { "rbv" };
+    // resource_dir() returns the correct directory on all platforms:
+    // Windows/Linux: same directory as the executable
+    // macOS .app: Contents/Resources/ (where Tauri bundles resources)
+    let rbv = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("Cannot locate resource directory: {e}"))?
+        .join(rbv_name);
     std::process::Command::new(&rbv)
         .arg(&path)
         .arg(page.to_string())
