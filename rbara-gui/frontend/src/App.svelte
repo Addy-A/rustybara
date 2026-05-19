@@ -222,6 +222,12 @@
   function toggleScope(idx) {
     files = files.map((f, i) => (i === idx ? { ...f, scoped: !f.scoped } : f))
   }
+  function scopeIn(idx) {
+    files = files.map((f, i) => (i === idx ? { ...f, scoped: true } : f))
+  }
+  function scopeOut(idx) {
+    files = files.map((f, i) => (i === idx ? { ...f, scoped: false } : f))
+  }
   function scopeAll() {
     files = files.map((f) => ({ ...f, scoped: true }))
   }
@@ -231,6 +237,62 @@
   function invertScope() {
     files = files.map((f) => ({ ...f, scoped: !f.scoped }))
   }
+
+  // ---------- vim-style file navigation ----------
+  function navigateVisual(idx, dir) {
+    const chips = Array.from(document.querySelectorAll('.file-chip'))
+    if (!chips[idx] || chips.length === 0) return idx
+    const rects = chips.map((el) => el.getBoundingClientRect())
+    const curTop = Math.round(rects[idx].top)
+    const centerX = rects[idx].left + rects[idx].width / 2
+    const tops = rects.map((r) => Math.round(r.top))
+    if (dir === 'j') {
+      const nextTop = tops.filter((t) => t > curTop).reduce((min, t) => Math.min(min, t), Infinity)
+      if (nextTop === Infinity) return idx
+      return tops.reduce((best, t, i) => {
+        if (t !== nextTop) return best
+        const dist = Math.abs(rects[i].left + rects[i].width / 2 - centerX)
+        if (best === -1) return i
+        return dist < Math.abs(rects[best].left + rects[best].width / 2 - centerX) ? i : best
+      }, -1)
+    } else {
+      const prevTop = tops.filter((t) => t < curTop).reduce((max, t) => Math.max(max, t), -Infinity)
+      if (prevTop === -Infinity) return idx
+      return tops.reduce((best, t, i) => {
+        if (t !== prevTop) return best
+        const dist = Math.abs(rects[i].left + rects[i].width / 2 - centerX)
+        if (best === -1) return i
+        return dist < Math.abs(rects[best].left + rects[best].width / 2 - centerX) ? i : best
+      }, -1)
+    }
+  }
+
+  function navigateFile(dir, scopeAction = 'none') {
+    if (files.length === 0 || activeFile === null) return
+    if (scopeAction === 'in') scopeIn(activeFile)
+    else if (scopeAction === 'out') scopeOut(activeFile)
+    let newIdx
+    if (dir === 'h') newIdx = Math.max(0, activeFile - 1)
+    else if (dir === 'l') newIdx = Math.min(files.length - 1, activeFile + 1)
+    else newIdx = navigateVisual(activeFile, dir)
+    selectFile(newIdx)
+    document.querySelectorAll('.file-chip')[newIdx]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }
+
+  // ---------- sidebar category expand state ----------
+  const TRIM_IDS = new Set(['trim', 'addtrimbox'])
+  const PAGES_IDS = new Set(['splitpages', 'stitchpages', 'extractpages'])
+  const COLOR_IDS = new Set(['remap', 'colorspace', 'spots'])
+
+  let trimExpanded = $state(TRIM_IDS.has(activeAction))
+  let pagesExpanded = $state(PAGES_IDS.has(activeAction))
+  let colorExpanded = $state(COLOR_IDS.has(activeAction))
+
+  $effect(() => {
+    if (TRIM_IDS.has(activeAction)) trimExpanded = true
+    if (PAGES_IDS.has(activeAction)) pagesExpanded = true
+    if (COLOR_IDS.has(activeAction)) colorExpanded = true
+  })
 
   // ---------- run actions ----------
   async function replaceProcessedFiles(outputPaths) {
@@ -464,9 +526,76 @@
       }
     }
 
+    // Ctrl/Cmd+h/l/j/k: scope out current file, then navigate
+    // Ctrl/Cmd+i: toggle active file scope
+    // Ctrl/Cmd+t/p/c: toggle sidebar category expand
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      const k = e.key.toLowerCase()
+      const navDir = { h: 'h', l: 'l', j: 'j', k: 'k', arrowleft: 'h', arrowright: 'l', arrowdown: 'j', arrowup: 'k' }[k]
+      if (navDir && files.length > 0) {
+        clearTimeout(chordTimer)
+        chordTimer = null
+        chordPending = null
+        navigateFile(navDir, 'out')
+        e.preventDefault()
+        return
+      }
+      if (k === 'i' && activeFile !== null) {
+        toggleScope(activeFile)
+        e.preventDefault()
+        return
+      }
+      if (k === 't' || k === 'p' || k === 'c') {
+        clearTimeout(chordTimer)
+        chordTimer = null
+        chordPending = null
+        if (k === 't') trimExpanded = !trimExpanded
+        else if (k === 'p') pagesExpanded = !pagesExpanded
+        else colorExpanded = !colorExpanded
+        e.preventDefault()
+        return
+      }
+    }
+
     if (e.ctrlKey || e.metaKey || e.altKey) return
 
     switch (e.key) {
+      case 'h':
+        navigateFile('h')
+        break
+      case 'l':
+        navigateFile('l')
+        break
+      case 'j':
+        navigateFile('j')
+        break
+      case 'k':
+        navigateFile('k')
+        break
+      case 'ArrowLeft':
+        navigateFile('h', e.shiftKey ? 'in' : 'none')
+        break
+      case 'ArrowRight':
+        navigateFile('l', e.shiftKey ? 'in' : 'none')
+        break
+      case 'ArrowDown':
+        navigateFile('j', e.shiftKey ? 'in' : 'none')
+        break
+      case 'ArrowUp':
+        navigateFile('k', e.shiftKey ? 'in' : 'none')
+        break
+      case 'H':
+        navigateFile('h', 'in')
+        break
+      case 'L':
+        navigateFile('l', 'in')
+        break
+      case 'J':
+        navigateFile('j', 'in')
+        break
+      case 'K':
+        navigateFile('k', 'in')
+        break
       case ':':
         openCmdBar('')
         break
@@ -668,9 +797,17 @@
     clearAll,
     runAction,
     toggleScope,
+    scopeIn,
+    scopeOut,
     scopeAll,
     scopeNone,
     invertScope,
+    get trimExpanded() { return trimExpanded },
+    set trimExpanded(v) { trimExpanded = v },
+    get pagesExpanded() { return pagesExpanded },
+    set pagesExpanded(v) { pagesExpanded = v },
+    get colorExpanded() { return colorExpanded },
+    set colorExpanded(v) { colorExpanded = v },
   })
 </script>
 

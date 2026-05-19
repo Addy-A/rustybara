@@ -29,19 +29,9 @@
   const pagesIds = new Set(['splitpages', 'stitchpages', 'extractpages'])
   const colorIds = new Set(['remap', 'colorspace', 'spots'])
 
-  let trimExpanded = $state(trimIds.has(app.activeAction))
-  let pagesExpanded = $state(pagesIds.has(app.activeAction))
-  let colorExpanded = $state(colorIds.has(app.activeAction))
-
   let isTrimActive = $derived(trimIds.has(app.activeAction))
   let isPagesActive = $derived(pagesIds.has(app.activeAction))
   let isColorActive = $derived(colorIds.has(app.activeAction))
-
-  $effect(() => {
-    if (trimIds.has(app.activeAction)) trimExpanded = true
-    if (pagesIds.has(app.activeAction)) pagesExpanded = true
-    if (colorIds.has(app.activeAction)) colorExpanded = true
-  })
 </script>
 
 <div class="actions-pane">
@@ -50,16 +40,16 @@
   <div
     class="group-header"
     class:active={isTrimActive}
-    onclick={() => (trimExpanded = !trimExpanded)}
+    onclick={() => (app.trimExpanded = !app.trimExpanded)}
     role="button"
     tabindex="0"
   >
     <span class="ai-icon">✂</span>
     <span class="ai-label">Trim</span>
-    <span class="chevron">{trimExpanded ? '▾' : '▸'}</span>
+    <span class="chevron">{app.trimExpanded ? '▾' : '▸'}</span>
   </div>
 
-  {#if trimExpanded}
+  {#if app.trimExpanded}
     {#each trimActions as a (a.id)}
       <div
         class="action-item nested"
@@ -92,16 +82,16 @@
   <div
     class="group-header"
     class:active={isPagesActive}
-    onclick={() => (pagesExpanded = !pagesExpanded)}
+    onclick={() => (app.pagesExpanded = !app.pagesExpanded)}
     role="button"
     tabindex="0"
   >
     <span class="ai-icon">◫</span>
     <span class="ai-label">Pages</span>
-    <span class="chevron">{pagesExpanded ? '▾' : '▸'}</span>
+    <span class="chevron">{app.pagesExpanded ? '▾' : '▸'}</span>
   </div>
 
-  {#if pagesExpanded}
+  {#if app.pagesExpanded}
     {#each pagesActions as a (a.id)}
       <div
         class="action-item nested"
@@ -120,16 +110,16 @@
   <div
     class="group-header"
     class:active={isColorActive}
-    onclick={() => (colorExpanded = !colorExpanded)}
+    onclick={() => (app.colorExpanded = !app.colorExpanded)}
     role="button"
     tabindex="0"
   >
     <span class="ai-icon">⬡</span>
     <span class="ai-label">Color</span>
-    <span class="chevron">{colorExpanded ? '▾' : '▸'}</span>
+    <span class="chevron">{app.colorExpanded ? '▾' : '▸'}</span>
   </div>
 
-  {#if colorExpanded}
+  {#if app.colorExpanded}
     {#each colorActions as a (a.id)}
       <div
         class="action-item nested"

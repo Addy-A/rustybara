@@ -28,6 +28,19 @@
     ['Esc', 'Close help / cancel'],
   ]
 
+  const navShortcuts = [
+    ['h / l', 'Move cursor left / right'],
+    ['j / k', 'Move cursor down / up  (row-aware)'],
+    ['Shift + H / L', 'Scope in current, move left / right'],
+    ['Shift + J / K', 'Scope in current, move down / up'],
+    ['Ctrl + i', 'Toggle active file scope'],
+    ['Ctrl + t', 'Toggle Trim category expand'],
+    ['Ctrl + p', 'Toggle Pages category expand'],
+    ['Ctrl + c', 'Toggle Color category expand'],
+    ['Ctrl + h / l', 'Scope out current, move left / right'],
+    ['Ctrl + j / k', 'Scope out current, move down / up'],
+  ]
+
   const rbvShortcuts = [
     ['Esc', 'Close viewer'],
     ['H  K  ←  ↑', 'Previous page'],
@@ -123,6 +136,11 @@
     {#if page === 'shortcuts'}
       <div class="grid">
         {#each shortcuts as [k, label]}
+          <div class="key">{k}</div>
+          <div class="label">{label}</div>
+        {/each}
+        <div class="grid-section-label">File Navigation</div>
+        {#each navShortcuts as [k, label]}
           <div class="key">{k}</div>
           <div class="label">{label}</div>
         {/each}
