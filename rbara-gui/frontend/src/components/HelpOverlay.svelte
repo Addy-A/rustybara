@@ -49,6 +49,8 @@
   ]
 
   const cmdBarCommands = [
+    { cmd: 'minimize / min / hide', desc: 'Minimize the rbara window' },
+    { cmd: 'full / max / maximize', desc: 'Toggle maximize the rbara window' },
     { cmd: 'bd', desc: 'Delete the first buffer' },
     { cmd: 'N bd', desc: 'Delete buffer N  (1-indexed, e.g. 2bd)' },
     { cmd: 'N-M bd', desc: 'Delete a range of buffers  (e.g. 1-3bd)' },

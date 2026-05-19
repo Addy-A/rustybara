@@ -101,6 +101,16 @@ export async function exitApp() {
   return await invoke('exit_app')
 }
 
+export async function minimizeWindow() {
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  return getCurrentWindow().minimize()
+}
+
+export async function toggleMaximizeWindow() {
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  return getCurrentWindow().toggleMaximize()
+}
+
 export async function pickOutputDir() {
   const selected = await open({ directory: true, multiple: false })
   return typeof selected === 'string' ? selected : null

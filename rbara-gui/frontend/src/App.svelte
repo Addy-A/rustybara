@@ -35,6 +35,7 @@
   let cmdBarInput = $state('')
   let chordPending = $state(null)
   let chordTimer = null
+  let dragOver = $state(false)
   let quip = $state(randomQuip())
 
   $effect(() => {
@@ -97,15 +98,7 @@
   })
 
   // ---------- file loading ----------
-  async function addFiles() {
-    let paths
-    try {
-      paths = await api.pickPdfFiles()
-    } catch (e) {
-      console.error(e)
-      return
-    }
-    if (!paths.length) return
+  async function addFilesFromPaths(paths) {
     for (const path of paths) {
       if (files.some((f) => f.path === path)) continue
       try {
@@ -137,6 +130,18 @@
     if (activeFile === null && files.length > 0) {
       selectFile(0)
     }
+  }
+
+  async function addFiles() {
+    let paths
+    try {
+      paths = await api.pickPdfFiles()
+    } catch (e) {
+      console.error(e)
+      return
+    }
+    if (!paths.length) return
+    await addFilesFromPaths(paths)
   }
 
   function removeFile(idx) {
@@ -179,6 +184,14 @@
   async function executeCmdBar(parsed) {
     if (parsed.cmd === 'ba') {
       clearAll()
+    } else if (parsed.cmd === 'minimize') {
+      closeCmdBar()
+      api.minimizeWindow().catch(console.error)
+      return
+    } else if (parsed.cmd === 'maximize') {
+      closeCmdBar()
+      api.toggleMaximizeWindow().catch(console.error)
+      return
     } else if (parsed.cmd === 'nq') {
       refreshQuip()
     } else if (parsed.cmd === 'exit') {
@@ -680,9 +693,30 @@
       })
       .catch(() => {})
 
+    let unlistenDrop = null
+    import('@tauri-apps/api/webviewWindow')
+      .then(({ getCurrentWebviewWindow }) =>
+        getCurrentWebviewWindow().onDragDropEvent((event) => {
+          if (event.payload.type === 'hover') {
+            dragOver = true
+          } else if (event.payload.type === 'drop') {
+            dragOver = false
+            const pdfPaths = event.payload.paths.filter((p) =>
+              p.toLowerCase().endsWith('.pdf'),
+            )
+            if (pdfPaths.length > 0) addFilesFromPaths(pdfPaths)
+          } else {
+            dragOver = false
+          }
+        }),
+      )
+      .then((fn) => { unlistenDrop = fn })
+      .catch(() => {})
+
     return () => {
       window.removeEventListener('resize', onResize)
       document.removeEventListener('keydown', handleKey)
+      if (unlistenDrop) unlistenDrop()
     }
   })
 
@@ -845,6 +879,12 @@
 
 <StatusBar />
 
+{#if dragOver}
+  <div class="drag-overlay" aria-hidden="true">
+    <div class="drag-box">Drop PDFs</div>
+  </div>
+{/if}
+
 {#if helpVisible}
   <HelpOverlay />
 {/if}
@@ -867,5 +907,25 @@
   }
   .center-pane.fill {
     flex: 1;
+  }
+  .drag-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(232, 104, 7, 0.1);
+    border: 2px dashed var(--orange);
+    pointer-events: none;
+    z-index: 900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .drag-box {
+    background: var(--panel);
+    border: 1px solid var(--orange);
+    border-radius: 6px;
+    padding: 10px 20px;
+    font-size: 13px;
+    color: var(--orange);
+    font-family: var(--sans);
   }
 </style>

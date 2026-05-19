@@ -16,6 +16,8 @@
     const lo = t.toLowerCase()
 
     if (lo === 'q' || lo === 'quit' || lo === 'exit') return { cmd: 'exit' }
+    if (lo === 'minimize' || lo === 'min' || lo === 'hide') return { cmd: 'minimize' }
+    if (lo === 'full' || lo === 'max' || lo === 'maximize') return { cmd: 'maximize' }
     if (lo === 'theme') return { cmd: 'theme' }
     if (lo === '/n') return { cmd: '/n' }
     if (lo === '/s') return { cmd: '/s' }
@@ -82,6 +84,8 @@
     if (!parsed) return false
     switch (parsed.cmd) {
       case 'exit':
+      case 'minimize':
+      case 'maximize':
       case 'theme':
       case '/n':
       case '/s':
@@ -123,6 +127,10 @@
           <span class="text dim">unknown command</span>
         {:else if parsed.cmd === 'nq'}
           <span class="text">load a fresh set of random quips</span>
+        {:else if parsed.cmd === 'minimize'}
+          <span class="text">minimize window</span>
+        {:else if parsed.cmd === 'maximize'}
+          <span class="text">toggle maximize window</span>
         {:else if parsed.cmd === 'exit'}
           <span class="text">close rbara</span>
         {:else if parsed.cmd === 'theme'}
