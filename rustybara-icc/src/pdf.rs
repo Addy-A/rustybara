@@ -268,7 +268,7 @@ fn convert_operation(op: &Operation, transform: &ColorTransform) -> Operation {
     }
 }
 
-fn find_spot_colorspaces(doc: &Document) -> Vec<(String, String)> {
+pub fn find_spot_colorspaces(doc: &Document) -> Vec<(String, String)> {
     let mut spots = Vec::new();
 
     for (_, page_id) in doc.get_pages() {
@@ -295,6 +295,9 @@ fn find_spot_colorspaces(doc: &Document) -> Vec<(String, String)> {
                 .and_then(|o| o.as_name().ok())
                 .map(|n| String::from_utf8_lossy(n).to_string())
                 .unwrap_or_default();
+            if ink_name.is_empty() || ink_name == "All" || ink_name == "None" {
+                continue;
+            }
             spots.push((String::from_utf8_lossy(name).to_string(), ink_name));
         }
     }

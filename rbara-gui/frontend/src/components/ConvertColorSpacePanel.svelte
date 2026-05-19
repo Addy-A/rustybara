@@ -1,37 +1,12 @@
 <script>
   import { useAppState } from '../lib/context.js'
-  import { loadIccProfile } from '../lib/api.js'
+  import { loadIccProfile, BUILTIN_PROFILES } from '../lib/api.js'
   import Notice from './Notice.svelte'
   import RunButton from './RunButton.svelte'
   const app = useAppState()
 
-  const cmykProfiles = [
-    { value: 'CoatedFOGRA27', label: 'Coated FOGRA 27' },
-    { value: 'CoatedFOGRA39', label: 'Coated FOGRA 39' },
-    { value: 'CoatedGRACoL2006', label: 'Coated GRACoL 2006' },
-    { value: 'JapanColor2001Coated', label: 'Japan Color 2001 Coated' },
-    { value: 'JapanColor2001Uncoated', label: 'Japan Color 2001 Uncoated' },
-    { value: 'JapanColor2002Newspaper', label: 'Japan Color 2002 Newspaper' },
-    { value: 'JapanColor2003WebCoated', label: 'Japan Color 2003 Web Coated' },
-    { value: 'JapanWebCoated', label: 'Japan Web Coated' },
-    { value: 'UncoatedFOGRA29', label: 'Uncoated FOGRA 29' },
-    { value: 'USWebCoatedSWOP', label: 'US Web Coated SWOP' },
-    { value: 'USWebUncoated', label: 'US Web Uncoated' },
-    { value: 'WebCoatedFOGRA28', label: 'Web Coated FOGRA 28' },
-    { value: 'WebCoatedSWOP2006Grade3', label: 'Web Coated SWOP 2006 Grade 3' },
-    { value: 'WebCoatedSWOP2006Grade5', label: 'Web Coated SWOP 2006 Grade 5' },
-  ]
-
-  const rgbProfiles = [
-    { value: 'AdobeRGB1998', label: 'Adobe RGB (1998)' },
-    { value: 'AppleRGB', label: 'Apple RGB' },
-    { value: 'ColorMatchRGB', label: 'ColorMatch RGB' },
-    { value: 'PAL_SECAM', label: 'PAL/SECAM' },
-    { value: 'SMPTE-C', label: 'SMPTE-C' },
-    { value: 'VideoHD', label: 'HDTV (Rec. 709)' },
-    { value: 'VideoNTSC', label: 'NTSC (1953)' },
-    { value: 'VideoPAL', label: 'PAL (Video)' },
-  ]
+  let cmykProfiles = $derived(BUILTIN_PROFILES.filter((p) => p.color_space === 'CMYK'))
+  let rgbProfiles  = $derived(BUILTIN_PROFILES.filter((p) => p.color_space === 'RGB'))
 
   const intents = [
     {

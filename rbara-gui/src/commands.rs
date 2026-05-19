@@ -92,6 +92,8 @@ pub struct PdfMetadataDto {
     pub has_bleedbox: bool,
     pub text_blocks: Vec<[f32; 4]>,
     pub image_blocks: Vec<[f32; 4]>,
+    pub spot_colors: Vec<String>,
+    pub has_spots: bool,
 }
 
 fn output_path(
@@ -682,6 +684,14 @@ pub fn load_metadata(path: String) -> Result<PdfMetadataDto, String> {
 
     let (text_blocks, image_blocks) = pipeline.page_layout_hint(0);
 
+    let raw_spots = rustybara_icc::pdf::find_spot_colorspaces(doc);
+    let mut spot_colors: Vec<String> = {
+        let mut seen = std::collections::HashSet::new();
+        raw_spots.into_iter().map(|(_, ink)| ink).filter(|ink| seen.insert(ink.clone())).collect()
+    };
+    spot_colors.sort();
+    let has_spots = !spot_colors.is_empty();
+
     Ok(PdfMetadataDto {
         has_trimbox: trimbox.is_some(),
         has_bleedbox: bleedbox.is_some(),
@@ -695,6 +705,8 @@ pub fn load_metadata(path: String) -> Result<PdfMetadataDto, String> {
         file_size_kb,
         text_blocks,
         image_blocks,
+        spot_colors,
+        has_spots,
     })
 }
 

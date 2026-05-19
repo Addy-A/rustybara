@@ -33,6 +33,11 @@
         <span class="tag {colorSpaceTagClass(f.colorSpace)}"
           >{colorSpaceLabel(f.colorSpace)}</span
         >
+        {#if m?.has_spots}
+          {#each (m?.spot_colors ?? []) as name}
+            <span class="tag spot">✦ {name}</span>
+          {/each}
+        {/if}
         {#if m?.has_trimbox}
           <span class="tag ok">TrimBox ✓</span>
         {:else}

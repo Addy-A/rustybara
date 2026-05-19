@@ -212,9 +212,17 @@
     } else if (parsed.cmd === 'sa') {
       scopeAll()
     } else if (parsed.cmd === 'sd') {
-      scopeNone()
+      if (parsed.indices) {
+        const set = new Set(parsed.indices)
+        files = files.map((f, i) => ({ ...f, scoped: set.has(i) ? false : f.scoped }))
+      } else {
+        scopeNone()
+      }
     } else if (parsed.cmd === 's') {
-      if (parsed.index != null) {
+      if (parsed.indices) {
+        const set = new Set(parsed.indices)
+        files = files.map((f, i) => ({ ...f, scoped: set.has(i) ? true : f.scoped }))
+      } else if (parsed.index != null) {
         files = files.map((f, i) => ({ ...f, scoped: i === parsed.index }))
       } else {
         const base = activeFile ?? 0
@@ -225,6 +233,12 @@
         ? [files[parsed.index]].filter(Boolean)
         : files.filter(f => f.scoped)
       targets.forEach(f => api.openInViewer(f.path).catch(console.error))
+    } else if (parsed.cmd === 'csrc') {
+      params.fromProfile = parsed.profile
+      activeAction = 'colorspace'
+    } else if (parsed.cmd === 'cdst') {
+      params.toProfile = parsed.profile
+      activeAction = 'colorspace'
     } else if (parsed.cmd === 'bd') {
       const sorted = [...parsed.indices].sort((a, b) => b - a)
       for (const idx of sorted) removeFile(idx)

@@ -186,3 +186,28 @@ export function colorSpaceLabel(cs) {
       return '—'
   }
 }
+
+export const BUILTIN_PROFILES = [
+  { value: 'CoatedFOGRA27',            label: 'Coated FOGRA 27',               color_space: 'CMYK' },
+  { value: 'CoatedFOGRA39',            label: 'Coated FOGRA 39',               color_space: 'CMYK' },
+  { value: 'CoatedGRACoL2006',         label: 'Coated GRACoL 2006',            color_space: 'CMYK' },
+  { value: 'JapanColor2001Coated',     label: 'Japan Color 2001 Coated',       color_space: 'CMYK' },
+  { value: 'JapanColor2001Uncoated',   label: 'Japan Color 2001 Uncoated',     color_space: 'CMYK' },
+  { value: 'JapanColor2002Newspaper',  label: 'Japan Color 2002 Newspaper',    color_space: 'CMYK' },
+  { value: 'JapanColor2003WebCoated',  label: 'Japan Color 2003 Web Coated',   color_space: 'CMYK' },
+  { value: 'JapanWebCoated',           label: 'Japan Web Coated',              color_space: 'CMYK' },
+  { value: 'UncoatedFOGRA29',          label: 'Uncoated FOGRA 29',             color_space: 'CMYK' },
+  { value: 'USWebCoatedSWOP',          label: 'US Web Coated SWOP',            color_space: 'CMYK' },
+  { value: 'USWebUncoated',            label: 'US Web Uncoated',               color_space: 'CMYK' },
+  { value: 'WebCoatedFOGRA28',         label: 'Web Coated FOGRA 28',           color_space: 'CMYK' },
+  { value: 'WebCoatedSWOP2006Grade3',  label: 'Web Coated SWOP 2006 Grade 3',  color_space: 'CMYK' },
+  { value: 'WebCoatedSWOP2006Grade5',  label: 'Web Coated SWOP 2006 Grade 5',  color_space: 'CMYK' },
+  { value: 'AdobeRGB1998',             label: 'Adobe RGB (1998)',               color_space: 'RGB'  },
+  { value: 'AppleRGB',                 label: 'Apple RGB',                     color_space: 'RGB'  },
+  { value: 'ColorMatchRGB',            label: 'ColorMatch RGB',                color_space: 'RGB'  },
+  { value: 'PAL_SECAM',               label: 'PAL/SECAM',                     color_space: 'RGB'  },
+  { value: 'SMPTE-C',                 label: 'SMPTE-C',                       color_space: 'RGB'  },
+  { value: 'VideoHD',                 label: 'HDTV (Rec. 709)',               color_space: 'RGB'  },
+  { value: 'VideoNTSC',               label: 'NTSC (1953)',                   color_space: 'RGB'  },
+  { value: 'VideoPAL',                label: 'PAL (Video)',                   color_space: 'RGB'  },
+]

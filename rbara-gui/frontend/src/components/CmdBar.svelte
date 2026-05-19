@@ -1,14 +1,22 @@
 <script>
   import { useAppState } from '../lib/context.js'
+  import { BUILTIN_PROFILES } from '../lib/api.js'
   const app = useAppState()
 
   let inputEl = $state(null)
+  let selectedProfileIdx = $state(0)
 
   $effect(() => {
     if (app.cmdBarVisible && inputEl) {
       requestAnimationFrame(() => inputEl?.focus())
     }
   })
+
+  // All profiles: builtin + custom
+  let allProfiles = $derived([
+    ...BUILTIN_PROFILES,
+    ...app.customProfiles.map((p) => ({ value: p.name, label: p.description, color_space: p.color_space })),
+  ])
 
   function parseCmd(input) {
     const t = input.trim()
@@ -25,6 +33,12 @@
     if (lo === 'sa') return { cmd: 'sa' }
     if (lo === 'sd') return { cmd: 'sd' }
 
+    // csrc:: and cdst:: profile picker
+    const csrcMatch = t.match(/^csrc::(.*)$/i)
+    if (csrcMatch) return { cmd: 'csrc', query: csrcMatch[1] }
+    const cdstMatch = t.match(/^cdst::(.*)$/i)
+    if (cdstMatch) return { cmd: 'cdst', query: cdstMatch[1] }
+
     // s (scope current+next) or sN (scope only file N)
     const sMatch = t.match(/^s(\d+)?$/i)
     if (sMatch) {
@@ -39,13 +53,13 @@
       return { cmd: 'v', index: n != null ? parseInt(n, 10) - 1 : null }
     }
 
-    // delete buffers
-    const m = t.match(/^([0-9,\-\s]*)?(bd|ba)$/i)
+    // delete / scope range commands: N, N-M, N,M,K  prefix
+    const m = t.match(/^([0-9,\-\s]*)?(bd|ba|sd|s)$/i)
     if (!m) return null
     const rangeStr = (m[1] ?? '').trim()
     const cmd = m[2].toLowerCase()
     if (cmd === 'ba') return { cmd: 'ba', indices: null }
-    if (!rangeStr) return { cmd: 'bd', indices: [0] }
+    // parse the index list (shared by bd, s, sd)
     const indices = []
     for (const part of rangeStr.split(',')) {
       const p = part.trim()
@@ -59,10 +73,29 @@
         if (!isNaN(n) && n >= 1) indices.push(n - 1)
       }
     }
-    return { cmd: 'bd', indices: [...new Set(indices)].sort((a, b) => a - b) }
+    const sorted = [...new Set(indices)].sort((a, b) => a - b)
+    if (cmd === 'bd') return { cmd: 'bd', indices: rangeStr ? sorted : [0] }
+    if (cmd === 'sd') return { cmd: 'sd', indices: rangeStr ? sorted : null }
+    if (cmd === 's')  return { cmd: 's',  indices: rangeStr ? sorted : null, index: null }
+    return null
   }
 
   let parsed = $derived(parseCmd(app.cmdBarInput))
+
+  let filteredProfiles = $derived.by(() => {
+    if (!parsed || (parsed.cmd !== 'csrc' && parsed.cmd !== 'cdst')) return []
+    const q = parsed.query.trim().toLowerCase()
+    if (!q) return allProfiles
+    return allProfiles.filter(
+      (p) => p.value.toLowerCase().includes(q) || p.label.toLowerCase().includes(q),
+    )
+  })
+
+  // Reset selection index when the filtered list changes
+  $effect(() => {
+    filteredProfiles
+    selectedProfileIdx = 0
+  })
 
   let previewFiles = $derived.by(() => {
     if (!parsed) return null
@@ -73,9 +106,13 @@
       return app.files.filter((f) => f.scoped)
     }
     if (parsed.cmd === 's') {
+      if (parsed.indices) return parsed.indices.map((i) => app.files[i]).filter(Boolean)
       if (parsed.index != null) return [app.files[parsed.index]].filter(Boolean)
       const base = app.activeFile ?? 0
       return [app.files[base], app.files[base + 1]].filter(Boolean)
+    }
+    if (parsed.cmd === 'sd' && parsed.indices) {
+      return parsed.indices.map((i) => app.files[i]).filter(Boolean)
     }
     return null
   })
@@ -92,8 +129,12 @@
       case 'nq':
         return true
       case 'sa':
+        return app.files.length > 0
       case 'sd':
+        if (parsed.indices) return (previewFiles?.length ?? 0) > 0
+        return app.files.length > 0
       case 's':
+        if (parsed.indices) return (previewFiles?.length ?? 0) > 0
         return app.files.length > 0
       case 'v':
         if (parsed.index != null) return parsed.index < app.files.length
@@ -102,6 +143,9 @@
         return app.files.length > 0
       case 'bd':
         return (previewFiles?.length ?? 0) > 0
+      case 'csrc':
+      case 'cdst':
+        return filteredProfiles.length > 0
       default:
         return false
     }
@@ -112,9 +156,24 @@
       app.closeCmdBar()
       e.preventDefault()
       e.stopPropagation()
+    } else if ((parsed?.cmd === 'csrc' || parsed?.cmd === 'cdst') && filteredProfiles.length > 0) {
+      if (e.key === 'ArrowDown') {
+        selectedProfileIdx = Math.min(selectedProfileIdx + 1, filteredProfiles.length - 1)
+        e.preventDefault()
+      } else if (e.key === 'ArrowUp') {
+        selectedProfileIdx = Math.max(selectedProfileIdx - 1, 0)
+        e.preventDefault()
+      } else if (e.key === 'Enter') {
+        if (isValid) {
+          app.executeCmdBar({ cmd: parsed.cmd, profile: filteredProfiles[selectedProfileIdx].value })
+        }
+        e.preventDefault()
+        e.stopPropagation()
+      }
     } else if (e.key === 'Enter') {
       if (isValid) app.executeCmdBar(parsed)
       e.preventDefault()
+      e.stopPropagation()
     }
   }
 </script>
@@ -144,10 +203,28 @@
             >scope all {app.files.length} buffer{app.files.length !== 1 ? 's' : ''}</span
           >
         {:else if parsed.cmd === 'sd'}
-          <span class="text">scope out all buffers</span>
+          {#if parsed.indices}
+            {#if !isValid}
+              <span class="text dim">no matching buffers</span>
+            {:else}
+              <span class="label">scope out:</span>
+              {#each previewFiles as f, i (f.path)}
+                {#if i > 0}<span class="sep">,</span>{/if}
+                <span class="file">{f.name}</span>
+              {/each}
+            {/if}
+          {:else}
+            <span class="text">scope out all buffers</span>
+          {/if}
         {:else if parsed.cmd === 's'}
           {#if !isValid}
             <span class="text dim">no files loaded</span>
+          {:else if parsed.indices}
+            <span class="label">scope in:</span>
+            {#each previewFiles as f, i (f.path)}
+              {#if i > 0}<span class="sep">,</span>{/if}
+              <span class="file">{f.name}</span>
+            {/each}
           {:else if parsed.index != null}
             <span class="label">scope only:</span>
             {#each previewFiles as f (f.path)}<span class="file">{f.name}</span>{/each}
@@ -169,6 +246,26 @@
               {#if i > 0}<span class="sep">,</span>{/if}
               <span class="file">{f.name}</span>
             {/each}
+          {/if}
+        {:else if parsed.cmd === 'csrc' || parsed.cmd === 'cdst'}
+          {#if filteredProfiles.length === 0}
+            <span class="text dim">no matching profiles</span>
+          {:else}
+            <span class="label"
+              >{parsed.cmd === 'csrc' ? 'set source profile:' : 'set destination profile:'}</span
+            >
+            <div class="profile-list">
+              {#each filteredProfiles.slice(0, 8) as p, i (p.value)}
+                <div class="profile-row" class:sel={i === selectedProfileIdx}>
+                  <span class="profile-cs {p.color_space.toLowerCase()}">{p.color_space}</span>
+                  <span class="profile-label">{p.label}</span>
+                  <span class="profile-value">{p.value}</span>
+                </div>
+              {/each}
+              {#if filteredProfiles.length > 8}
+                <div class="profile-more">+{filteredProfiles.length - 8} more — keep typing to narrow</div>
+              {/if}
+            </div>
           {/if}
         {:else if parsed.cmd === 'ba'}
           <span class="text"
@@ -267,5 +364,53 @@
     font-size: 12.5px;
     caret-color: var(--orange);
     padding: 0;
+  }
+
+  /* Profile picker */
+  .profile-list {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin-top: 2px;
+  }
+  .profile-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 6px;
+    border-radius: 3px;
+    color: var(--muted-hi);
+  }
+  .profile-row.sel {
+    background: var(--bg);
+    color: var(--text);
+  }
+  .profile-cs {
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+  }
+  .profile-cs.cmyk { background: #2a1500; color: #f97316; border: 1px solid #4a2500; }
+  .profile-cs.rgb  { background: #0f1e30; color: #60a5fa; border: 1px solid #1e3a5f; }
+  .profile-label {
+    flex: 1;
+    font-size: 12px;
+  }
+  .profile-row.sel .profile-label {
+    color: var(--orange-hi);
+  }
+  .profile-value {
+    font-size: 10px;
+    color: var(--muted);
+  }
+  .profile-more {
+    font-size: 10px;
+    color: var(--muted);
+    font-style: italic;
+    padding: 2px 6px;
   }
 </style>

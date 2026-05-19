@@ -92,6 +92,7 @@ input, select {
 .tag.mixed{ background: #1a1a00; color: #fbbf24; border-color: #3a3a00; }
 .tag.ok   { background: #022c1e; color: #4ade80; border-color: #065f46; }
 .tag.warn { background: #1c1300; color: #fbbf24; border-color: #3d2c00; }
+.tag.spot { background: #1a0d2e; color: #c084fc; border-color: #3b1f6a; }
 
 /* ── Light mode ── */
 body.light {
@@ -115,6 +116,7 @@ body.light .tag.rgb   { background: #eff6ff; color: #1d4ed8; border-color: #93c5
 body.light .tag.mixed { background: #fffbeb; color: #92400e; border-color: #fcd34d; }
 body.light .tag.ok    { background: #f0fdf4; color: #15803d; border-color: #86efac; }
 body.light .tag.warn  { background: #fffbeb; color: #92400e; border-color: #fcd34d; }
+body.light .tag.spot  { background: #faf5ff; color: #7c3aed; border-color: #c4b5fd; }
 
 /* FileStrip chip-cs — higher specificity (0,3,1) overrides scoped (0,3,0) */
 body.light .chip-cs.cmyk  { background: #fff3eb; color: #c2410c; border: 1px solid #f97316; }

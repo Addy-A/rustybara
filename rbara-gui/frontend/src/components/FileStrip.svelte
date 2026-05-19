@@ -42,6 +42,7 @@
       role="button"
       tabindex="0"
     >
+      <span class="chip-idx">{i + 1}</span>
       <span
         class="chip-check"
         class:on={f.scoped}
@@ -159,8 +160,16 @@
     opacity: 0.45;
     background: transparent;
   }
-  .chip-check {
-    width: 13px;
+  .chip-idx {
+    font-size: 9px;
+    color: var(--muted);
+    font-family: var(--mono);
+    min-width: 10px;
+    text-align: right;
+    flex-shrink: 0;
+    user-select: none;
+  }
+  .chip-check {    width: 13px;
     height: 13px;
     border-radius: 3px;
     border: 1px solid var(--border-hi);

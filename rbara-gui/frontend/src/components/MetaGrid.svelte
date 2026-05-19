@@ -52,7 +52,7 @@
           <div class="mc-val">{formatSize(m.file_size_kb)}</div>
         </div>
         <div class="meta-cell">
-          <div class="mc-label">Editing</div>
+          <div class="mc-label">Spot Colors</div>
           <div class="mc-val muted">—</div>
         </div>
       {/if}
