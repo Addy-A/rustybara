@@ -1,17 +1,13 @@
 # ICC Profile Data
 
-This directory is intentionally excluded from version control. The `.icc` files embedded
-by `rustybara-icc` are © Adobe Systems Incorporated and are not redistributed in this
-repository to comply with Adobe's license terms.
+The `.icc` files in this directory are © Adobe Systems Incorporated and are distributed
+under the **Adobe Color Profile Bundling Agreement (Exhibit B)**. They are committed to
+this repository and embedded in `rbara-gui` release binaries under that license.
 
-## Setup
+End users who download `rbara-gui` must accept the Adobe Color Profile License Agreement
+via the download modal on the rbara-gui download page before receiving the binary.
 
-Download the free **Adobe ICC Profiles** installer directly from Adobe:
-
-- **Windows:** https://www.adobe.com/support/downloads/iccprofiles/iccprofiles_win.html
-- **macOS:** https://www.adobe.com/support/downloads/iccprofiles/iccprofiles_mac.html
-
-After installing, copy the profiles into the following layout:
+## Included profiles
 
 ```
 rustybara-icc/src/profiles/data/
@@ -41,8 +37,4 @@ rustybara-icc/src/profiles/data/
     └── VideoPAL.icc
 ```
 
-On Windows, installed profiles are typically found under:
-`C:\Windows\System32\spool\drivers\color\`
-
-On macOS:
-`/Library/ColorSync/Profiles/`
+Adobe RGB (1998) is a trademark of Adobe Systems Incorporated.

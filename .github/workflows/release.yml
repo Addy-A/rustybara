@@ -26,7 +26,12 @@ name: release
 # ICC CLI note: released binaries support --to srgb out of the box.
 # For named print profiles (--from CoatedFOGRA39 etc.) build locally with:
 #   cargo build --release -p rustybara-icc --features bundled-profiles
-# (requires Adobe ICC profiles — see rustybara-icc/src/profiles/data/README.md)
+#
+# rbara-gui release binaries bundle all 22 Adobe ICC profiles (14 CMYK + 8 RGB)
+# via the bundled-profiles feature in rbara-gui/Cargo.toml. CI has access to the
+# profile files in rustybara-icc/src/profiles/data/ — they are committed under the
+# Adobe Color Profile Bundling Agreement (Exhibit B). End users accept the license
+# via the download modal on the rbara-gui download page.
 #
 # Each artifact bundles its own pdfium (chromium/7776) — no system pdfium needed.
 # All four installers are independent and can run/release in parallel.
