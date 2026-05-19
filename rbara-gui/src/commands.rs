@@ -765,6 +765,60 @@ pub fn open_in_viewer(app: tauri::AppHandle, path: String, page: u32, dpi: u32) 
 }
 
 #[tauri::command]
+pub fn list_dirs(path: String) -> Vec<String> {
+    let p = std::path::Path::new(&path);
+    if !p.is_dir() {
+        return vec![];
+    }
+    let mut dirs: Vec<String> = std::fs::read_dir(p)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().to_str().map(str::to_string))
+        .collect();
+    dirs.sort();
+    dirs
+}
+
+#[tauri::command]
+pub fn list_pdf_files(path: String) -> Vec<String> {
+    let p = std::path::Path::new(&path);
+    if !p.is_dir() {
+        return vec![];
+    }
+    let mut files: Vec<String> = std::fs::read_dir(p)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            e.path().is_file()
+                && e.path()
+                    .extension()
+                    .map(|x| x.to_ascii_lowercase() == "pdf")
+                    .unwrap_or(false)
+        })
+        .filter_map(|e| e.path().to_str().map(str::to_string))
+        .collect();
+    files.sort();
+    files
+}
+
+#[tauri::command]
+pub fn minimize_window(window: tauri::WebviewWindow) {
+    let _ = window.minimize();
+}
+
+#[tauri::command]
+pub async fn toggle_maximize_window(window: tauri::WebviewWindow) {
+    if window.is_maximized().unwrap_or(false) {
+        let _ = window.unmaximize();
+    } else {
+        let _ = window.maximize();
+    }
+}
+
+#[tauri::command]
 pub fn exit_app() {
     std::process::exit(0);
 }

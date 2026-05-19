@@ -97,18 +97,24 @@ export async function extractPages(paths, pageNums, outputDir, overwrite) {
   })
 }
 
+export async function listDirs(path) {
+  return await invoke('list_dirs', { path })
+}
+
+export async function listPdfFiles(path) {
+  return await invoke('list_pdf_files', { path })
+}
+
 export async function exitApp() {
   return await invoke('exit_app')
 }
 
 export async function minimizeWindow() {
-  const { getCurrentWindow } = await import('@tauri-apps/api/window')
-  return getCurrentWindow().minimize()
+  return await invoke('minimize_window')
 }
 
 export async function toggleMaximizeWindow() {
-  const { getCurrentWindow } = await import('@tauri-apps/api/window')
-  return getCurrentWindow().toggleMaximize()
+  return await invoke('toggle_maximize_window')
 }
 
 export async function pickOutputDir() {

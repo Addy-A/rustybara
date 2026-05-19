@@ -51,8 +51,22 @@
   const cmdBarCommands = [
     { cmd: 'minimize / min / hide', desc: 'Minimize the rbara window' },
     { cmd: 'full / max / maximize', desc: 'Toggle maximize the rbara window' },
-    { cmd: 'csrc::<query>', desc: 'Set color conversion source profile  (inline ICC search, ↑↓ to select)' },
-    { cmd: 'cdst::<query>', desc: 'Set color conversion destination profile  (inline ICC search, ↑↓ to select)' },
+    {
+      cmd: 'csrc::<query>',
+      desc: 'Set color conversion source profile  (inline ICC search, ↑↓ to select, Tab to fill)',
+    },
+    {
+      cmd: 'cdst::<query>',
+      desc: 'Set color conversion destination profile  (inline ICC search, ↑↓ to select, Tab to fill)',
+    },
+    {
+      cmd: '/n::<query>',
+      desc: "Browse output folder starting from active file's directory  (↑↓ to navigate, Tab to drill in, Enter to confirm)",
+    },
+    {
+      cmd: 'f::<query>',
+      desc: "Add a PDF from active file's directory  (↑↓ to select, Tab to fill, Enter to add)",
+    },
     { cmd: 'bd', desc: 'Delete the first buffer' },
     { cmd: 'N bd', desc: 'Delete buffer N  (1-indexed, e.g. 2bd)' },
     { cmd: 'N-M bd', desc: 'Delete a range of buffers  (e.g. 1-3bd)' },
@@ -76,8 +90,14 @@
   ]
 
   const chords = [
-    { chord: 'Ctrl/Cmd + B  →  D', desc: 'Open command bar pre-filled with :bd' },
-    { chord: 'Ctrl/Cmd + B  →  A', desc: 'Open command bar pre-filled with :ba' },
+    {
+      chord: 'Ctrl/Cmd + B  →  D',
+      desc: 'Open command bar pre-filled with :bd',
+    },
+    {
+      chord: 'Ctrl/Cmd + B  →  A',
+      desc: 'Open command bar pre-filled with :ba',
+    },
     { chord: 'Ctrl/Cmd + Q', desc: 'Refresh quip directly (no command bar)' },
     { chord: 'Ctrl/Cmd + /  →  N', desc: 'Pick custom output folder' },
     { chord: 'Ctrl/Cmd + /  →  S', desc: 'Set output → same folder as source' },

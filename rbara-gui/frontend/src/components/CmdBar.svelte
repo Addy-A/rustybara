@@ -1,10 +1,16 @@
 <script>
   import { useAppState } from '../lib/context.js'
-  import { BUILTIN_PROFILES } from '../lib/api.js'
+  import {
+    BUILTIN_PROFILES,
+    listDirs,
+    listPdfFiles,
+    basename,
+  } from '../lib/api.js'
   const app = useAppState()
 
   let inputEl = $state(null)
-  let selectedProfileIdx = $state(0)
+  let optionListEl = $state(null)
+  let selectedOptionIdx = $state(0)
 
   $effect(() => {
     if (app.cmdBarVisible && inputEl) {
@@ -15,8 +21,36 @@
   // All profiles: builtin + custom
   let allProfiles = $derived([
     ...BUILTIN_PROFILES,
-    ...app.customProfiles.map((p) => ({ value: p.name, label: p.description, color_space: p.color_space })),
+    ...app.customProfiles.map((p) => ({
+      value: p.name,
+      label: p.description,
+      color_space: p.color_space,
+    })),
   ])
+
+  // Active file's directory — base for /n:: and f:: searches
+  let activeFileDir = $derived.by(() => {
+    const f = app.files[app.activeFile ?? 0]
+    if (!f) return null
+    const p = f.path
+    const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+    return i >= 0 ? p.slice(0, i) : p
+  })
+
+  function joinPath(base, rel) {
+    if (!rel) return base
+    return base.replace(/[\\/]+$/, '') + '\\' + rel.replace(/\//g, '\\')
+  }
+
+  function getDirQueryParts(query) {
+    const normalized = query.replace(/\\/g, '/')
+    const lastSlash = normalized.lastIndexOf('/')
+    if (lastSlash === -1) return { relParent: '', filter: query }
+    return {
+      relParent: query.slice(0, lastSlash),
+      filter: query.slice(lastSlash + 1),
+    }
+  }
 
   function parseCmd(input) {
     const t = input.trim()
@@ -24,8 +58,10 @@
     const lo = t.toLowerCase()
 
     if (lo === 'q' || lo === 'quit' || lo === 'exit') return { cmd: 'exit' }
-    if (lo === 'minimize' || lo === 'min' || lo === 'hide') return { cmd: 'minimize' }
-    if (lo === 'full' || lo === 'max' || lo === 'maximize') return { cmd: 'maximize' }
+    if (lo === 'minimize' || lo === 'min' || lo === 'hide')
+      return { cmd: 'minimize' }
+    if (lo === 'full' || lo === 'max' || lo === 'maximize')
+      return { cmd: 'maximize' }
     if (lo === 'theme') return { cmd: 'theme' }
     if (lo === '/n') return { cmd: '/n' }
     if (lo === '/s') return { cmd: '/s' }
@@ -38,6 +74,14 @@
     if (csrcMatch) return { cmd: 'csrc', query: csrcMatch[1] }
     const cdstMatch = t.match(/^cdst::(.*)$/i)
     if (cdstMatch) return { cmd: 'cdst', query: cdstMatch[1] }
+
+    // /n:: directory picker (output folder)
+    const ndirMatch = t.match(/^\/n::(.*)$/i)
+    if (ndirMatch) return { cmd: '/n-dir', query: ndirMatch[1] }
+
+    // f:: PDF file picker (add to buffer)
+    const ffileMatch = t.match(/^f::(.*)$/i)
+    if (ffileMatch) return { cmd: 'f-file', query: ffileMatch[1] }
 
     // s (scope current+next) or sN (scope only file N)
     const sMatch = t.match(/^s(\d+)?$/i)
@@ -59,7 +103,6 @@
     const rangeStr = (m[1] ?? '').trim()
     const cmd = m[2].toLowerCase()
     if (cmd === 'ba') return { cmd: 'ba', indices: null }
-    // parse the index list (shared by bd, s, sd)
     const indices = []
     for (const part of rangeStr.split(',')) {
       const p = part.trim()
@@ -76,37 +119,128 @@
     const sorted = [...new Set(indices)].sort((a, b) => a - b)
     if (cmd === 'bd') return { cmd: 'bd', indices: rangeStr ? sorted : [0] }
     if (cmd === 'sd') return { cmd: 'sd', indices: rangeStr ? sorted : null }
-    if (cmd === 's')  return { cmd: 's',  indices: rangeStr ? sorted : null, index: null }
+    if (cmd === 's')
+      return { cmd: 's', indices: rangeStr ? sorted : null, index: null }
     return null
   }
 
   let parsed = $derived(parseCmd(app.cmdBarInput))
 
+  // --- Profile picker (csrc / cdst) ---
   let filteredProfiles = $derived.by(() => {
     if (!parsed || (parsed.cmd !== 'csrc' && parsed.cmd !== 'cdst')) return []
     const q = parsed.query.trim().toLowerCase()
     if (!q) return allProfiles
     return allProfiles.filter(
-      (p) => p.value.toLowerCase().includes(q) || p.label.toLowerCase().includes(q),
+      (p) =>
+        p.value.toLowerCase().includes(q) || p.label.toLowerCase().includes(q),
     )
   })
 
-  // Reset selection index when the filtered list changes
+  // --- Directory picker (/n::) ---
+  let derivedSearchDir = $derived.by(() => {
+    if (!parsed || parsed.cmd !== '/n-dir' || !activeFileDir) return null
+    const { relParent } = getDirQueryParts(parsed.query)
+    return relParent ? joinPath(activeFileDir, relParent) : activeFileDir
+  })
+
+  let dirResults = $state([])
   $effect(() => {
-    filteredProfiles
-    selectedProfileIdx = 0
+    const sd = derivedSearchDir
+    if (!sd) {
+      dirResults = []
+      return
+    }
+    let cancelled = false
+    listDirs(sd)
+      .then((dirs) => {
+        if (!cancelled) dirResults = dirs
+      })
+      .catch(() => {
+        if (!cancelled) dirResults = []
+      })
+    return () => {
+      cancelled = true
+    }
+  })
+
+  let filteredDirs = $derived.by(() => {
+    if (!parsed || parsed.cmd !== '/n-dir') return []
+    const { filter } = getDirQueryParts(parsed.query)
+    const q = filter.toLowerCase()
+    if (!q) return dirResults
+    return dirResults.filter((d) => d.toLowerCase().includes(q))
+  })
+
+  // --- PDF file picker (f::) ---
+  let derivedPdfDir = $derived.by(() => {
+    if (!parsed || parsed.cmd !== 'f-file' || !activeFileDir) return null
+    return activeFileDir
+  })
+
+  let pdfResults = $state([])
+  $effect(() => {
+    const dir = derivedPdfDir
+    if (!dir) {
+      pdfResults = []
+      return
+    }
+    let cancelled = false
+    listPdfFiles(dir)
+      .then((files) => {
+        if (!cancelled) pdfResults = files
+      })
+      .catch(() => {
+        if (!cancelled) pdfResults = []
+      })
+    return () => {
+      cancelled = true
+    }
+  })
+
+  let filteredPdfs = $derived.by(() => {
+    if (!parsed || parsed.cmd !== 'f-file') return []
+    const q = parsed.query.trim().toLowerCase()
+    if (!q) return pdfResults
+    return pdfResults.filter((p) => basename(p).toLowerCase().includes(q))
+  })
+
+  // --- Unified option list ---
+  let activeOptions = $derived.by(() => {
+    if (!parsed) return []
+    if (parsed.cmd === 'csrc' || parsed.cmd === 'cdst') return filteredProfiles
+    if (parsed.cmd === '/n-dir') return filteredDirs
+    if (parsed.cmd === 'f-file') return filteredPdfs
+    return []
+  })
+
+  $effect(() => {
+    activeOptions
+    selectedOptionIdx = 0
+  })
+
+  // Scroll selected option into view
+  $effect(() => {
+    const idx = selectedOptionIdx
+    if (optionListEl) {
+      optionListEl
+        .querySelectorAll('.option-row')
+        [idx]?.scrollIntoView({ block: 'nearest' })
+    }
   })
 
   let previewFiles = $derived.by(() => {
     if (!parsed) return null
     if (parsed.cmd === 'ba') return app.files
-    if (parsed.cmd === 'bd') return parsed.indices.map((i) => app.files[i]).filter(Boolean)
+    if (parsed.cmd === 'bd')
+      return parsed.indices.map((i) => app.files[i]).filter(Boolean)
     if (parsed.cmd === 'v') {
       if (parsed.index != null) return [app.files[parsed.index]].filter(Boolean)
       return app.files.filter((f) => f.scoped)
     }
     if (parsed.cmd === 's') {
-      if (parsed.indices) return parsed.indices.map((i) => app.files[i]).filter(Boolean)
+      if (parsed.indices)
+        return parsed.indices.map((i) => app.files[i]).filter(Boolean)
       if (parsed.index != null) return [app.files[parsed.index]].filter(Boolean)
       const base = app.activeFile ?? 0
       return [app.files[base], app.files[base + 1]].filter(Boolean)
@@ -146,30 +280,79 @@
       case 'csrc':
       case 'cdst':
         return filteredProfiles.length > 0
+      case '/n-dir':
+        return !!activeFileDir
+      case 'f-file':
+        return filteredPdfs.length > 0
       default:
         return false
     }
   })
+
+  const isPickerCmd = $derived(
+    parsed?.cmd === 'csrc' ||
+      parsed?.cmd === 'cdst' ||
+      parsed?.cmd === '/n-dir' ||
+      parsed?.cmd === 'f-file',
+  )
+
+  function fillFromSelection() {
+    if (parsed.cmd === 'csrc' || parsed.cmd === 'cdst') {
+      app.cmdBarInput = `${parsed.cmd}::${filteredProfiles[selectedOptionIdx].value}`
+    } else if (parsed.cmd === '/n-dir') {
+      const { relParent } = getDirQueryParts(parsed.query)
+      const dir = filteredDirs[selectedOptionIdx]
+      app.cmdBarInput = `/n::${relParent ? relParent + '/' + dir : dir}/`
+    } else if (parsed.cmd === 'f-file') {
+      app.cmdBarInput = `f::${basename(filteredPdfs[selectedOptionIdx])}`
+    }
+  }
+
+  function executePickerCmd() {
+    if (parsed.cmd === 'csrc' || parsed.cmd === 'cdst') {
+      app.executeCmdBar({
+        cmd: parsed.cmd,
+        profile: filteredProfiles[selectedOptionIdx].value,
+      })
+    } else if (parsed.cmd === '/n-dir') {
+      if (filteredDirs.length > 0) {
+        const { relParent } = getDirQueryParts(parsed.query)
+        const dir = filteredDirs[selectedOptionIdx]
+        const absPath = joinPath(derivedSearchDir, dir)
+        app.executeCmdBar({ cmd: '/n-dir', path: absPath })
+      } else {
+        // leaf dir — use the current search dir itself
+        app.executeCmdBar({ cmd: '/n-dir', path: derivedSearchDir })
+      }
+    } else if (parsed.cmd === 'f-file') {
+      app.executeCmdBar({
+        cmd: 'f-file',
+        path: filteredPdfs[selectedOptionIdx],
+      })
+    }
+  }
 
   function handleKeydown(e) {
     if (e.key === 'Escape') {
       app.closeCmdBar()
       e.preventDefault()
       e.stopPropagation()
-    } else if ((parsed?.cmd === 'csrc' || parsed?.cmd === 'cdst') && filteredProfiles.length > 0) {
-      if (e.key === 'ArrowDown') {
-        selectedProfileIdx = Math.min(selectedProfileIdx + 1, filteredProfiles.length - 1)
-        e.preventDefault()
-      } else if (e.key === 'ArrowUp') {
-        selectedProfileIdx = Math.max(selectedProfileIdx - 1, 0)
-        e.preventDefault()
-      } else if (e.key === 'Enter') {
-        if (isValid) {
-          app.executeCmdBar({ cmd: parsed.cmd, profile: filteredProfiles[selectedProfileIdx].value })
-        }
-        e.preventDefault()
-        e.stopPropagation()
-      }
+    } else if (isPickerCmd && e.key === 'ArrowDown') {
+      selectedOptionIdx = Math.min(
+        selectedOptionIdx + 1,
+        activeOptions.length - 1,
+      )
+      e.preventDefault()
+    } else if (isPickerCmd && e.key === 'ArrowUp') {
+      selectedOptionIdx = Math.max(selectedOptionIdx - 1, 0)
+      e.preventDefault()
+    } else if (isPickerCmd && e.key === 'Tab') {
+      if (activeOptions.length > 0) fillFromSelection()
+      e.preventDefault()
+    } else if (isPickerCmd && e.key === 'Enter') {
+      if (isValid) executePickerCmd()
+      e.preventDefault()
+      e.stopPropagation()
     } else if (e.key === 'Enter') {
       if (isValid) app.executeCmdBar(parsed)
       e.preventDefault()
@@ -181,7 +364,11 @@
 {#if app.cmdBarVisible}
   <div class="cmdbar">
     {#if app.cmdBarInput.length > 0}
-      <div class="cmdbar-preview" class:valid={isValid} class:invalid={!isValid}>
+      <div
+        class="cmdbar-preview"
+        class:valid={isValid}
+        class:invalid={!isValid}
+      >
         {#if !parsed}
           <span class="text dim">unknown command</span>
         {:else if parsed.cmd === 'nq'}
@@ -193,14 +380,18 @@
         {:else if parsed.cmd === 'exit'}
           <span class="text">close rbara</span>
         {:else if parsed.cmd === 'theme'}
-          <span class="text">toggle theme → {app.theme === 'dark' ? 'light' : 'dark'}</span>
+          <span class="text"
+            >toggle theme → {app.theme === 'dark' ? 'light' : 'dark'}</span
+          >
         {:else if parsed.cmd === '/n'}
           <span class="text">pick custom output folder…</span>
         {:else if parsed.cmd === '/s'}
           <span class="text">set output → same folder as source</span>
         {:else if parsed.cmd === 'sa'}
           <span class="text"
-            >scope all {app.files.length} buffer{app.files.length !== 1 ? 's' : ''}</span
+            >scope all {app.files.length} buffer{app.files.length !== 1
+              ? 's'
+              : ''}</span
           >
         {:else if parsed.cmd === 'sd'}
           {#if parsed.indices}
@@ -227,7 +418,8 @@
             {/each}
           {:else if parsed.index != null}
             <span class="label">scope only:</span>
-            {#each previewFiles as f (f.path)}<span class="file">{f.name}</span>{/each}
+            {#each previewFiles as f (f.path)}<span class="file">{f.name}</span
+              >{/each}
           {:else}
             <span class="label">scope:</span>
             {#each previewFiles as f, i (f.path)}
@@ -238,7 +430,9 @@
         {:else if parsed.cmd === 'v'}
           {#if !isValid}
             <span class="text dim"
-              >{parsed.index != null ? 'file not found' : 'no scoped files'}</span
+              >{parsed.index != null
+                ? 'file not found'
+                : 'no scoped files'}</span
             >
           {:else}
             <span class="label">open viewer:</span>
@@ -252,24 +446,75 @@
             <span class="text dim">no matching profiles</span>
           {:else}
             <span class="label"
-              >{parsed.cmd === 'csrc' ? 'set source profile:' : 'set destination profile:'}</span
+              >{parsed.cmd === 'csrc'
+                ? 'set source profile:'
+                : 'set destination profile:'}</span
             >
-            <div class="profile-list">
-              {#each filteredProfiles.slice(0, 8) as p, i (p.value)}
-                <div class="profile-row" class:sel={i === selectedProfileIdx}>
-                  <span class="profile-cs {p.color_space.toLowerCase()}">{p.color_space}</span>
+            <div class="option-list" bind:this={optionListEl}>
+              {#each filteredProfiles as p, i (p.value)}
+                <div
+                  class="option-row profile-row"
+                  class:sel={i === selectedOptionIdx}
+                >
+                  <span class="profile-cs {p.color_space.toLowerCase()}"
+                    >{p.color_space}</span
+                  >
                   <span class="profile-label">{p.label}</span>
                   <span class="profile-value">{p.value}</span>
                 </div>
               {/each}
-              {#if filteredProfiles.length > 8}
-                <div class="profile-more">+{filteredProfiles.length - 8} more — keep typing to narrow</div>
-              {/if}
+            </div>
+          {/if}
+        {:else if parsed.cmd === '/n-dir'}
+          {#if !activeFileDir}
+            <span class="text dim">no active file — open a PDF first</span>
+          {:else if filteredDirs.length === 0}
+            <span class="label">set output to:</span>
+            <span class="file">{derivedSearchDir ?? activeFileDir}</span>
+            <span class="text dim"
+              >(no subdirectories — press Enter to confirm)</span
+            >
+          {:else}
+            <span class="label">output folder:</span>
+            <div class="option-list" bind:this={optionListEl}>
+              {#each filteredDirs as dir, i (dir)}
+                <div
+                  class="option-row dir-row"
+                  class:sel={i === selectedOptionIdx}
+                >
+                  <span class="dir-icon">⌂</span>
+                  <span class="dir-name">{dir}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        {:else if parsed.cmd === 'f-file'}
+          {#if !activeFileDir}
+            <span class="text dim">no active file — open a PDF first</span>
+          {:else if filteredPdfs.length === 0}
+            <span class="text dim"
+              >{parsed.query
+                ? 'no matching PDFs'
+                : 'no PDFs in active file directory'}</span
+            >
+          {:else}
+            <span class="label">add file:</span>
+            <div class="option-list" bind:this={optionListEl}>
+              {#each filteredPdfs as pdf, i (pdf)}
+                <div
+                  class="option-row pdf-row"
+                  class:sel={i === selectedOptionIdx}
+                >
+                  <span class="pdf-name">{basename(pdf)}</span>
+                </div>
+              {/each}
             </div>
           {/if}
         {:else if parsed.cmd === 'ba'}
           <span class="text"
-            >delete all {app.files.length} buffer{app.files.length !== 1 ? 's' : ''}</span
+            >delete all {app.files.length} buffer{app.files.length !== 1
+              ? 's'
+              : ''}</span
           >
         {:else if previewFiles.length === 0}
           <span class="text dim">no matching buffers</span>
@@ -366,26 +611,33 @@
     padding: 0;
   }
 
-  /* Profile picker */
-  .profile-list {
+  /* Shared option list */
+  .option-list {
     width: 100%;
     display: flex;
     flex-direction: column;
     gap: 1px;
     margin-top: 2px;
+    max-height: 180px;
+    overflow-y: auto;
+    scrollbar-width: none;
   }
-  .profile-row {
+  .option-row {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 3px 6px;
     border-radius: 3px;
     color: var(--muted-hi);
+    cursor: default;
+    flex-shrink: 0;
   }
-  .profile-row.sel {
+  .option-row.sel {
     background: var(--bg);
     color: var(--text);
   }
+
+  /* Profile picker rows */
   .profile-cs {
     font-size: 9px;
     padding: 1px 5px;
@@ -394,23 +646,47 @@
     font-weight: 700;
     letter-spacing: 0.05em;
   }
-  .profile-cs.cmyk { background: #2a1500; color: #f97316; border: 1px solid #4a2500; }
-  .profile-cs.rgb  { background: #0f1e30; color: #60a5fa; border: 1px solid #1e3a5f; }
+  .profile-cs.cmyk {
+    background: #2a1500;
+    color: #f97316;
+    border: 1px solid #4a2500;
+  }
+  .profile-cs.rgb {
+    background: #0f1e30;
+    color: #60a5fa;
+    border: 1px solid #1e3a5f;
+  }
   .profile-label {
     flex: 1;
     font-size: 12px;
   }
-  .profile-row.sel .profile-label {
+  .option-row.sel .profile-label {
     color: var(--orange-hi);
   }
   .profile-value {
     font-size: 10px;
     color: var(--muted);
   }
-  .profile-more {
+
+  /* Directory picker rows */
+  .dir-icon {
     font-size: 10px;
     color: var(--muted);
-    font-style: italic;
-    padding: 2px 6px;
+    flex-shrink: 0;
+  }
+  .dir-name {
+    flex: 1;
+    font-size: 12px;
+  }
+  .option-row.sel .dir-name {
+    color: var(--orange-hi);
+  }
+
+  /* PDF picker rows */
+  .pdf-name {
+    font-size: 12px;
+  }
+  .option-row.sel .pdf-name {
+    color: var(--orange-hi);
   }
 </style>

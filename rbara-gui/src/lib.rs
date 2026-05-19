@@ -5,9 +5,10 @@ use std::sync::Mutex;
 
 use commands::{
     add_trim_box, convert_color_space, exit_app, export_images, extract_pages, flatten_spots,
-    list_custom_profiles, load_icc_profile, load_metadata, load_persisted_profiles,
-    open_file_dialog, open_in_viewer, remap_colors, resize_to_bleed, split_pages, stitch_pages,
-    trim_marks, ProcessingLock, ProfileRegistry,
+    list_custom_profiles, list_dirs, list_pdf_files, load_icc_profile, load_metadata,
+    load_persisted_profiles, minimize_window, open_file_dialog, open_in_viewer, remap_colors,
+    resize_to_bleed, split_pages, stitch_pages, toggle_maximize_window, trim_marks,
+    ProcessingLock, ProfileRegistry,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -37,6 +38,10 @@ pub fn run() {
             open_file_dialog,
             open_in_viewer,
             exit_app,
+            list_dirs,
+            list_pdf_files,
+            minimize_window,
+            toggle_maximize_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running rbara-gui");

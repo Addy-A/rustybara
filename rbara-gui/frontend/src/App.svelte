@@ -239,6 +239,14 @@
     } else if (parsed.cmd === 'cdst') {
       params.toProfile = parsed.profile
       activeAction = 'colorspace'
+    } else if (parsed.cmd === '/n-dir') {
+      closeCmdBar()
+      outputDir = parsed.path
+      return
+    } else if (parsed.cmd === 'f-file') {
+      closeCmdBar()
+      addFilesFromPaths([parsed.path])
+      return
     } else if (parsed.cmd === 'bd') {
       const sorted = [...parsed.indices].sort((a, b) => b - a)
       for (const idx of sorted) removeFile(idx)
