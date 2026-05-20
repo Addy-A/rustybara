@@ -1,11 +1,12 @@
 use crate::pages::PageBoxes;
+use lopdf::content::{Content, Operation};
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 
 pub fn split_pages(src: &Document, panel_width_pts: f64) -> crate::Result<Document> {
     if panel_width_pts <= 0.0 {
         return Err(crate::Error::Io(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput, 
-            "panel width must be positive"
+            std::io::ErrorKind::InvalidInput,
+            "panel width must be positive",
         )));
     }
 
@@ -18,7 +19,6 @@ pub fn split_pages(src: &Document, panel_width_pts: f64) -> crate::Result<Docume
 
     struct SourcePage {
         id: ObjectId,
-        stream_ids: Vec<ObjectId>,
         resources: Option<Object>,
     }
 
@@ -26,13 +26,12 @@ pub fn split_pages(src: &Document, panel_width_pts: f64) -> crate::Result<Docume
         .get_pages()
         .values()
         .map(|&id| {
-            let stream_ids = src.get_page_contents(id);
             let resources = src
                 .get_dictionary(id)
                 .ok()
                 .and_then(|d| d.get(b"Resources").ok())
-                .map(Object::clone);
-                SourcePage { id, stream_ids, resources }
+                .cloned();
+            SourcePage { id, resources }
         })
         .collect();
 
@@ -42,6 +41,11 @@ pub fn split_pages(src: &Document, panel_width_pts: f64) -> crate::Result<Docume
         let boxes = PageBoxes::read(src, sp.id)?;
         let trim = *boxes.trim_or_media();
         let n_panels = ((trim.width / panel_width_pts).ceil() as u32).max(1);
+
+        let source_ops = src
+            .get_and_decode_page_content(sp.id)
+            .map(|c| c.operations)
+            .unwrap_or_default();
 
         for i in 0..n_panels {
             let offset_x = trim.x + i as f64 * panel_width_pts;
@@ -53,37 +57,43 @@ pub fn split_pages(src: &Document, panel_width_pts: f64) -> crate::Result<Docume
 
             let box_arr = box_array(panel_w, trim.height);
 
-            let start_bytes = format!(
-                "q\n0 0 {} {} re W n\n1 0 0 1 {} {} cm\n",
-                pdf_num(panel_w),
-                pdf_num(trim.height),
-                pdf_num(-offset_x),
-                pdf_num(-trim.y),
-            ).into_bytes();
+            let mut ops: Vec<Operation> = Vec::with_capacity(source_ops.len() + 6);
+            ops.push(Operation::new("q", vec![]));
+            ops.push(Operation::new(
+                "re",
+                vec![
+                    Object::Real(0.0_f32),
+                    Object::Real(0.0_f32),
+                    Object::Real(panel_w as f32),
+                    Object::Real(trim.height as f32),
+                ],
+            ));
+            ops.push(Operation::new("W", vec![]));
+            ops.push(Operation::new("n", vec![]));
+            ops.push(Operation::new(
+                "cm",
+                vec![
+                    Object::Real(1.0_f32),
+                    Object::Real(0.0_f32),
+                    Object::Real(0.0_f32),
+                    Object::Real(1.0_f32),
+                    Object::Real(-offset_x as f32),
+                    Object::Real(-trim.y as f32),
+                ],
+            ));
+            ops.extend(source_ops.iter().cloned());
+            ops.push(Operation::new("Q", vec![]));
 
-            let start_id = new_doc.add_object(Object::Stream(Stream::new(
-                Dictionary::new(),
-                start_bytes,
-            )));
-
-            let end_id = new_doc.add_object(Object::Stream(Stream::new(
-                Dictionary::new(),
-                b"Q\n".to_vec(),
-            )));
-
-            let mut contents: Vec<Object> = Vec::with_capacity(sp.stream_ids.len() + 2);
-            contents.push(Object::Reference(start_id));
-            for &oid in &sp.stream_ids {
-                contents.push(Object::Reference(oid));
-            }
-            contents.push(Object::Reference(end_id));
+            let bytes = Content { operations: ops }.encode()?;
+            let stream_id =
+                new_doc.add_object(Object::Stream(Stream::new(Dictionary::new(), bytes)));
 
             let mut page = Dictionary::new();
             page.set("Type", Object::Name(b"Page".to_vec()));
             page.set("Parent", Object::Reference(pages_id));
             page.set("MediaBox", box_arr.clone());
             page.set("TrimBox", box_arr);
-            page.set("Contents", Object::Array(contents));
+            page.set("Contents", Object::Reference(stream_id));
             if let Some(res) = &sp.resources {
                 page.set("Resources", res.clone());
             }
@@ -101,14 +111,6 @@ pub fn split_pages(src: &Document, panel_width_pts: f64) -> crate::Result<Docume
 
     new_doc.prune_objects();
     Ok(new_doc)
-}
-
-fn pdf_num(v: f64) -> String {
-    if v.fract() == 0.0 {
-        return format!("{}", v as i64);
-    }
-    let s = format!("{:.4}", v);
-    s.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
 fn box_array(width: f64, height: f64) -> Object {
@@ -133,10 +135,15 @@ mod tests {
             let page_id = doc.add_object(Object::Dictionary({
                 let mut d = Dictionary::new();
                 d.set("Type", Object::Name(b"Page".to_vec()));
-                d.set("MediaBox", Object::Array(vec![
-                    Object::Real(0.0_f32), Object::Real(0.0_f32),
-                    Object::Real(w as f32), Object::Real(h as f32),
-                ]));
+                d.set(
+                    "MediaBox",
+                    Object::Array(vec![
+                        Object::Real(0.0_f32),
+                        Object::Real(0.0_f32),
+                        Object::Real(w as f32),
+                        Object::Real(h as f32),
+                    ]),
+                );
                 d
             }));
             kid_ids.push(page_id);
@@ -170,13 +177,20 @@ mod tests {
     /// Extract TrimBox [x, y, w_abs, h_abs] from a page dict, or MediaBox as fallback.
     fn page_trim(doc: &Document, page_id: ObjectId) -> [f32; 4] {
         let dict = doc.get_dictionary(page_id).unwrap();
-        let key = if dict.has(b"TrimBox") { b"TrimBox".as_ref() } else { b"MediaBox" };
+        let key = if dict.has(b"TrimBox") {
+            b"TrimBox".as_ref()
+        } else {
+            b"MediaBox"
+        };
         if let Ok(Object::Array(arr)) = dict.get(key) {
-            let nums: Vec<f32> = arr.iter().map(|o| match o {
-                Object::Real(v)    => *v,
-                Object::Integer(v) => *v as f32,
-                _ => 0.0,
-            }).collect();
+            let nums: Vec<f32> = arr
+                .iter()
+                .map(|o| match o {
+                    Object::Real(v) => *v,
+                    Object::Integer(v) => *v as f32,
+                    _ => 0.0,
+                })
+                .collect();
             [nums[0], nums[1], nums[2], nums[3]]
         } else {
             [0.0; 4]
@@ -210,8 +224,16 @@ mod tests {
         assert_eq!(out.get_pages().len(), 2);
         for (&_, &pid) in out.get_pages().iter() {
             let trim = page_trim(&out, pid);
-            assert!((trim[2] - 100.0_f32).abs() < 0.01, "panel width should be 100, got {}", trim[2]);
-            assert!((trim[3] - 100.0_f32).abs() < 0.01, "panel height should be 100, got {}", trim[3]);
+            assert!(
+                (trim[2] - 100.0_f32).abs() < 0.01,
+                "panel width should be 100, got {}",
+                trim[2]
+            );
+            assert!(
+                (trim[3] - 100.0_f32).abs() < 0.01,
+                "panel height should be 100, got {}",
+                trim[3]
+            );
         }
     }
 
@@ -221,11 +243,19 @@ mod tests {
         let doc = make_doc(&[(250.0, 100.0)]);
         let out = split_pages(&doc, 100.0).unwrap();
         assert_eq!(out.get_pages().len(), 3);
-        let widths: Vec<f32> = out.get_pages().values()
+        let widths: Vec<f32> = out
+            .get_pages()
+            .values()
             .map(|&pid| page_trim(&out, pid)[2])
             .collect();
-        let full = widths.iter().filter(|&&w| (w - 100.0_f32).abs() < 0.01).count();
-        let partial = widths.iter().filter(|&&w| (w - 50.0_f32).abs() < 0.01).count();
+        let full = widths
+            .iter()
+            .filter(|&&w| (w - 100.0_f32).abs() < 0.01)
+            .count();
+        let partial = widths
+            .iter()
+            .filter(|&&w| (w - 50.0_f32).abs() < 0.01)
+            .count();
         assert_eq!(full, 2);
         assert_eq!(partial, 1);
     }
@@ -258,7 +288,10 @@ mod tests {
         for (&_, &pid) in out.get_pages().iter() {
             let dict = out.get_dictionary(pid).unwrap();
             if let Ok(Object::Array(arr)) = dict.get(b"Contents") {
-                assert!(arr.len() >= 2, "Contents should have at least start+end wrapper");
+                assert!(
+                    arr.len() >= 2,
+                    "Contents should have at least start+end wrapper"
+                );
             }
         }
     }

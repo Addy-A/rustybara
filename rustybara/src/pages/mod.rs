@@ -13,10 +13,10 @@
 //! - [`set_trim_boxes`] — Add TrimBox entries to all pages by insetting MediaBox
 
 pub mod boxes;
-pub mod split;
+pub mod extract;
 pub mod spread;
 pub mod stitch;
 pub use boxes::{set_trim_boxes, PageBoxes};
-pub use split::extract_pages;
+pub use extract::extract_pages;
 pub use spread::split_pages;
 pub use stitch::stitch_pages;
