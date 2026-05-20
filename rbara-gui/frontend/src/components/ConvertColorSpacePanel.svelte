@@ -1,12 +1,12 @@
 <script>
   import { useAppState } from '../lib/context.js'
-  import { loadIccProfile, BUILTIN_PROFILES } from '../lib/api.js'
+  import { loadIccProfile } from '../lib/api.js'
   import Notice from './Notice.svelte'
   import RunButton from './RunButton.svelte'
   const app = useAppState()
 
-  let cmykProfiles = $derived(BUILTIN_PROFILES.filter((p) => p.color_space === 'CMYK'))
-  let rgbProfiles  = $derived(BUILTIN_PROFILES.filter((p) => p.color_space === 'RGB'))
+  let cmykProfiles = $derived([])
+  let rgbProfiles = $derived([])
 
   const intents = [
     {

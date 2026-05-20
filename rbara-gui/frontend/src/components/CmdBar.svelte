@@ -1,11 +1,6 @@
 <script>
   import { useAppState } from '../lib/context.js'
-  import {
-    BUILTIN_PROFILES,
-    listDirs,
-    listPdfFiles,
-    basename,
-  } from '../lib/api.js'
+  import { listDirs, listPdfFiles, basename } from '../lib/api.js'
   const app = useAppState()
 
   let inputEl = $state(null)
@@ -20,7 +15,6 @@
 
   // All profiles: builtin + custom
   let allProfiles = $derived([
-    ...BUILTIN_PROFILES,
     ...app.customProfiles.map((p) => ({
       value: p.name,
       label: p.description,
