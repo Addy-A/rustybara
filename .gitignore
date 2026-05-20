@@ -5,4 +5,5 @@
 /rbara-gui/frontend/node_modules
 /rbara-gui/resources/
 /rustybara-website/
+/rbara-gui/frontend/dist/
 .env

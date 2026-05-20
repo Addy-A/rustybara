@@ -88,7 +88,7 @@
   let outputHint = $derived.by(() => {
     if (!activeFileObj) return ''
     const stem = activeFileObj.name.replace(/\.pdf$/i, '')
-    const dir = outputDir ? outputDir + '/' : ''
+    const dir = outputDir ? outputDir.replace(/[\\/]+$/, '') + '/' : ''
     if (activeAction === 'splitpages') return `→ ${dir}${stem}_split.pdf`
     if (activeAction === 'stitchpages') return `→ ${dir}${stem}_stitch.pdf`
     if (overwrite) return activeFileObj.name
@@ -205,7 +205,9 @@
       try {
         const dir = await api.pickOutputDir()
         if (dir) outputDir = dir
-      } catch (e) { console.error(e) }
+      } catch (e) {
+        console.error(e)
+      }
       return
     } else if (parsed.cmd === '/s') {
       outputDir = null
@@ -214,25 +216,35 @@
     } else if (parsed.cmd === 'sd') {
       if (parsed.indices) {
         const set = new Set(parsed.indices)
-        files = files.map((f, i) => ({ ...f, scoped: set.has(i) ? false : f.scoped }))
+        files = files.map((f, i) => ({
+          ...f,
+          scoped: set.has(i) ? false : f.scoped,
+        }))
       } else {
         scopeNone()
       }
     } else if (parsed.cmd === 's') {
       if (parsed.indices) {
         const set = new Set(parsed.indices)
-        files = files.map((f, i) => ({ ...f, scoped: set.has(i) ? true : f.scoped }))
+        files = files.map((f, i) => ({
+          ...f,
+          scoped: set.has(i) ? true : f.scoped,
+        }))
       } else if (parsed.index != null) {
         files = files.map((f, i) => ({ ...f, scoped: i === parsed.index }))
       } else {
         const base = activeFile ?? 0
-        files = files.map((f, i) => ({ ...f, scoped: i === base || i === base + 1 }))
+        files = files.map((f, i) => ({
+          ...f,
+          scoped: i === base || i === base + 1,
+        }))
       }
     } else if (parsed.cmd === 'v') {
-      const targets = parsed.index != null
-        ? [files[parsed.index]].filter(Boolean)
-        : files.filter(f => f.scoped)
-      targets.forEach(f => api.openInViewer(f.path).catch(console.error))
+      const targets =
+        parsed.index != null
+          ? [files[parsed.index]].filter(Boolean)
+          : files.filter((f) => f.scoped)
+      targets.forEach((f) => api.openInViewer(f.path).catch(console.error))
     } else if (parsed.cmd === 'csrc') {
       params.fromProfile = parsed.profile
       activeAction = 'colorspace'
@@ -250,6 +262,52 @@
     } else if (parsed.cmd === 'bd') {
       const sorted = [...parsed.indices].sort((a, b) => b - a)
       for (const idx of sorted) removeFile(idx)
+    } else if (parsed.cmd === ':b') {
+      params.trimBoxBleedInches = parsed.isDefault ? 0.125 : parsed.value
+      activeAction = 'addtrimbox'
+    } else if (parsed.cmd === ':r') {
+      params.bleedInches = parsed.isDefault ? 0.125 : parsed.value
+      activeAction = 'resize'
+    } else if (parsed.cmd === ':e') {
+      params.extractPagesInput = parsed.isDefault ? '1' : parsed.value
+      activeAction = 'extractpages'
+    } else if (parsed.cmd === ':x') {
+      if (parsed.fmtDefault || parsed.fmt !== null) {
+        params.exportFormat = parsed.fmtDefault ? 'jpg' : parsed.fmt
+      }
+      if (parsed.dpiDefault || parsed.dpi !== null) {
+        params.exportDpi = parsed.dpiDefault ? 150 : parsed.dpi
+      }
+      activeAction = 'export'
+    } else if (parsed.cmd === ':p') {
+      params.splitPanelInches = parsed.isDefault ? 5.83 : parsed.inches
+      activeAction = 'splitpages'
+    } else if (parsed.cmd === ':g') {
+      params.stitchSpreadInches = parsed.isDefault ? 8.5 : parsed.inches
+      activeAction = 'stitchpages'
+    } else if (parsed.cmd === ':m') {
+      if (parsed.target === 'src') {
+        params.remapFrom = parsed.isDefault
+          ? [1.0, 1.0, 1.0, 1.0]
+          : parsed.modifier === 'p'
+            ? parsed.values.map((v) => v / 100)
+            : parsed.values
+        activeAction = 'remap'
+      } else if (parsed.target === 'dst') {
+        params.remapTo = parsed.isDefault
+          ? [0.6, 0.4, 0.2, 1.0]
+          : parsed.modifier === 'p'
+            ? parsed.values.map((v) => v / 100)
+            : parsed.values
+        activeAction = 'remap'
+      } else if (parsed.target === 'tol') {
+        params.remapTolerance = parsed.isDefault
+          ? 1.0
+          : parsed.modifier === 'p'
+            ? parsed.values / 100
+            : parsed.values
+        activeAction = 'remap'
+      }
     }
     closeCmdBar()
   }
@@ -282,22 +340,32 @@
     const centerX = rects[idx].left + rects[idx].width / 2
     const tops = rects.map((r) => Math.round(r.top))
     if (dir === 'j') {
-      const nextTop = tops.filter((t) => t > curTop).reduce((min, t) => Math.min(min, t), Infinity)
+      const nextTop = tops
+        .filter((t) => t > curTop)
+        .reduce((min, t) => Math.min(min, t), Infinity)
       if (nextTop === Infinity) return idx
       return tops.reduce((best, t, i) => {
         if (t !== nextTop) return best
         const dist = Math.abs(rects[i].left + rects[i].width / 2 - centerX)
         if (best === -1) return i
-        return dist < Math.abs(rects[best].left + rects[best].width / 2 - centerX) ? i : best
+        return dist <
+          Math.abs(rects[best].left + rects[best].width / 2 - centerX)
+          ? i
+          : best
       }, -1)
     } else {
-      const prevTop = tops.filter((t) => t < curTop).reduce((max, t) => Math.max(max, t), -Infinity)
+      const prevTop = tops
+        .filter((t) => t < curTop)
+        .reduce((max, t) => Math.max(max, t), -Infinity)
       if (prevTop === -Infinity) return idx
       return tops.reduce((best, t, i) => {
         if (t !== prevTop) return best
         const dist = Math.abs(rects[i].left + rects[i].width / 2 - centerX)
         if (best === -1) return i
-        return dist < Math.abs(rects[best].left + rects[best].width / 2 - centerX) ? i : best
+        return dist <
+          Math.abs(rects[best].left + rects[best].width / 2 - centerX)
+          ? i
+          : best
       }, -1)
     }
   }
@@ -311,7 +379,9 @@
     else if (dir === 'l') newIdx = Math.min(files.length - 1, activeFile + 1)
     else newIdx = navigateVisual(activeFile, dir)
     selectFile(newIdx)
-    document.querySelectorAll('.file-chip')[newIdx]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    document
+      .querySelectorAll('.file-chip')
+      [newIdx]?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }
 
   // ---------- sidebar category expand state ----------
@@ -331,7 +401,9 @@
 
   // ---------- run actions ----------
   async function replaceProcessedFiles(outputPaths) {
-    const scopedIndices = files.map((f, i) => (f.scoped ? i : -1)).filter((i) => i !== -1)
+    const scopedIndices = files
+      .map((f, i) => (f.scoped ? i : -1))
+      .filter((i) => i !== -1)
     const updated = [...files]
     for (let j = 0; j < scopedIndices.length && j < outputPaths.length; j++) {
       const idx = scopedIndices[j]
@@ -427,11 +499,21 @@
           break
         case 'splitpages':
           actionLabel = 'SplitPages'
-          result = await api.splitPages(paths, params.splitPanelInches * 72, outputDir, overwrite)
+          result = await api.splitPages(
+            paths,
+            params.splitPanelInches * 72,
+            outputDir,
+            overwrite,
+          )
           break
         case 'stitchpages':
           actionLabel = 'StitchPages'
-          result = await api.stitchPages(paths, params.stitchSpreadInches * 72, outputDir, overwrite)
+          result = await api.stitchPages(
+            paths,
+            params.stitchSpreadInches * 72,
+            outputDir,
+            overwrite,
+          )
           break
         case 'extractpages': {
           actionLabel = 'ExtractPages'
@@ -446,7 +528,15 @@
       actionLog = [{ ...result, action: actionLabel }, ...actionLog]
 
       const SWAP_ACTIONS = new Set([
-        'trim', 'resize', 'remap', 'colorspace', 'spots', 'addtrimbox', 'extractpages', 'splitpages', 'stitchpages',
+        'trim',
+        'resize',
+        'remap',
+        'colorspace',
+        'spots',
+        'addtrimbox',
+        'extractpages',
+        'splitpages',
+        'stitchpages',
       ])
       if (SWAP_ACTIONS.has(activeAction) && result.output_paths.length > 0) {
         await replaceProcessedFiles(result.output_paths)
@@ -477,7 +567,9 @@
     if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'b') {
       clearTimeout(chordTimer)
       chordPending = 'b'
-      chordTimer = setTimeout(() => { chordPending = null }, 2000)
+      chordTimer = setTimeout(() => {
+        chordPending = null
+      }, 2000)
       e.preventDefault()
       return
     }
@@ -493,7 +585,9 @@
     if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key === '/') {
       clearTimeout(chordTimer)
       chordPending = '/'
-      chordTimer = setTimeout(() => { chordPending = null }, 2000)
+      chordTimer = setTimeout(() => {
+        chordPending = null
+      }, 2000)
       e.preventDefault()
       return
     }
@@ -506,7 +600,10 @@
         chordPending = null
         if (files.length === 0) return
         const base = activeFile ?? 0
-        files = files.map((f, i) => ({ ...f, scoped: i === base || i === base + 1 }))
+        files = files.map((f, i) => ({
+          ...f,
+          scoped: i === base || i === base + 1,
+        }))
       }, 800)
       e.preventDefault()
       return
@@ -525,8 +622,16 @@
       chordTimer = null
       chordPending = null
       const k = e.key.toLowerCase()
-      if (k === 'd') { openCmdBar('bd'); e.preventDefault(); return }
-      if (k === 'a') { openCmdBar('ba'); e.preventDefault(); return }
+      if (k === 'd') {
+        openCmdBar('bd')
+        e.preventDefault()
+        return
+      }
+      if (k === 'a') {
+        openCmdBar('ba')
+        e.preventDefault()
+        return
+      }
     }
 
     // Chord completion for /: n → pick custom dir, s → same as source
@@ -536,10 +641,20 @@
       chordPending = null
       const k = e.key.toLowerCase()
       if (k === 'n') {
-        api.pickOutputDir().then(dir => { if (dir) outputDir = dir }).catch(console.error)
-        e.preventDefault(); return
+        api
+          .pickOutputDir()
+          .then((dir) => {
+            if (dir) outputDir = dir
+          })
+          .catch(console.error)
+        e.preventDefault()
+        return
       }
-      if (k === 's') { outputDir = null; e.preventDefault(); return }
+      if (k === 's') {
+        outputDir = null
+        e.preventDefault()
+        return
+      }
     }
 
     // Chord completion for s: a → scope all, d → scope none, digit → scope file N
@@ -549,15 +664,28 @@
       chordPending = null
       if (files.length > 0) {
         const k = e.key.toLowerCase()
-        if (k === 'a') { scopeAll(); e.preventDefault(); return }
-        if (k === 'd') { scopeNone(); e.preventDefault(); return }
+        if (k === 'a') {
+          scopeAll()
+          e.preventDefault()
+          return
+        }
+        if (k === 'd') {
+          scopeNone()
+          e.preventDefault()
+          return
+        }
         if (/^\d$/.test(e.key)) {
           const idx = parseInt(e.key, 10) - 1
-          if (idx >= 0) files = files.map((f, i) => ({ ...f, scoped: i === idx }))
-          e.preventDefault(); return
+          if (idx >= 0)
+            files = files.map((f, i) => ({ ...f, scoped: i === idx }))
+          e.preventDefault()
+          return
         }
         const base = activeFile ?? 0
-        files = files.map((f, i) => ({ ...f, scoped: i === base || i === base + 1 }))
+        files = files.map((f, i) => ({
+          ...f,
+          scoped: i === base || i === base + 1,
+        }))
       }
     }
 
@@ -566,7 +694,16 @@
     // Ctrl/Cmd+t/p/c: toggle sidebar category expand
     if ((e.ctrlKey || e.metaKey) && !e.altKey) {
       const k = e.key.toLowerCase()
-      const navDir = { h: 'h', l: 'l', j: 'j', k: 'k', arrowleft: 'h', arrowright: 'l', arrowdown: 'j', arrowup: 'k' }[k]
+      const navDir = {
+        h: 'h',
+        l: 'l',
+        j: 'j',
+        k: 'k',
+        arrowleft: 'h',
+        arrowright: 'l',
+        arrowdown: 'j',
+        arrowup: 'k',
+      }[k]
       if (navDir && files.length > 0) {
         clearTimeout(chordTimer)
         chordTimer = null
@@ -674,7 +811,8 @@
         addFiles()
         break
       case 'v':
-        if (activeFileObj) api.openInViewer(activeFileObj.path).catch(console.error)
+        if (activeFileObj)
+          api.openInViewer(activeFileObj.path).catch(console.error)
         break
       case 'a':
         scopeAll()
@@ -732,7 +870,9 @@
           }
         }),
       )
-      .then((fn) => { unlistenDrop = fn })
+      .then((fn) => {
+        unlistenDrop = fn
+      })
       .catch(() => {})
 
     return () => {
@@ -858,12 +998,24 @@
     scopeAll,
     scopeNone,
     invertScope,
-    get trimExpanded() { return trimExpanded },
-    set trimExpanded(v) { trimExpanded = v },
-    get pagesExpanded() { return pagesExpanded },
-    set pagesExpanded(v) { pagesExpanded = v },
-    get colorExpanded() { return colorExpanded },
-    set colorExpanded(v) { colorExpanded = v },
+    get trimExpanded() {
+      return trimExpanded
+    },
+    set trimExpanded(v) {
+      trimExpanded = v
+    },
+    get pagesExpanded() {
+      return pagesExpanded
+    },
+    set pagesExpanded(v) {
+      pagesExpanded = v
+    },
+    get colorExpanded() {
+      return colorExpanded
+    },
+    set colorExpanded(v) {
+      colorExpanded = v
+    },
   })
 </script>
 
