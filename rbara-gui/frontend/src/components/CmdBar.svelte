@@ -33,7 +33,7 @@
 
   function joinPath(base, rel) {
     if (!rel) return base
-    return base.replace(/[\\/]+$/, '') + '\\' + rel.replace(/\//g, '\\')
+    return base.replace(/[\\/]+$/, '') + '/' + rel.replace(/\\/g, '/')
   }
 
   function getDirQueryParts(query) {
@@ -44,6 +44,256 @@
       relParent: query.slice(0, lastSlash),
       filter: query.slice(lastSlash + 1),
     }
+  }
+
+  // ─── Chord command constants ─────────────────────────────────────────────────
+  const EXPORT_FMTS = ['jpg', 'png', 'webp', 'tiff']
+  const X_METHODS = [
+    { value: 'fmt', sig: '.fmt(format)', hint: 'jpg · png · webp · tiff' },
+    { value: 'dpi', sig: '.dpi(n)', hint: 'export DPI (integer)' },
+  ]
+  const DIM_METHODS = [
+    { value: 'in', sig: '.in(f64)', hint: 'value in inches' },
+    { value: 'mm', sig: '.mm(f64)', hint: 'value in mm  ÷ 25.4' },
+  ]
+  const M_METHODS = [
+    { value: 'src', sig: '.src(C,M,Y,K)', hint: 'remap source colour' },
+    { value: 'dst', sig: '.dst(C,M,Y,K)', hint: 'remap destination colour' },
+    { value: 'tol', sig: '.tol(n)', hint: 'match tolerance  0=exact · 1=any' },
+  ]
+  const M_MODS = [
+    { value: 'p', sig: '.p', hint: 'values as 0–100 percentage' },
+    { value: 'd', sig: '.d', hint: 'values as 0.0–1.0 direct' },
+  ]
+
+  // ─── Chord helpers ────────────────────────────────────────────────────────────
+  /** Split "src(0.5,0.3).d" → ["src(0.5,0.3)", "d"] respecting paren depth */
+  function splitMethodChain(s) {
+    const parts = []
+    let cur = '',
+      depth = 0
+    for (const ch of s) {
+      if (ch === '(') {
+        depth++
+        cur += ch
+      } else if (ch === ')') {
+        depth--
+        cur += ch
+      } else if (ch === '.' && depth === 0) {
+        parts.push(cur)
+        cur = ''
+      } else {
+        cur += ch
+      }
+    }
+    if (cur !== '') parts.push(cur)
+    return parts
+  }
+
+  function parseFloatOrDefault(raw) {
+    if (raw == null) return { present: false, value: null, isDefault: false }
+    const r = raw.trim().toLowerCase()
+    if (r === '') return { present: false, value: null, isDefault: false }
+    if (r === 'd') return { present: true, value: null, isDefault: true }
+    const n = parseFloat(r)
+    return { present: true, value: isNaN(n) ? null : n, isDefault: false }
+  }
+
+  function parseXCmd(raw) {
+    const lo = raw.toLowerCase()
+    if (lo === 'x')
+      return {
+        cmd: ':x',
+        fmt: null,
+        fmtDefault: false,
+        dpi: null,
+        dpiDefault: false,
+        stage: 'methods',
+        activeMeth: null,
+        activeArg: null,
+      }
+    const rest = lo.slice(1)
+    if (!rest.startsWith('.')) return null
+    const segs = splitMethodChain(rest.slice(1))
+    let fmt = null,
+      fmtDefault = false,
+      dpi = null,
+      dpiDefault = false
+    let activeMeth = null,
+      activeArg = null,
+      stage = 'methods'
+    for (let i = 0; i < segs.length; i++) {
+      const seg = segs[i]
+      const pi = seg.indexOf('(')
+      const isLast = i === segs.length - 1
+      if (pi === -1) {
+        if (isLast) {
+          activeMeth = seg
+          stage = 'method-name'
+        }
+      } else {
+        const pj = seg.lastIndexOf(')')
+        const name = seg.slice(0, pi)
+        if (pj > pi) {
+          const arg = seg.slice(pi + 1, pj)
+          if (name === 'fmt') {
+            fmtDefault = arg === 'd'
+            fmt = fmtDefault ? null : arg
+          } else if (name === 'dpi') {
+            dpiDefault = arg === 'd'
+            dpi = dpiDefault ? null : parseInt(arg)
+          }
+          if (isLast) stage = 'methods'
+        } else {
+          activeMeth = name
+          activeArg = seg.slice(pi + 1)
+          stage = 'method-arg'
+        }
+      }
+    }
+    return {
+      cmd: ':x',
+      fmt,
+      fmtDefault,
+      dpi,
+      dpiDefault,
+      stage,
+      activeMeth,
+      activeArg,
+    }
+  }
+
+  function parseDimCmd(cmdName, raw) {
+    const lo = raw.toLowerCase()
+    const letter = cmdName === ':p' ? 'p' : 'g'
+    const defaultVal = cmdName === ':p' ? 5.83 : 8.5
+    if (lo === letter)
+      return {
+        cmd: cmdName,
+        inches: null,
+        isDefault: false,
+        stage: 'methods',
+        activeMeth: null,
+        activeArg: null,
+      }
+    const rest = lo.slice(1)
+    if (!rest.startsWith('.')) return null
+    const segs = splitMethodChain(rest.slice(1))
+    if (segs.length === 0)
+      return {
+        cmd: cmdName,
+        inches: null,
+        isDefault: false,
+        stage: 'methods',
+        activeMeth: null,
+        activeArg: null,
+      }
+    const seg = segs[0]
+    const pi = seg.indexOf('(')
+    if (pi === -1)
+      return {
+        cmd: cmdName,
+        inches: null,
+        isDefault: false,
+        stage: 'method-name',
+        activeMeth: seg,
+        activeArg: null,
+      }
+    const pj = seg.lastIndexOf(')')
+    const name = seg.slice(0, pi)
+    if (pj <= pi)
+      return {
+        cmd: cmdName,
+        inches: null,
+        isDefault: false,
+        stage: 'method-arg',
+        activeMeth: name,
+        activeArg: seg.slice(pi + 1),
+      }
+    const arg = seg.slice(pi + 1, pj)
+    const { value, isDefault } = parseFloatOrDefault(arg)
+    const inches = isDefault
+      ? defaultVal
+      : value !== null
+        ? name === 'mm'
+          ? value / 25.4
+          : value
+        : null
+    return {
+      cmd: cmdName,
+      inches,
+      isDefault,
+      stage: 'complete',
+      activeMeth: name,
+      activeArg: null,
+    }
+  }
+
+  function parseMCmd(raw) {
+    const lo = raw.toLowerCase()
+    const empty = {
+      cmd: ':m',
+      stage: 'methods',
+      activeMeth: null,
+      target: null,
+      values: null,
+      modifier: null,
+      isDefault: false,
+    }
+    if (lo === 'm') return empty
+    const rest = lo.slice(1)
+    if (!rest.startsWith('.')) return null
+    const chain = splitMethodChain(rest.slice(1))
+    if (chain.length === 0) return empty
+    const first = chain[0]
+    const pi = first.indexOf('(')
+    if (pi === -1) return { ...empty, stage: 'method-name', activeMeth: first }
+    const pj = first.lastIndexOf(')')
+    const mname = first.slice(0, pi)
+    if (!['src', 'dst', 'tol'].includes(mname)) return null
+    if (pj <= pi)
+      return {
+        ...empty,
+        stage: 'method-arg',
+        activeMeth: mname,
+        target: mname,
+        activeArg: first.slice(pi + 1),
+      }
+    const argStr = first.slice(pi + 1, pj)
+    const isDefault = argStr === 'd'
+    let values = null
+    if (!isDefault) {
+      if (mname === 'tol') {
+        const n = parseFloat(argStr)
+        values = isNaN(n) ? null : n
+      } else {
+        const parts = argStr.split(',').map((s) => parseFloat(s.trim()))
+        values =
+          parts.length === 4 && parts.every((n) => !isNaN(n)) ? parts : null
+      }
+    }
+    const modifier = chain.length > 1 ? chain[1] : null
+    if (modifier !== null && modifier !== 'p' && modifier !== 'd') return null
+    const needsMod = !isDefault && values !== null
+    const stage = modifier || !needsMod ? 'complete' : 'await-modifier'
+    return {
+      cmd: ':m',
+      stage,
+      activeMeth: mname,
+      target: mname,
+      values,
+      modifier,
+      isDefault,
+    }
+  }
+
+  function reconstructXInput(p) {
+    let s = 'x'
+    if (p.fmt !== null || p.fmtDefault)
+      s += `.fmt(${p.fmtDefault ? 'd' : p.fmt})`
+    if (p.dpi !== null || p.dpiDefault)
+      s += `.dpi(${p.dpiDefault ? 'd' : p.dpi})`
+    return s
   }
 
   function parseCmd(input) {
@@ -89,6 +339,59 @@
     if (vMatch) {
       const n = vMatch[1]
       return { cmd: 'v', index: n != null ? parseInt(n, 10) - 1 : null }
+    }
+
+    // ─── :b  trimBoxBleedInches ──────────────────────────────────────────────
+    // Forms: b  b()  b(1.25)  b1.25  b(d)
+    // Note: bd/ba won't match here — regex requires digit or ( after b.
+    const bMatch = t.match(/^b(?:\(([^)]*)\)|([\d.]+))?$/i)
+    if (bMatch) {
+      const { value, isDefault } = parseFloatOrDefault(bMatch[1] ?? bMatch[2])
+      return { cmd: ':b', value, isDefault }
+    }
+
+    // ─── :r  bleedInches ─────────────────────────────────────────────────────
+    const rMatch = t.match(/^r(?:\(([^)]*)\)|([\d.]+))?$/i)
+    if (rMatch) {
+      const { value, isDefault } = parseFloatOrDefault(rMatch[1] ?? rMatch[2])
+      return { cmd: ':r', value, isDefault }
+    }
+
+    // ─── :e  extractPagesInput ───────────────────────────────────────────────
+    // Forms: e  e()  e(1,3-5,7)  e(d)
+    const eMatch = t.match(/^e(?:\(([^)]*)\)|([0-9,\-\s]+))?$/i)
+    if (eMatch) {
+      const raw = eMatch[1] ?? eMatch[2] ?? null
+      if (raw == null || raw.trim() === '')
+        return { cmd: ':e', value: null, isDefault: false }
+      const er = raw.trim().toLowerCase()
+      if (er === 'd') return { cmd: ':e', value: null, isDefault: true }
+      return { cmd: ':e', value: raw.trim(), isDefault: false }
+    }
+
+    // ─── :x  exportFormat + exportDpi ────────────────────────────────────────
+    if (/^x(\..*|$)/i.test(t)) {
+      const res = parseXCmd(t)
+      if (res) return res
+    }
+
+    // ─── :p  splitPanelInches ────────────────────────────────────────────────
+    if (/^p(\..*|$)/i.test(t)) {
+      const res = parseDimCmd(':p', t)
+      if (res) return res
+    }
+
+    // ─── :g  stitchSpreadInches ──────────────────────────────────────────────
+    if (/^g(\..*|$)/i.test(t)) {
+      const res = parseDimCmd(':g', t)
+      if (res) return res
+    }
+
+    // ─── :m  remap ───────────────────────────────────────────────────────────
+    // min/max/minimize/maximize are caught above as exact matches
+    if (/^m(\..*|$)/i.test(t)) {
+      const res = parseMCmd(t)
+      if (res) return res
     }
 
     // delete / scope range commands: N, N-M, N,M,K  prefix
@@ -205,6 +508,36 @@
     if (parsed.cmd === 'csrc' || parsed.cmd === 'cdst') return filteredProfiles
     if (parsed.cmd === '/n-dir') return filteredDirs
     if (parsed.cmd === 'f-file') return filteredPdfs
+    if (parsed.cmd === ':x') {
+      if (parsed.stage === 'methods' || parsed.stage === 'method-name') {
+        const q = parsed.activeMeth ?? ''
+        return X_METHODS.filter((m) => m.value.startsWith(q))
+      }
+      if (parsed.stage === 'method-arg' && parsed.activeMeth === 'fmt') {
+        const q = (parsed.activeArg ?? '').toLowerCase()
+        return EXPORT_FMTS.filter((f) => f.startsWith(q)).map((f) => ({
+          value: f,
+          sig: f,
+          hint: '',
+        }))
+      }
+      return []
+    }
+    if (parsed.cmd === ':p' || parsed.cmd === ':g') {
+      if (parsed.stage === 'methods' || parsed.stage === 'method-name') {
+        const q = parsed.activeMeth ?? ''
+        return DIM_METHODS.filter((m) => m.value.startsWith(q))
+      }
+      return []
+    }
+    if (parsed.cmd === ':m') {
+      if (parsed.stage === 'methods' || parsed.stage === 'method-name') {
+        const q = parsed.activeMeth ?? ''
+        return M_METHODS.filter((m) => m.value.startsWith(q))
+      }
+      if (parsed.stage === 'await-modifier') return M_MODS
+      return []
+    }
     return []
   })
 
@@ -278,12 +611,52 @@
         return !!activeFileDir
       case 'f-file':
         return filteredPdfs.length > 0
+      case ':b':
+      case ':r':
+        return parsed.value !== null || parsed.isDefault
+      case ':e':
+        return parsed.value !== null || parsed.isDefault
+      case ':x':
+        return (
+          parsed.fmt !== null ||
+          parsed.fmtDefault ||
+          parsed.dpi !== null ||
+          parsed.dpiDefault
+        )
+      case ':p':
+      case ':g':
+        return parsed.inches !== null
+      case ':m':
+        if (parsed.stage !== 'complete') return false
+        return (
+          parsed.isDefault ||
+          (parsed.values !== null && parsed.modifier !== null)
+        )
       default:
         return false
     }
   })
 
+  // Tab / Arrow navigation: all option lists including method pickers
   const isPickerCmd = $derived(
+    parsed?.cmd === 'csrc' ||
+      parsed?.cmd === 'cdst' ||
+      parsed?.cmd === '/n-dir' ||
+      parsed?.cmd === 'f-file' ||
+      (parsed?.cmd === ':x' &&
+        (parsed.stage === 'methods' ||
+          parsed.stage === 'method-name' ||
+          (parsed.stage === 'method-arg' && parsed.activeMeth === 'fmt'))) ||
+      ((parsed?.cmd === ':p' || parsed?.cmd === ':g') &&
+        (parsed.stage === 'methods' || parsed.stage === 'method-name')) ||
+      (parsed?.cmd === ':m' &&
+        (parsed.stage === 'methods' ||
+          parsed.stage === 'method-name' ||
+          parsed.stage === 'await-modifier')),
+  )
+
+  // Enter key selection: only the original value-returning pickers
+  const isEnterPickerCmd = $derived(
     parsed?.cmd === 'csrc' ||
       parsed?.cmd === 'cdst' ||
       parsed?.cmd === '/n-dir' ||
@@ -299,6 +672,31 @@
       app.cmdBarInput = `/n::${relParent ? relParent + '/' + dir : dir}/`
     } else if (parsed.cmd === 'f-file') {
       app.cmdBarInput = `f::${basename(filteredPdfs[selectedOptionIdx])}`
+    } else if (parsed.cmd === ':x') {
+      const opt = activeOptions[selectedOptionIdx]
+      if (parsed.stage === 'method-arg' && parsed.activeMeth === 'fmt') {
+        const updated = {
+          ...parsed,
+          fmt: opt.value,
+          fmtDefault: false,
+          stage: 'methods',
+          activeMeth: null,
+        }
+        app.cmdBarInput = reconstructXInput(updated)
+      } else {
+        app.cmdBarInput = `${reconstructXInput(parsed)}.${opt.value}(`
+      }
+    } else if (parsed.cmd === ':p' || parsed.cmd === ':g') {
+      const letter = parsed.cmd === ':p' ? 'p' : 'g'
+      const opt = activeOptions[selectedOptionIdx]
+      app.cmdBarInput = `${letter}.${opt.value}(`
+    } else if (parsed.cmd === ':m') {
+      const opt = activeOptions[selectedOptionIdx]
+      if (parsed.stage === 'await-modifier') {
+        app.cmdBarInput = app.cmdBarInput.trimEnd() + '.' + opt.value
+      } else {
+        app.cmdBarInput = `m.${opt.value}(`
+      }
     }
   }
 
@@ -323,6 +721,40 @@
         cmd: 'f-file',
         path: filteredPdfs[selectedOptionIdx],
       })
+    } else if (parsed.cmd === ':x') {
+      if (parsed.stage === 'method-arg' && parsed.activeMeth === 'fmt') {
+        const fmt = activeOptions[selectedOptionIdx].value
+        const updated = {
+          ...parsed,
+          fmt,
+          fmtDefault: false,
+          stage: 'methods',
+          activeMeth: null,
+        }
+        if (
+          updated.fmt !== null ||
+          updated.fmtDefault ||
+          updated.dpi !== null ||
+          updated.dpiDefault
+        ) {
+          app.executeCmdBar(updated)
+        } else {
+          app.cmdBarInput = reconstructXInput(updated)
+        }
+      } else {
+        fillFromSelection()
+      }
+    } else if (parsed.cmd === ':p' || parsed.cmd === ':g') {
+      fillFromSelection()
+    } else if (parsed.cmd === ':m') {
+      if (parsed.stage === 'await-modifier') {
+        const opt = activeOptions[selectedOptionIdx]
+        const newInput = app.cmdBarInput.trimEnd() + '.' + opt.value
+        const newParsed = parseCmd(newInput)
+        if (newParsed) app.executeCmdBar(newParsed)
+      } else {
+        fillFromSelection()
+      }
     }
   }
 
@@ -343,7 +775,7 @@
     } else if (isPickerCmd && e.key === 'Tab') {
       if (activeOptions.length > 0) fillFromSelection()
       e.preventDefault()
-    } else if (isPickerCmd && e.key === 'Enter') {
+    } else if (isEnterPickerCmd && e.key === 'Enter') {
       if (isValid) executePickerCmd()
       e.preventDefault()
       e.stopPropagation()
@@ -503,6 +935,223 @@
                 </div>
               {/each}
             </div>
+          {/if}
+        {:else if parsed.cmd === ':b'}
+          {#if parsed.value !== null || parsed.isDefault}
+            <span class="label">trim box bleed →</span>
+            <span class="chord-val"
+              >{parsed.isDefault ? 0.125 : parsed.value} in</span
+            >
+            <span class="text dim">was: {app.params.trimBoxBleedInches} in</span
+            >
+          {:else}
+            <span class="chord-sig">:b(f64|d)</span>
+            <span class="text dim"
+              >set trim box bleed · default 0.125 in · now: {app.params
+                .trimBoxBleedInches} in</span
+            >
+          {/if}
+        {:else if parsed.cmd === ':r'}
+          {#if parsed.value !== null || parsed.isDefault}
+            <span class="label">resize bleed →</span>
+            <span class="chord-val"
+              >{parsed.isDefault ? 0.125 : parsed.value} in</span
+            >
+            <span class="text dim">was: {app.params.bleedInches} in</span>
+          {:else}
+            <span class="chord-sig">:r(f64|d)</span>
+            <span class="text dim"
+              >set resize bleed · default 0.125 in · now: {app.params
+                .bleedInches} in</span
+            >
+          {/if}
+        {:else if parsed.cmd === ':e'}
+          {#if parsed.value !== null || parsed.isDefault}
+            <span class="label">extract pages →</span>
+            <span class="chord-val"
+              >{parsed.isDefault ? '1' : parsed.value}</span
+            >
+            <span class="text dim">was: {app.params.extractPagesInput}</span>
+          {:else}
+            <span class="chord-sig">:e(pages|d)</span>
+            <span class="text dim"
+              >set extract pages · default 1 · now: {app.params
+                .extractPagesInput}</span
+            >
+          {/if}
+        {:else if parsed.cmd === ':x'}
+          {#if activeOptions.length > 0}
+            <span class="label"
+              >{parsed.activeMeth === 'fmt' ? 'format:' : 'export:'}</span
+            >
+            <div class="option-list" bind:this={optionListEl}>
+              {#each activeOptions as opt, i (opt.value)}
+                <div
+                  class="option-row method-row"
+                  class:sel={i === selectedOptionIdx}
+                >
+                  <span class="method-sig">{opt.sig}</span>
+                  {#if opt.hint}<span class="method-hint">{opt.hint}</span>{/if}
+                </div>
+              {/each}
+            </div>
+          {:else if parsed.stage === 'method-arg' && parsed.activeMeth === 'dpi'}
+            <span class="label">.dpi(</span><span class="text dim">integer</span
+            ><span class="label">)</span>
+            <span class="text dim">— now: {app.params.exportDpi}</span>
+          {:else if isValid}
+            {#if parsed.fmt !== null || parsed.fmtDefault}
+              <span class="label">format →</span>
+              <span class="chord-val"
+                >{parsed.fmtDefault ? 'jpg' : parsed.fmt}</span
+              >
+            {/if}
+            {#if parsed.dpi !== null || parsed.dpiDefault}
+              <span class="label">dpi →</span>
+              <span class="chord-val"
+                >{parsed.dpiDefault ? 150 : parsed.dpi}</span
+              >
+            {/if}
+          {:else}
+            <span class="chord-sig">:x.fmt(…).dpi(…)</span>
+            <span class="text dim">set export params</span>
+          {/if}
+        {:else if parsed.cmd === ':p'}
+          {#if activeOptions.length > 0}
+            <span class="label">split panel:</span>
+            <div class="option-list" bind:this={optionListEl}>
+              {#each activeOptions as opt, i (opt.value)}
+                <div
+                  class="option-row method-row"
+                  class:sel={i === selectedOptionIdx}
+                >
+                  <span class="method-sig">{opt.sig}</span>
+                  <span class="method-hint">{opt.hint}</span>
+                </div>
+              {/each}
+            </div>
+          {:else if parsed.stage === 'method-arg'}
+            <span class="label">.{parsed.activeMeth}(</span>
+            <span class="text dim"
+              >{parsed.activeMeth === 'mm' ? 'mm  ÷ 25.4' : 'inches'}</span
+            >
+            <span class="label">)</span>
+            <span class="text dim"
+              >— now: {app.params.splitPanelInches.toFixed(3)} in</span
+            >
+          {:else if parsed.inches !== null}
+            <span class="label">split panel →</span>
+            <span class="chord-val">{parsed.inches.toFixed(3)} in</span>
+            <span class="text dim"
+              >was: {app.params.splitPanelInches.toFixed(3)} in</span
+            >
+          {:else}
+            <span class="chord-sig">:p.in(f64) · :p.mm(f64)</span>
+            <span class="text dim"
+              >set split panel width · now: {app.params.splitPanelInches.toFixed(
+                3,
+              )} in</span
+            >
+          {/if}
+        {:else if parsed.cmd === ':g'}
+          {#if activeOptions.length > 0}
+            <span class="label">stitch spread:</span>
+            <div class="option-list" bind:this={optionListEl}>
+              {#each activeOptions as opt, i (opt.value)}
+                <div
+                  class="option-row method-row"
+                  class:sel={i === selectedOptionIdx}
+                >
+                  <span class="method-sig">{opt.sig}</span>
+                  <span class="method-hint">{opt.hint}</span>
+                </div>
+              {/each}
+            </div>
+          {:else if parsed.stage === 'method-arg'}
+            <span class="label">.{parsed.activeMeth}(</span>
+            <span class="text dim"
+              >{parsed.activeMeth === 'mm' ? 'mm  ÷ 25.4' : 'inches'}</span
+            >
+            <span class="label">)</span>
+            <span class="text dim"
+              >— now: {app.params.stitchSpreadInches.toFixed(3)} in</span
+            >
+          {:else if parsed.inches !== null}
+            <span class="label">stitch spread →</span>
+            <span class="chord-val">{parsed.inches.toFixed(3)} in</span>
+            <span class="text dim"
+              >was: {app.params.stitchSpreadInches.toFixed(3)} in</span
+            >
+          {:else}
+            <span class="chord-sig">:g.in(f64) · :g.mm(f64)</span>
+            <span class="text dim"
+              >set stitch spread width · now: {app.params.stitchSpreadInches.toFixed(
+                3,
+              )} in</span
+            >
+          {/if}
+        {:else if parsed.cmd === ':m'}
+          {#if activeOptions.length > 0}
+            <span class="label"
+              >{parsed.stage === 'await-modifier'
+                ? 'modifier:'
+                : 'remap:'}</span
+            >
+            <div class="option-list" bind:this={optionListEl}>
+              {#each activeOptions as opt, i (opt.value)}
+                <div
+                  class="option-row method-row"
+                  class:sel={i === selectedOptionIdx}
+                >
+                  <span class="method-sig">{opt.sig}</span>
+                  <span class="method-hint">{opt.hint}</span>
+                </div>
+              {/each}
+            </div>
+          {:else if parsed.stage === 'method-arg'}
+            <span class="label">.{parsed.activeMeth}(</span>
+            <span class="text dim"
+              >{parsed.target === 'tol' ? 'n' : 'C, M, Y, K'}</span
+            >
+            <span class="label">)</span>
+            {#if parsed.target !== 'tol'}<span class="text dim">
+                — then .p or .d</span
+              >{/if}
+          {:else if isValid}
+            {#if parsed.target === 'src' || parsed.target === 'dst'}
+              <span class="label"
+                >{parsed.target === 'src' ? 'remap from →' : 'remap to →'}</span
+              >
+              {#if parsed.isDefault}
+                <span class="chord-val">default</span>
+              {:else}
+                <span class="chord-val"
+                  >{(parsed.modifier === 'p'
+                    ? parsed.values.map((v) => v / 100)
+                    : parsed.values
+                  )
+                    .map((v) => v.toFixed(2))
+                    .join(', ')}</span
+                >
+              {/if}
+            {:else if parsed.target === 'tol'}
+              <span class="label">tolerance →</span>
+              {#if parsed.isDefault}
+                <span class="chord-val">default (1.0)</span>
+              {:else}
+                <span class="chord-val"
+                  >{(parsed.modifier === 'p'
+                    ? parsed.values / 100
+                    : parsed.values
+                  ).toFixed(3)}</span
+                >
+              {/if}
+            {/if}
+          {:else}
+            <span class="chord-sig">:m.src/.dst/.tol(…).p|.d</span>
+            <span class="text dim"
+              >set remap source · destination · tolerance</span
+            >
           {/if}
         {:else if parsed.cmd === 'ba'}
           <span class="text"
@@ -682,5 +1331,36 @@
   }
   .option-row.sel .pdf-name {
     color: var(--orange-hi);
+  }
+
+  /* Chord command styles */
+  .chord-sig {
+    color: var(--orange-hi);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+  }
+  .chord-val {
+    color: var(--orange-hi);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0 4px;
+    font-size: 12px;
+  }
+  .method-sig {
+    color: var(--orange-hi);
+    font-size: 12px;
+    min-width: 150px;
+    flex-shrink: 0;
+  }
+  .method-hint {
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .option-row.sel .method-sig {
+    color: var(--text);
+  }
+  .option-row.sel .method-hint {
+    opacity: 0.8;
   }
 </style>

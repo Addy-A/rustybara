@@ -67,6 +67,42 @@
       cmd: 'f::<query>',
       desc: "Add a PDF from active file's directory  (↑↓ to select, Tab to fill, Enter to add)",
     },
+    {
+      cmd: 'b(f64 | d)',
+      desc: 'Set trim box bleed in inches. Bare :b shows current value. d resets to default (0.125 in). Also accepts bare shorthand: b0.125',
+    },
+    {
+      cmd: 'r(f64 | d)',
+      desc: 'Set resize bleed in inches. d resets to default (0.125 in).',
+    },
+    {
+      cmd: 'e(pages | d)',
+      desc: 'Set extract pages pattern — e.g. 1,3-5,7. d resets to default (1). Also accepts bare shorthand: e1,3-5',
+    },
+    {
+      cmd: 'x  ·  x.fmt(format)  ·  x.dpi(n)',
+      desc: 'Set export image format and/or DPI. Bare :x shows method list (↑↓ Tab to pick). Methods chain in any order; last value wins for duplicates. d resets a method to its default.',
+    },
+    {
+      cmd: 'p.in(f64)  ·  p.mm(f64)',
+      desc: 'Set split panel width. Bare :p shows unit picker (↑↓ Tab). mm values are auto-divided by 25.4. d resets to default (5.83 in).',
+    },
+    {
+      cmd: 'g.in(f64)  ·  g.mm(f64)',
+      desc: 'Set stitch spread width. Same unit options as :p. d resets to default (8.5 in).',
+    },
+    {
+      cmd: 'm.src(C,M,Y,K).p | .d',
+      desc: 'Set remap source CMYK colour. .p = values as 0–100 %, .d = values as 0.0–1.0. Bare :m shows method picker (↑↓ Tab). d as the argument resets to default with no modifier needed.',
+    },
+    {
+      cmd: 'm.dst(C,M,Y,K).p | .d',
+      desc: 'Set remap destination CMYK colour.',
+    },
+    {
+      cmd: 'm.tol(n).p | .d',
+      desc: 'Set remap match tolerance. 0 = exact pixel match only, 1 = remap every pixel.',
+    },
     { cmd: 'bd', desc: 'Delete the first buffer' },
     { cmd: 'N bd', desc: 'Delete buffer N  (1-indexed, e.g. 2bd)' },
     { cmd: 'N-M bd', desc: 'Delete a range of buffers  (e.g. 1-3bd)' },
@@ -106,6 +142,63 @@
     { chord: 'Ctrl/Cmd + S  →  [1-9]', desc: 'Scope only file at position N' },
     { chord: 'Ctrl/Cmd + S  (alone)', desc: 'Scope active file + next file' },
     { chord: 'Ctrl/Cmd + V', desc: 'Open :v command bar (viewer preview)' },
+  ]
+
+  const types = [
+    {
+      name: 'f64',
+      title: 'Decimal number',
+      desc: 'Any number, with or without a decimal point. Used for measurements in inches and for colour channel values.',
+      examples: ['0.125', '5.83', '0.5', '1'],
+    },
+    {
+      name: 'u32',
+      title: 'Whole number',
+      desc: 'A positive integer with no decimal point. Used for export DPI (dots per inch).',
+      examples: ['72', '150', '300'],
+    },
+    {
+      name: 'pages',
+      title: 'Page range pattern',
+      desc: 'Selects which pages to include. Mix individual numbers, comma-separated lists, and dash ranges freely.',
+      examples: ['1', '1,3,5', '2-4', '1,3-5,7'],
+    },
+    {
+      name: 'format',
+      title: 'Image format',
+      desc: 'The container format used when exporting pages as raster images. Only these four values are valid.',
+      examples: ['jpg', 'png', 'webp', 'tiff'],
+    },
+    {
+      name: 'C,M,Y,K',
+      title: 'CMYK colour',
+      desc: 'Four values for Cyan, Magenta, Yellow, and Black ink channels, separated by commas. Use the .p modifier for 0–100 % input or .d for 0.0–1.0 direct input — both map to the same internal colour.',
+      examples: ['0,0,0,100  (.p → solid black)', '0.6,0.4,0.2,1.0  (.d)'],
+    },
+    {
+      name: 'n  (tolerance)',
+      title: 'Tolerance value',
+      desc: 'A decimal controlling how loosely a pixel must match the source colour before being remapped. 0 = exact match only; 1 = remap every pixel regardless of colour.',
+      examples: ['0', '0.05', '0.5', '1'],
+    },
+    {
+      name: 'd',
+      title: 'Default keyword',
+      desc: 'The literal letter d used as an argument value. Resets that parameter to its built-in default — no number required. Works in every command that accepts a numeric or text value.',
+      examples: [':b(d)', ':r(d)', ':x.fmt(d).dpi(d)', ':m.src(d)'],
+    },
+    {
+      name: '.p',
+      title: 'Percentage modifier',
+      desc: 'Appended after a CMYK method call. Interprets the four channel values as 0–100 % and converts them to 0.0–1.0 before saving.',
+      examples: [':m.src(100,0,0,0).p'],
+    },
+    {
+      name: '.d',
+      title: 'Direct modifier',
+      desc: 'Appended after a CMYK method call. Interprets the four channel values as 0.0–1.0 directly — no conversion is applied.',
+      examples: [':m.dst(0.6,0.4,0.2,1.0).d'],
+    },
   ]
 
   let q = $derived(search.trim().toLowerCase())
@@ -159,6 +252,14 @@
         class:active={page === 'cmdbar'}
         onclick={() => (page = 'cmdbar')}>Command Bar</button
       >
+      <button
+        class="tab"
+        class:active={page === 'types'}
+        onclick={() => {
+          page = 'types'
+          search = ''
+        }}>Types</button
+      >
     </div>
 
     {#if page === 'shortcuts'}
@@ -178,7 +279,7 @@
           <div class="label">{label}</div>
         {/each}
       </div>
-    {:else}
+    {:else if page === 'cmdbar'}
       <p class="desc">
         Press <kbd>:</kbd> anywhere to enter command mode. Type a command and
         press
@@ -227,6 +328,23 @@
           </div>
         {/if}
       {/if}
+    {:else if page === 'types'}
+      <div class="types-list">
+        {#each types as t}
+          <div class="type-card">
+            <div class="type-header">
+              <code class="type-name">{t.name}</code>
+              <span class="type-title">{t.title}</span>
+            </div>
+            <p class="type-desc">{t.desc}</p>
+            <div class="type-examples">
+              {#each t.examples as ex}
+                <code class="type-ex">{ex}</code>
+              {/each}
+            </div>
+          </div>
+        {/each}
+      </div>
     {/if}
 
     <button class="close" onclick={close}>Close</button>
@@ -421,6 +539,62 @@
     color: var(--muted);
     font-size: 12px;
     font-style: italic;
+  }
+
+  /* types page */
+  .types-list {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .type-card {
+    padding: 11px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .type-card:last-child {
+    border-bottom: none;
+  }
+  .type-header {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+  .type-name {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--orange-hi);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    padding: 1px 6px;
+    border-radius: 3px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .type-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .type-desc {
+    font-size: 11.5px;
+    color: var(--muted-hi);
+    line-height: 1.55;
+    margin: 0 0 7px;
+  }
+  .type-examples {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .type-ex {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--orange);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
   }
 
   /* footer */
