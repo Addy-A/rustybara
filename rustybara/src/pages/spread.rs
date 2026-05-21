@@ -39,8 +39,14 @@ pub fn split_pages(src: &Document, panel_width_pts: f64) -> crate::Result<Docume
 
     for sp in &source_pages {
         let boxes = PageBoxes::read(src, sp.id)?;
+        let media = boxes.media_box;
         let trim = *boxes.trim_or_media();
         let n_panels = ((trim.width / panel_width_pts).ceil() as u32).max(1);
+
+        // Bleed margins: how much the MediaBox extends beyond the TrimBox on each side.
+        // Zero when no TrimBox is present (trim == media).
+        let left_bleed = trim.x - media.x;
+        let right_bleed = media.right() - trim.right();
 
         let source_ops = src
             .get_and_decode_page_content(sp.id)
@@ -48,51 +54,59 @@ pub fn split_pages(src: &Document, panel_width_pts: f64) -> crate::Result<Docume
             .unwrap_or_default();
 
         for i in 0..n_panels {
-            let offset_x = trim.x + i as f64 * panel_width_pts;
+            let offset_x = i as f64 * panel_width_pts;
+            let panel_min_x = trim.x + offset_x;
             let panel_w = if i < n_panels - 1 {
                 panel_width_pts
             } else {
-                trim.right() - offset_x
+                trim.right() - panel_min_x
             };
 
-            let box_arr = box_array(panel_w, trim.height);
+            let panel_max_x = panel_min_x + panel_w;
 
-            let mut ops: Vec<Operation> = Vec::with_capacity(source_ops.len() + 6);
+            // Expand each panel's bounds by the bleed margin on all sides so the
+            // output MediaBox carries the bleed area from the source spread.
+            let panel_media_x_min = panel_min_x - left_bleed;
+            let panel_media_x_max = panel_max_x + right_bleed;
+            let panel_media_w = panel_media_x_max - panel_media_x_min;
+
+            let mut ops: Vec<Operation> = Vec::with_capacity(source_ops.len() + 5);
             ops.push(Operation::new("q", vec![]));
             ops.push(Operation::new(
                 "re",
                 vec![
-                    Object::Real(0.0_f32),
-                    Object::Real(0.0_f32),
-                    Object::Real(panel_w as f32),
-                    Object::Real(trim.height as f32),
+                    Object::Real(panel_media_x_min as f32),
+                    Object::Real(media.y as f32),
+                    Object::Real(panel_media_w as f32),
+                    Object::Real(media.height as f32),
                 ],
             ));
             ops.push(Operation::new("W", vec![]));
             ops.push(Operation::new("n", vec![]));
-            ops.push(Operation::new(
-                "cm",
-                vec![
-                    Object::Real(1.0_f32),
-                    Object::Real(0.0_f32),
-                    Object::Real(0.0_f32),
-                    Object::Real(1.0_f32),
-                    Object::Real(-offset_x as f32),
-                    Object::Real(-trim.y as f32),
-                ],
-            ));
             ops.extend(source_ops.iter().cloned());
             ops.push(Operation::new("Q", vec![]));
 
             let bytes = Content { operations: ops }.encode()?;
+            let mut stream = Stream::new(Dictionary::new(), bytes);
+            stream.compress()?;
             let stream_id =
-                new_doc.add_object(Object::Stream(Stream::new(Dictionary::new(), bytes)));
+                new_doc.add_object(Object::Stream(stream));
 
             let mut page = Dictionary::new();
             page.set("Type", Object::Name(b"Page".to_vec()));
             page.set("Parent", Object::Reference(pages_id));
-            page.set("MediaBox", box_arr.clone());
-            page.set("TrimBox", box_arr);
+            page.set("MediaBox", Object::Array(vec![
+                Object::Real(panel_media_x_min as f32),
+                Object::Real(media.y as f32),
+                Object::Real(panel_media_x_max as f32),
+                Object::Real(media.top() as f32),
+            ]));
+            page.set("TrimBox", Object::Array(vec![
+                Object::Real(panel_min_x as f32),
+                Object::Real(trim.y as f32),
+                Object::Real(panel_max_x as f32),
+                Object::Real(trim.top() as f32),
+            ]));
             page.set("Contents", Object::Reference(stream_id));
             if let Some(res) = &sp.resources {
                 page.set("Resources", res.clone());
@@ -111,15 +125,6 @@ pub fn split_pages(src: &Document, panel_width_pts: f64) -> crate::Result<Docume
 
     new_doc.prune_objects();
     Ok(new_doc)
-}
-
-fn box_array(width: f64, height: f64) -> Object {
-    Object::Array(vec![
-        Object::Real(0.0_f32),
-        Object::Real(0.0_f32),
-        Object::Real(width as f32),
-        Object::Real(height as f32),
-    ])
 }
 
 #[cfg(test)]
@@ -224,15 +229,17 @@ mod tests {
         assert_eq!(out.get_pages().len(), 2);
         for (&_, &pid) in out.get_pages().iter() {
             let trim = page_trim(&out, pid);
+            let w = trim[2] - trim[0]; // right - left
+            let h = trim[3] - trim[1]; // top - bottom
             assert!(
-                (trim[2] - 100.0_f32).abs() < 0.01,
+                (w - 100.0_f32).abs() < 0.01,
                 "panel width should be 100, got {}",
-                trim[2]
+                w
             );
             assert!(
-                (trim[3] - 100.0_f32).abs() < 0.01,
+                (h - 100.0_f32).abs() < 0.01,
                 "panel height should be 100, got {}",
-                trim[3]
+                h
             );
         }
     }
@@ -246,7 +253,10 @@ mod tests {
         let widths: Vec<f32> = out
             .get_pages()
             .values()
-            .map(|&pid| page_trim(&out, pid)[2])
+            .map(|&pid| {
+                let trim = page_trim(&out, pid);
+                trim[2] - trim[0]
+            })
             .collect();
         let full = widths
             .iter()
@@ -287,12 +297,10 @@ mod tests {
         let out = split_pages(&doc, 100.0).unwrap();
         for (&_, &pid) in out.get_pages().iter() {
             let dict = out.get_dictionary(pid).unwrap();
-            if let Ok(Object::Array(arr)) = dict.get(b"Contents") {
                 assert!(
-                    arr.len() >= 2,
+                    matches!(dict.get(b"Contents"), Ok(Object::Reference(_))),
                     "Contents should have at least start+end wrapper"
                 );
-            }
         }
     }
 
