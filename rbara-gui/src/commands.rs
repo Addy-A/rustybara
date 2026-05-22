@@ -465,19 +465,26 @@ pub fn flatten_spots(
     paths: Vec<String>,
     output_dir: Option<String>,
     overwrite: bool,
+    icc_profile: Option<String>,
     state: State<'_, ProcessingLock>,
+    profiles: State<'_, ProfileRegistry>,
 ) -> Result<ActionResult, String> {
     let _guard = LockGuard::acquire(&state.0)?;
     let output_dir = output_dir.map(PathBuf::from);
     let mut output_paths = Vec::new();
     let mut total_spots = 0u32;
 
+    let dst_bytes: Option<Arc<[u8]>> = match &icc_profile {
+        Some(name) => Some(resolve_profile_bytes(name, &profiles)?),
+        None => None,
+    };
+
     for path_str in &paths {
         let path = PathBuf::from(path_str);
         let out = output_path(&path, &output_dir, None, overwrite);
         let spots = PdfPipeline::open(&path)
             .and_then(|mut p| {
-                let n = p.flatten_spots()?;
+                let n = p.flatten_spots_with_icc(dst_bytes.as_deref())?;
                 p.save_pdf(&out)?;
                 Ok(n)
             })

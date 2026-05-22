@@ -352,7 +352,19 @@ impl PdfPipeline {
     #[cfg(feature = "color")]
     pub fn flatten_spots(&mut self) -> crate::Result<u32> {
         use rustybara_icc::pdf::flatten_spot_colors;
-        Ok(flatten_spot_colors(&mut self.doc)?)
+        use rustybara_icc::RenderingIntent;
+        Ok(flatten_spot_colors(&mut self.doc, None, RenderingIntent::RelativeColorimetric)?)
+    }
+
+    /// Flattens spot colors using the supplied ICC destination profile bytes.
+    ///
+    /// When `dst_icc` is `Some`, Lab alternate-space values are converted to CMYK using
+    /// that profile. When `None`, falls back to the bundled US Web Coated SWOP v2 profile.
+    #[cfg(feature = "color")]
+    pub fn flatten_spots_with_icc(&mut self, dst_icc: Option<&[u8]>) -> crate::Result<u32> {
+        use rustybara_icc::pdf::flatten_spot_colors;
+        use rustybara_icc::RenderingIntent;
+        Ok(flatten_spot_colors(&mut self.doc, dst_icc, RenderingIntent::RelativeColorimetric)?)
     }
 
     /// Applies an ICC color space conversion to every page in the document.
