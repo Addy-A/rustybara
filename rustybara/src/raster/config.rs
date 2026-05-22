@@ -13,6 +13,7 @@
 ///     render_form_data: false,
 /// };
 /// ```
+#[derive(Clone)]
 pub struct RenderConfig {
     pub dpi: u32,
     pub render_annotations: bool,

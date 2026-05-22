@@ -1,492 +1,388 @@
+use crate::renderer::{image_to_skia, SkiaRenderer};
+use image::DynamicImage;
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use rustybara::raster::RenderConfig;
+use rustybara::PdfPipeline;
 use std::path::PathBuf;
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
-use winit::event_loop::ActiveEventLoop;
-use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{WindowAttributes, WindowId};
+use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
+use winit::window::{Window, WindowId};
 
-const SHADER: &str = r#"
-struct Aspect {
-    image:  f32,
-    window: f32,
-    _pad0:  f32,
-    _pad1:  f32,
+pub enum ViewerEvent {
+    PreviewReady { page: u32, image: DynamicImage },
+    PageReady { page: u32, image: DynamicImage },
+    FileChanged,
 }
 
-@group(1) @binding(0) var<uniform> u_aspect: Aspect;
-
-struct VsOut {
-    @builtin(position) pos: vec4<f32>,
-    @location(0)       uv:  vec2<f32>,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
-    var pos = array<vec2<f32>, 6>(
-        vec2(-1.0, -1.0), vec2( 1.0, -1.0), vec2(-1.0,  1.0),
-        vec2( 1.0, -1.0), vec2( 1.0,  1.0), vec2(-1.0,  1.0),
-    );
-    var uv = array<vec2<f32>, 6>(
-        vec2(0.0, 1.0), vec2(1.0, 1.0), vec2(0.0, 0.0),
-        vec2(1.0, 1.0), vec2(1.0, 0.0), vec2(0.0, 0.0),
-    );
-    let ia = u_aspect.image;
-    let wa = u_aspect.window;
-    var scale: vec2<f32>;
-    if ia > wa {
-        scale = vec2(1.0, wa / ia);
-    } else {
-        scale = vec2(ia / wa, 1.0);
-    }
-    var out: VsOut;
-    out.pos = vec4(pos[vi] * scale, 0.0, 1.0);
-    out.uv  = uv[vi];
-    return out;
-}
-
-@group(0) @binding(0) var t_pdf: texture_2d<f32>;
-@group(0) @binding(1) var s_pdf: sampler;
-
-@fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    return textureSample(t_pdf, s_pdf, in.uv);
-}
-"#;
-
-#[repr(C)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Clone, Copy)]
-struct AspectUniform {
-    image:  f32,
-    window: f32,
-    _pad:   [f32; 2],
+struct SkiaState {
+    window: Arc<Window>,
+    renderer: SkiaRenderer,
+    page_image: Option<skia_safe::Image>,
+    width: u32,
+    height: u32,
 }
 
 struct Viewer {
-    path:       PathBuf,
-    page:       u32,
-    page_count: u32,
-    config:     rustybara::raster::RenderConfig,
-    image:      image::DynamicImage,
-    gpu:        Option<GpuState>,
-    digit_buf:  String,
-}
-
-struct GpuState {
-    window:       Arc<winit::window::Window>,
-    surface:      wgpu::Surface<'static>,
-    device:       wgpu::Device,
-    queue:        wgpu::Queue,
-    config:       wgpu::SurfaceConfiguration,
-    pipeline:     wgpu::RenderPipeline,
-    bgl:          wgpu::BindGroupLayout,
-    sampler:      wgpu::Sampler,
-    bind_group:   wgpu::BindGroup,
-    aspect_buf:   wgpu::Buffer,
-    aspect_bg:    wgpu::BindGroup,
-    image_aspect: f32,
-}
-
-impl GpuState {
-    fn write_aspect(&self, win_w: u32, win_h: u32) {
-        let data = AspectUniform {
-            image:  self.image_aspect,
-            window: win_w as f32 / win_h as f32,
-            _pad:   [0.0; 2],
-        };
-        self.queue.write_buffer(&self.aspect_buf, 0, bytemuck::bytes_of(&data));
-    }
-
-    fn reload_texture(&mut self, image: &image::DynamicImage) {
-        let texture = crate::texture::upload(&self.device, &self.queue, image);
-        let tex_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label:   None,
-            layout:  &self.bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding:  0,
-                    resource: wgpu::BindingResource::TextureView(&tex_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding:  1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-        self.image_aspect = image.width() as f32 / image.height() as f32;
-    }
+    file: PathBuf,
+    pipeline: Arc<PdfPipeline>,
+    page: u32,
+    config: RenderConfig,
+    state: Option<SkiaState>,
+    pending_image: Option<DynamicImage>,
+    zoom: f32,
+    pan: [f32; 2],
+    ctrl_held: bool,
+    cursor_pos: [f32; 2],
+    drag_origin: Option<([f32; 2], [f32; 2])>,
+    _watcher: RecommendedWatcher,
+    proxy: EventLoopProxy<ViewerEvent>,
 }
 
 impl Viewer {
-    fn title(&self) -> String {
-        let name = self.path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy();
-        format!("{name}  [{}/{}]", self.page + 1, self.page_count)
+    fn apply_zoom(&mut self, factor: f32, focal: Option<[f32; 2]>, win_w: f32, win_h: f32) {
+        let old_zoom = self.zoom;
+        self.zoom = (self.zoom * factor).clamp(0.05, 50.0);
+        let r = self.zoom / old_zoom;
+        let (cx, cy) = match focal {
+            Some([x, y]) => (x, y),
+            None => (win_w / 2.0, win_h / 2.0),
+        };
+        self.pan[0] = self.pan[0] * r + (cx - win_w / 2.0) * (1.0 - r);
+        self.pan[1] = self.pan[1] * r + (cy - win_h / 2.0) * (1.0 - r);
     }
 
-    fn reload_current_page(&mut self) {
-        if let Ok(new_image) = rustybara::PdfPipeline::open(&self.path)
-            .and_then(|p| p.render_page(self.page, &self.config))
-        {
-            self.image = new_image;
-            let title = self.title();
-            if let Some(gpu) = &mut self.gpu {
-                gpu.reload_texture(&self.image);
-                let (w, h) = (gpu.config.width, gpu.config.height);
-                gpu.write_aspect(w, h);
-                gpu.window.set_title(&title);
-                gpu.window.request_redraw();
+    fn spawn_render(&self, page: u32) {
+        let pipeline = self.pipeline.clone();
+        let proxy = self.proxy.clone();
+        let preview = RenderConfig {
+            dpi: 72,
+            ..self.config.clone()
+        };
+        let full = self.config.clone();
+        std::thread::spawn(move || {
+            if let Ok(img) = pipeline.render_page(page, &preview) {
+                let _ = proxy.send_event(ViewerEvent::PreviewReady { page, image: img });
             }
-        }
-    }
-
-    fn go_to_page(&mut self, page: u32) {
-        if page < self.page_count && page != self.page {
-            self.page = page;
-            self.reload_current_page();
-        }
-    }
-
-    fn consume_digit_buf(&mut self) -> Option<u32> {
-        if self.digit_buf.is_empty() {
-            return None;
-        }
-        let n = self.digit_buf.parse::<u32>().ok();
-        self.digit_buf.clear();
-        n
+            if let Ok(img) = pipeline.render_page(page, &full) {
+                let _ = proxy.send_event(ViewerEvent::PageReady { page, image: img });
+            }
+        });
     }
 }
 
-impl ApplicationHandler for Viewer {
+impl ApplicationHandler<ViewerEvent> for Viewer {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.gpu.is_some() {
+        let window = Arc::new(
+            event_loop
+                .create_window(Window::default_attributes().with_title("rbv"))
+                .expect("create window"),
+        );
+        let size = window.inner_size();
+        let renderer = SkiaRenderer::new(window.clone());
+        let page_image = self.pending_image.as_ref().map(image_to_skia);
+        if page_image.is_some() {
+            window.request_redraw();
+        }
+        self.state = Some(SkiaState {
+            window,
+            renderer,
+            page_image,
+            width: size.width.max(1),
+            height: size.height.max(1),
+        });
+        self.pending_image = None;
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        if self.state.is_none() {
             return;
         }
 
-        let window = Arc::new(
-            event_loop
-                .create_window(WindowAttributes::default().with_title(&self.title()))
-                .unwrap(),
-        );
-
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let surface = instance.create_surface(window.clone()).unwrap();
-
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: Some(&surface),
-            power_preference:   wgpu::PowerPreference::default(),
-            force_fallback_adapter: false,
-        }))
-        .expect("no compatible GPU adapter found");
-
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .expect("failed to create wgpu device");
-
-        let caps = surface.get_capabilities(&adapter);
-        let surface_format = caps
-            .formats
-            .iter()
-            .find(|f| f.is_srgb())
-            .copied()
-            .unwrap_or(caps.formats[0]);
-
-        let size = window.inner_size();
-        let surf_config = wgpu::SurfaceConfiguration {
-            usage:    wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format:   surface_format,
-            width:    size.width.max(1),
-            height:   size.height.max(1),
-            present_mode: wgpu::PresentMode::AutoVsync,
-            alpha_mode:   caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &surf_config);
-
-        // --- group 0: texture + sampler ---
-        let texture  = crate::texture::upload(&device, &queue, &self.image);
-        let tex_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler  = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
-        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label:   None,
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding:    0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type:    wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled:   false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding:    1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label:   None,
-            layout:  &bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding:  0,
-                    resource: wgpu::BindingResource::TextureView(&tex_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding:  1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
-
-        // --- group 1: aspect uniform ---
-        let image_aspect = self.image.width() as f32 / self.image.height() as f32;
-        let aspect_data  = AspectUniform {
-            image:  image_aspect,
-            window: size.width as f32 / size.height as f32,
-            _pad:   [0.0; 2],
-        };
-
-        use wgpu::util::DeviceExt;
-        let aspect_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label:    None,
-            contents: bytemuck::bytes_of(&aspect_data),
-            usage:    wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let aspect_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label:   None,
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding:    0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty:                 wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size:   None,
-                },
-                count: None,
-            }],
-        });
-
-        let aspect_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label:   None,
-            layout:  &aspect_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding:  0,
-                resource: aspect_buf.as_entire_binding(),
-            }],
-        });
-
-        // --- pipeline ---
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label:  None,
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label:              None,
-            bind_group_layouts: &[Some(&bgl), Some(&aspect_bgl)],
-            immediate_size:     0,
-        });
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label:  None,
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module:              &shader,
-                entry_point:         Some("vs_main"),
-                buffers:             &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module:      &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format:     surface_format,
-                    blend:      Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil:  None,
-            multisample:    wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache:          None,
-        });
-
-        window.request_redraw();
-        self.gpu = Some(GpuState {
-            window,
-            surface,
-            device,
-            queue,
-            config: surf_config,
-            pipeline,
-            bgl,
-            sampler,
-            bind_group,
-            aspect_buf,
-            aspect_bg,
-            image_aspect,
-        });
-    }
-
-    fn user_event(&mut self, _: &ActiveEventLoop, _: ()) {
-        self.reload_current_page();
-    }
-
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
+
+            WindowEvent::RedrawRequested => {
+                let state = self.state.as_mut().unwrap();
+                state
+                    .renderer
+                    .draw(state.page_image.as_ref(), self.zoom, self.pan);
+                state.renderer.present();
+            }
+
+            WindowEvent::Resized(size) => {
+                let state = self.state.as_mut().unwrap();
+                state.width = size.width.max(1);
+                state.height = size.height.max(1);
+                state.renderer.resize(state.width, state.height);
+                state.window.request_redraw();
+            }
+
+            WindowEvent::ModifiersChanged(mods) => {
+                self.ctrl_held = mods.state().contains(ModifiersState::CONTROL);
+            }
+
             WindowEvent::KeyboardInput {
-                event: KeyEvent {
-                    physical_key: PhysicalKey::Code(code),
-                    state: ElementState::Pressed,
-                    text,
-                    ..
-                },
+                event:
+                    KeyEvent {
+                        physical_key: PhysicalKey::Code(code),
+                        state: ElementState::Pressed,
+                        ..
+                    },
                 ..
-            } => match code {
-                KeyCode::Escape | KeyCode::KeyQ => {
-                    self.digit_buf.clear();
-                    event_loop.exit();
-                }
-                KeyCode::ArrowRight | KeyCode::ArrowDown | KeyCode::KeyL | KeyCode::KeyJ => {
-                    self.digit_buf.clear();
-                    self.go_to_page(self.page + 1);
-                }
-                KeyCode::ArrowLeft | KeyCode::ArrowUp | KeyCode::KeyH | KeyCode::KeyK => {
-                    self.digit_buf.clear();
-                    self.go_to_page(self.page.saturating_sub(1));
-                }
-                KeyCode::KeyG => {
-                    if let Some(n) = self.consume_digit_buf() {
-                        self.go_to_page(n.saturating_sub(1));
+            } => {
+                let (win_w, win_h) = {
+                    let s = self.state.as_ref().unwrap();
+                    (s.width as f32, s.height as f32)
+                };
+                match code {
+                    KeyCode::Equal | KeyCode::NumpadAdd if self.ctrl_held => {
+                        self.apply_zoom(1.1, None, win_w, win_h);
                     }
-                }
-                _ => {
-                    if let Some(ch) = text.as_deref()
-                        .and_then(|t| t.chars().next())
-                        .filter(|c| c.is_ascii_digit())
-                    {
-                        self.digit_buf.push(ch);
-                    } else {
-                        self.digit_buf.clear();
+                    KeyCode::Minus | KeyCode::NumpadSubtract if self.ctrl_held => {
+                        self.apply_zoom(1.0 / 1.1, None, win_w, win_h);
                     }
+                    KeyCode::Digit0 | KeyCode::Numpad0 if self.ctrl_held => {
+                        self.zoom = 1.0;
+                        self.pan = [0.0, 0.0];
+                    }
+                    _ => {}
+                }
+                self.state.as_ref().unwrap().window.request_redraw();
+            }
+
+            WindowEvent::MouseWheel { delta, .. } if self.ctrl_held => {
+                let (win_w, win_h) = {
+                    let s = self.state.as_ref().unwrap();
+                    (s.width as f32, s.height as f32)
+                };
+                let lines = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 20.0,
+                };
+                let factor = if lines > 0.0 {
+                    1.1_f32.powf(lines)
+                } else {
+                    (1.0 / 1.1_f32).powf(-lines)
+                };
+                let focal = self.cursor_pos;
+                self.apply_zoom(factor, Some(focal), win_w, win_h);
+                self.state.as_ref().unwrap().window.request_redraw();
+            }
+
+            WindowEvent::CursorMoved { position, .. } => {
+                let new_pos = [position.x as f32, position.y as f32];
+                if let Some((cursor_start, pan_start)) = self.drag_origin {
+                    self.pan[0] = pan_start[0] + new_pos[0] - cursor_start[0];
+                    self.pan[1] = pan_start[1] + new_pos[1] - cursor_start[1];
+                    self.state.as_ref().unwrap().window.request_redraw();
+                }
+                self.cursor_pos = new_pos;
+            }
+
+            WindowEvent::MouseInput {
+                button: MouseButton::Left,
+                state: btn_state,
+                ..
+            } => match btn_state {
+                ElementState::Pressed => {
+                    self.drag_origin = Some((self.cursor_pos, self.pan));
+                }
+                ElementState::Released => {
+                    self.drag_origin = None;
                 }
             },
-            WindowEvent::RedrawRequested => {
-                let Some(gpu) = &mut self.gpu else { return };
-                let frame = match gpu.surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(f)
-                    | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-                    _ => return,
-                };
-                let view = frame
-                    .texture
-                    .create_view(&wgpu::TextureViewDescriptor::default());
-                let mut encoder = gpu
-                    .device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-                {
-                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: None,
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view:           &view,
-                            resolve_target: None,
-                            depth_slice:    None,
-                            ops: wgpu::Operations {
-                                load:  wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        occlusion_query_set:      None,
-                        timestamp_writes:         None,
-                        multiview_mask:           None,
-                    });
-                    rpass.set_pipeline(&gpu.pipeline);
-                    rpass.set_bind_group(0, &gpu.bind_group, &[]);
-                    rpass.set_bind_group(1, &gpu.aspect_bg, &[]);
-                    rpass.draw(0..6, 0..1);
+            _ => {}
+        }
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: ViewerEvent) {
+        match event {
+            ViewerEvent::PreviewReady { page, image } | ViewerEvent::PageReady { page, image }
+                if page == self.page =>
+            {
+                match self.state.as_mut() {
+                    Some(state) => {
+                        state.page_image = Some(image_to_skia(&image));
+                        state.window.request_redraw();
+                    }
+                    None => {
+                        self.pending_image = Some(image);
+                    }
                 }
-                gpu.queue.submit(std::iter::once(encoder.finish()));
-                frame.present();
             }
-            WindowEvent::Resized(size) => {
-                if let Some(gpu) = &mut self.gpu {
-                    gpu.config.width  = size.width.max(1);
-                    gpu.config.height = size.height.max(1);
-                    gpu.surface.configure(&gpu.device, &gpu.config);
-                    gpu.write_aspect(gpu.config.width, gpu.config.height);
-                    gpu.window.request_redraw();
+            ViewerEvent::FileChanged => {
+                if let Ok(new_pipeline) = PdfPipeline::open(&self.file) {
+                    self.pipeline = Arc::new(new_pipeline);
                 }
+                self.spawn_render(self.page);
             }
             _ => {}
         }
     }
 }
 
-pub fn run(path: PathBuf, page: u32, config: rustybara::raster::RenderConfig) {
-    let pipeline = rustybara::PdfPipeline::open(&path).unwrap_or_else(|e| {
-        eprintln!("Cannot open PDF: {e}");
-        std::process::exit(1);
-    });
-    let page_count = pipeline.page_count() as u32;
-    let page = page.min(page_count.saturating_sub(1));
-    let image = pipeline.render_page(page, &config).unwrap_or_else(|e| {
-        eprintln!("Cannot render page: {e}");
-        std::process::exit(1);
-    });
+pub fn run(file: PathBuf, page: u32, config: RenderConfig) {
+    let pipeline = Arc::new(PdfPipeline::open(&file).expect("open PDF"));
 
-    let event_loop = winit::event_loop::EventLoop::new().unwrap();
+    let event_loop = EventLoop::<ViewerEvent>::with_user_event()
+        .build()
+        .expect("event loop");
+    event_loop.set_control_flow(ControlFlow::Wait);
+
     let proxy = event_loop.create_proxy();
 
-    let watch_path = path.clone();
-    std::thread::spawn(move || {
-        use notify::{RecursiveMode, Watcher};
-        let (tx, rx) = std::sync::mpsc::channel();
-        let mut watcher = notify::RecommendedWatcher::new(
-            move |res: notify::Result<notify::Event>| {
-                if let Ok(e) = res {
-                    if e.kind.is_modify() || e.kind.is_create() {
-                        let _ = tx.send(());
-                    }
-                }
-            },
-            notify::Config::default(),
-        )
-        .expect("failed to create file watcher");
-        watcher
-            .watch(&watch_path, RecursiveMode::NonRecursive)
-            .expect("failed to watch file");
-        loop {
-            if rx.recv().is_ok() {
-                while rx.recv_timeout(std::time::Duration::from_millis(300)).is_ok() {}
-                std::thread::sleep(std::time::Duration::from_millis(150));
-                let _ = proxy.send_event(());
+    {
+        let pipeline = pipeline.clone();
+        let proxy = proxy.clone();
+        let preview = RenderConfig {
+            dpi: 72,
+            ..config.clone()
+        };
+        let full = config.clone();
+        std::thread::spawn(move || {
+            if let Ok(img) = pipeline.render_page(page, &preview) {
+                let _ = proxy.send_event(ViewerEvent::PreviewReady { page, image: img });
             }
-        }
-    });
+            if let Ok(img) = pipeline.render_page(page, &full) {
+                let _ = proxy.send_event(ViewerEvent::PageReady { page, image: img });
+            }
+        });
+    }
 
-    let mut app = Viewer { path, page, page_count, config, image, gpu: None, digit_buf: String::new() };
-    event_loop.run_app(&mut app).unwrap();
+    let proxy_watch = proxy.clone();
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if matches!(
+            res.map(|e| e.kind.is_modify() || e.kind.is_create()),
+            Ok(true)
+        ) {
+            let _ = proxy_watch.send_event(ViewerEvent::FileChanged);
+        }
+    })
+    .expect("watcher");
+    watcher
+        .watch(&file, RecursiveMode::NonRecursive)
+        .expect("watch file");
+
+    let mut viewer = Viewer {
+        file,
+        pipeline,
+        page,
+        config,
+        state: None,
+        pending_image: None,
+        zoom: 1.0,
+        pan: [0.0, 0.0],
+        ctrl_held: false,
+        cursor_pos: [0.0, 0.0],
+        drag_origin: None,
+        _watcher: watcher,
+        proxy,
+    };
+
+    event_loop.run_app(&mut viewer).expect("run app");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper: build a Viewer-like zoom/pan state for unit testing the math
+    struct ZoomState {
+        zoom: f32,
+        pan: [f32; 2],
+    }
+
+    impl ZoomState {
+        fn apply_zoom(
+            &mut self,
+            factor: f32,
+            focal: Option<[f32; 2]>,
+            win_w: f32,
+            win_h: f32,
+        ) {
+            let old_zoom = self.zoom;
+            self.zoom = (self.zoom * factor).clamp(0.05, 50.0);
+            let r = self.zoom / old_zoom;
+            let (cx, cy) = match focal {
+                Some([x, y]) => (x, y),
+                None => (win_w / 2.0, win_h / 2.0),
+            };
+            self.pan[0] = self.pan[0] * r + (cx - win_w / 2.0) * (1.0 - r);
+            self.pan[1] = self.pan[1] * r + (cy - win_h / 2.0) * (1.0 - r);
+        }
+    }
+
+    // Zoom from identity at window centre leaves pan unchanged
+    #[test]
+    fn zoom_center_pan_unchanged() {
+        let mut s = ZoomState { zoom: 1.0, pan: [0.0, 0.0] };
+        s.apply_zoom(2.0, None, 800.0, 600.0);
+        assert_eq!(s.zoom, 2.0);
+        assert!( s.pan[0].abs() < 1e-4, "pan x should be 0, got {}", s.pan[0]);
+        assert!(s.pan[1].abs() < 1e-4, "pan y should be 0, got {}", s.pan[1]);
+    }
+
+    // Zoom at top-left corner (0,0) shifts pan toward centre
+    #[test]
+    fn zoom_corner_focal() {
+        let mut s = ZoomState { zoom: 1.0, pan: [0.0, 0.0] };
+        s.apply_zoom(2.0, Some([0.0, 0.0]), 800.0, 600.0);
+        assert_eq!(s.zoom, 2.0);
+        // focal (0,0) is (-400,-300) from centre; (1-r) = -1, so pan shifts +400/+300
+        assert!((s.pan[0] - 400.0).abs() < 1e-3, "pan x={}", s.pan[0]);
+        assert!((s.pan[1] - 300.0).abs() < 1e-3, "pan y={}", s.pan[1]);
+    }
+
+    // Zoom in then zoom out returns to original zoom (within float tolerance)
+    #[test]
+    fn zoom_in_out_roundtrip() {
+        let mut s = ZoomState { zoom: 1.0, pan: [0.0, 0.0] };
+        s.apply_zoom(1.1, None, 800.0, 600.0);
+        s.apply_zoom(1.0 / 1.1, None, 800.0, 600.0);
+        assert!((s.zoom - 1.0).abs() < 1e-5, "zoom={}", s.zoom);
+        assert!(s.pan[0].abs() < 1e-4);
+        assert!(s.pan[1].abs() < 1e-4);
+    }
+
+    // Zoom clamps at minimum (0.05)
+    #[test]
+    fn zoom_clamps_minimum() {
+        let mut s = ZoomState { zoom: 0.06, pan: [0.0, 0.0] };
+        s.apply_zoom(0.1, None, 800.0, 600.0);
+        assert_eq!(s.zoom, 0.05);
+    }
+
+    // Zoom clamps at maximum (50.0)
+    #[test]
+    fn zoom_clamps_maximum() {
+        let mut s = ZoomState { zoom: 49.0, pan: [0.0, 0.0] };
+        s.apply_zoom(10.0, None, 800.0, 600.0);
+        assert_eq!(s.zoom, 50.0);
+    }
+
+    // Zoom factor 1.0 is a no-op on both zoom and pan
+    #[test]
+    fn zoom_factor_one_noop() {
+        let mut s = ZoomState { zoom: 2.0, pan: [50.0, -30.0] };
+        s.apply_zoom(1.0, Some([100.0, 200.0]), 800.0, 600.0);
+        assert!((s.zoom - 2.0).abs() < 1e-5);
+        assert!((s.pan[0] - 50.0).abs() < 1e-4);
+        assert!((s.pan[1] - -30.0).abs() < 1e-4);
+    }
+
+    // Pan drag: delta applied correctly
+    #[test]
+    fn pan_drag_delta() {
+        let pan_start = [10.0_f32, 20.0_f32];
+        let cursor_start = [100.0_f32, 150.0_f32];
+        let cursor_now = [130.0_f32, 160.0_f32];
+        let new_pan = [
+            pan_start[0] + cursor_now[0] - cursor_start[0],
+            pan_start[1] + cursor_now[1] - cursor_start[1],
+        ];
+        assert_eq!(new_pan, [40.0, 30.0]);
+    }
 }

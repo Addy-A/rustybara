@@ -1,4 +1,4 @@
-pub mod texture;
+pub mod renderer;
 pub mod viewer;
 
 use clap::Parser;
