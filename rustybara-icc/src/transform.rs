@@ -33,6 +33,13 @@ pub struct ColorTransform {
     dst_channels: usize,
     src_cs: crate::ColorSpaceKind,
     dst_cs: crate::ColorSpaceKind,
+    /// Raw bytes of the destination ICC profile, cloned at construction time so that
+    /// callers (e.g. `PdfColorConverter`) can rebuild a one-shot lcms2 transform for
+    /// colour spaces that the general `convert()` path cannot handle (Lab, etc.).
+    dst_profile_bytes: std::sync::Arc<[u8]>,
+    /// The rendering intent stored at construction, so that auxiliary transforms
+    /// built from these bytes use the same intent as the primary transform.
+    intent: RenderingIntent,
 }
 
 impl ColorTransform {
@@ -72,7 +79,22 @@ impl ColorTransform {
             dst_channels: dst_fmt.channels(),
             src_cs: src.color_space.clone(),
             dst_cs: dst.color_space.clone(),
+            dst_profile_bytes: dst.bytes.clone(),
+            intent,
         })
+    }
+
+    /// Returns the raw ICC bytes of the destination profile.
+    ///
+    /// Use these bytes to build a one-shot `lcms2::Profile` for colour spaces that
+    /// the general [`Self::convert`] path does not support (e.g. Lab → CMYK).
+    pub fn dst_profile_bytes(&self) -> &[u8] {
+        &self.dst_profile_bytes
+    }
+
+    /// Returns the rendering intent stored at construction.
+    pub fn intent(&self) -> RenderingIntent {
+        self.intent
     }
 
     /// Returns the color space kind of the transform's source profile.
@@ -141,6 +163,8 @@ impl ColorTransform {
             dst_channels: dst_fmt.channels(),
             src_cs,
             dst_cs,
+            dst_profile_bytes: std::sync::Arc::from(to),
+            intent,
         })
     }
 

@@ -55,6 +55,7 @@
     fromProfile: 'AdobeRGB1998',
     toProfile: 'USWebCoatedSWOP',
     convertIntent: 'RelativeColorimetric',
+    spotIccProfile: null,
     trimBoxBleedInches: 0.125,
     extractPagesInput: '1',
     splitPanelInches: 5.83,
@@ -285,6 +286,9 @@
     } else if (parsed.cmd === ':g') {
       params.stitchSpreadInches = parsed.isDefault ? 8.5 : parsed.inches
       activeAction = 'stitchpages'
+    } else if (parsed.cmd === ':sp') {
+      params.spotIccProfile = parsed.isDefault ? null : parsed.profile
+      activeAction = 'spots'
     } else if (parsed.cmd === ':m') {
       if (parsed.target === 'src') {
         params.remapFrom = parsed.isDefault
@@ -486,7 +490,12 @@
           break
         case 'spots':
           actionLabel = 'FlattenSpots'
-          result = await api.flattenSpots(paths, outputDir, overwrite)
+          result = await api.flattenSpots(
+            paths,
+            outputDir,
+            overwrite,
+            params.spotIccProfile,
+          )
           break
         case 'addtrimbox':
           actionLabel = 'AddTrimBox'

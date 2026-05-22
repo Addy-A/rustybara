@@ -67,8 +67,18 @@ export async function convertColorSpace(
   })
 }
 
-export async function flattenSpots(paths, outputDir, overwrite) {
-  return await invoke('flatten_spots', { paths, outputDir, overwrite })
+export async function flattenSpots(
+  paths,
+  outputDir,
+  overwrite,
+  iccProfile = null,
+) {
+  return await invoke('flatten_spots', {
+    paths,
+    outputDir,
+    overwrite,
+    iccProfile,
+  })
 }
 
 export async function addTrimBox(paths, bleedInches, outputDir, overwrite) {

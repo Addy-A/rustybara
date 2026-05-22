@@ -103,6 +103,10 @@
       cmd: 'm.tol(n).p | .d',
       desc: 'Set remap match tolerance. 0 = exact pixel match only, 1 = remap every pixel.',
     },
+    {
+      cmd: 'sp.icc(profile | d)',
+      desc: 'Flatten spot colors using a specific CMYK ICC destination profile. Bare :sp shows method picker (↑↓ Tab). d resets to default (US Web Coated SWOP). Profile name is searchable — ↑↓ to select, Tab to fill.',
+    },
     { cmd: 'bd', desc: 'Delete the first buffer' },
     { cmd: 'N bd', desc: 'Delete buffer N  (1-indexed, e.g. 2bd)' },
     { cmd: 'N-M bd', desc: 'Delete a range of buffers  (e.g. 1-3bd)' },

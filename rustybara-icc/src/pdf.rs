@@ -2,6 +2,7 @@ use lopdf::content::{Content, Operation};
 use lopdf::{Document, Object};
 
 use crate::ColorSpaceKind;
+use crate::RenderingIntent;
 use crate::transform::ColorTransform;
 
 /// Summary of changes made during a PDF color space conversion.
@@ -135,8 +136,14 @@ impl<'a> PdfColorConverter<'a> {
             .into_iter()
             .map(|(alias, _)| alias)
             .collect();
-        let (flattened, spots_counts) =
-            flatten_spot_ops(&content.operations, &spot_names, self.doc, page_id);
+        let (flattened, spots_counts) = flatten_spot_ops(
+            &content.operations,
+            &spot_names,
+            self.doc,
+            page_id,
+            Some(self.transform.dst_profile_bytes()),
+            self.transform.intent(),
+        );
 
         let rewritten = convert_operations(&flattened, &self.transform);
         let new_content = Content {
@@ -181,17 +188,22 @@ impl<'a> PdfColorConverter<'a> {
 /// **DeviceN limitation:** `DeviceN` color spaces are detected but not correctly flattened —
 /// their `scn` operators carry one tint value per ink channel, which the current single-channel
 /// evaluator does not handle. Those operators are left unchanged.
-pub fn flatten_spot_colors(doc: &mut Document) -> crate::Result<u32> {
+pub fn flatten_spot_colors(
+    doc: &mut Document,
+    dst_icc: Option<&[u8]>,
+    intent: RenderingIntent,
+) -> crate::Result<u32> {
     let page_ids: Vec<lopdf::ObjectId> = doc.get_pages().values().copied().collect();
     let mut total = 0u32;
 
+    let spot_names: std::collections::HashSet<String> = find_spot_colorspaces(doc)
+        .into_iter()
+        .map(|(alias, _)| alias)
+        .collect();
+
     for page_id in page_ids {
         let content = doc.get_and_decode_page_content(page_id)?;
-        let spot_names: std::collections::HashSet<String> = find_spot_colorspaces(doc)
-            .into_iter()
-            .map(|(alias, _)| alias)
-            .collect();
-        let (flattened, count) = flatten_spot_ops(&content.operations, &spot_names, doc, page_id);
+        let (flattened, count) = flatten_spot_ops(&content.operations, &spot_names, doc, page_id, dst_icc, intent);
         total += count;
 
         let new_content = Content { operations: flattened };
@@ -204,6 +216,7 @@ pub fn flatten_spot_colors(doc: &mut Document) -> crate::Result<u32> {
         let stream_id = stream_ids[0];
         if let Ok(Object::Stream(stream)) = doc.get_object_mut(stream_id) {
             stream.set_plain_content(bytes);
+            stream.compress()?;
         }
         if stream_ids.len() > 1 {
             for &extra_id in &stream_ids[1..] {
@@ -218,6 +231,69 @@ pub fn flatten_spot_colors(doc: &mut Document) -> crate::Result<u32> {
             }
         }
     }
+
+    let xobj_ids: Vec<lopdf::ObjectId> = doc
+        .objects
+        .iter()
+        .filter_map(|(id, obj)| {
+            if let Object::Stream(s) = obj {
+                if s.dict.get(b"Subtype").and_then(|o| Ok(o.as_name().ok())).ok().flatten() == Some(b"Form") {
+                    Some(*id)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for xobj_id in xobj_ids {
+        let raw = match doc.get_object(xobj_id) {
+            Ok(Object::Stream(s)) => s.decompressed_content()?,
+            _ => continue,
+        };
+        let ops = Content::decode(&raw)?.operations;
+
+        let xobj_spot_names: std::collections::HashSet<String> = {
+            let mut names = std::collections::HashSet::new();
+            if let Ok(Object::Stream(s)) = doc.get_object(xobj_id) {
+                if let Ok(res_obj) = s.dict.get(b"Resources") {
+                    if let Ok(res_dict) = res_obj.as_dict() {
+                        if let Ok(cs_obj) = res_dict.get(b"ColorSpace") {
+                            if let Ok(cs_dict) = cs_obj.as_dict() {
+                                for (name, obj) in cs_dict.iter() {
+                                    let Ok((_, Object::Array(arr))) = doc.dereference(obj)
+                                    else {
+                                        continue;
+                                    };
+                                    let first = arr.first().and_then(|o| o.as_name().ok());
+                                    if first == Some(b"Separation")
+                                        || first == Some(b"DeviceN")
+                                    {
+                                        names.insert(
+                                            String::from_utf8_lossy(name).to_string(),
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            names
+        };
+
+        let (flattened, count) = flatten_spot_ops(&ops, &xobj_spot_names, doc, xobj_id, dst_icc, intent);
+        total += count;
+
+        let new_bytes = Content { operations: flattened }.encode()?;
+        if let Ok(Object::Stream(stream)) = doc.get_object_mut(xobj_id) {
+            stream.set_plain_content(new_bytes);
+            stream.compress()?;
+        }
+    }
+
     Ok(total)
 }
 
@@ -309,6 +385,8 @@ fn flatten_spot_ops(
     spot_names: &std::collections::HashSet<String>,
     doc: &lopdf::Document,
     page_id: lopdf::ObjectId,
+    dst_icc: Option<&[u8]>,
+    intent: RenderingIntent,
 ) -> (Vec<Operation>, u32) {
     let mut out = Vec::with_capacity(ops.len());
     let mut current_fill_cs: Option<String> = None;
@@ -346,8 +424,9 @@ fn flatten_spot_ops(
                     .map(object_to_f64)
                     .unwrap_or(0.0)
                     .clamp(0.0, 1.0) as f32;
-                let cmyk =
-                    spot_tint_to_cmyk(current_fill_cs.as_deref().unwrap(), tint, doc, page_id);
+                let cmyk = spot_tint_to_cmyk(
+                    current_fill_cs.as_deref().unwrap(), tint, doc, page_id, dst_icc, intent,
+                );
                 out.push(Operation {
                     operator: "k".to_string(),
                     operands: cmyk.iter().map(|&v| lopdf::Object::Real(v)).collect(),
@@ -361,8 +440,9 @@ fn flatten_spot_ops(
                     .map(object_to_f64)
                     .unwrap_or(0.0)
                     .clamp(0.0, 1.0) as f32;
-                let cmyk =
-                    spot_tint_to_cmyk(current_stroke_cs.as_deref().unwrap(), tint, doc, page_id);
+                let cmyk = spot_tint_to_cmyk(
+                    current_stroke_cs.as_deref().unwrap(), tint, doc, page_id, dst_icc, intent,
+                );
                 out.push(Operation {
                     operator: "K".to_string(),
                     operands: cmyk.iter().map(|&v| lopdf::Object::Real(v)).collect(),
@@ -379,20 +459,28 @@ fn spot_tint_to_cmyk(
     alias: &str,
     tint: f32,
     doc: &lopdf::Document,
-    page_id: lopdf::ObjectId,
+    container_id: lopdf::ObjectId,
+    dst_icc: Option<&[u8]>,
+    intent: RenderingIntent,
 ) -> [f32; 4] {
     let fallback = [0.0, 0.0, 0.0, tint];
 
-    let resources = doc.get_page_resources(page_id);
-    let Ok((Some(res_dict), _)) = resources else {
+    let cs_map: &lopdf::Dictionary = 'found: {
+        if let Ok((Some(res), _)) = doc.get_page_resources(container_id) {
+            if let Ok(cs) = res.get(b"ColorSpace").and_then(|o| o.as_dict()) {
+                break 'found cs;
+            }
+        }
+        if let Ok(Object::Stream(s)) = doc.get_object(container_id) {
+            if let Ok(res) = s.dict.get(b"Resources").and_then(|o| o.as_dict()) {
+                if let Ok(cs) = res.get(b"ColorSpace").and_then(|o| o.as_dict()) {
+                    break 'found cs;
+                }
+            }
+        }
         return fallback;
     };
-    let Ok(cs_obj) = res_dict.get(b"ColorSpace") else {
-        return fallback;
-    };
-    let Ok(cs_map) = cs_obj.as_dict() else {
-        return fallback;
-    };
+
     let Ok(alias_obj) = cs_map.get(alias.as_bytes()) else {
         return fallback;
     };
@@ -404,11 +492,23 @@ fn spot_tint_to_cmyk(
         return fallback;
     }
 
-    let alternate = arr
-        .get(2)
-        .and_then(|o| o.as_name().ok().map(|n| n.to_vec()));
-    let is_cmyk = alternate.as_deref() == Some(b"DeviceCMYK");
-    if !is_cmyk {
+    let is_cmyk = arr.get(2).is_some_and(|alt| {
+        alt.as_name().ok() == Some(b"DeviceCMYK")
+            || matches!(
+                doc.dereference(alt),
+                Ok((_, lopdf::Object::Name(n))) if n == b"DeviceCMYK"
+            )
+    });
+
+    let is_lab = arr.get(2).is_some_and(|alt| {
+        if let Ok((_, lopdf::Object::Array(a))) = doc.dereference(alt) {
+            a.first().and_then(|o| o.as_name().ok()) == Some(b"Lab")
+        } else {
+            false
+        }
+    });
+
+    if !is_lab && !is_cmyk {
         return fallback;
     }
 
@@ -421,8 +521,8 @@ fn spot_tint_to_cmyk(
     let Ok(lopdf::Object::Array(c1)) = fn_dict.get(b"C1") else {
         return fallback;
     };
-
-    if c0.len() < 4 || c1.len() < 4 {
+    
+    if fn_dict.get(b"FunctionType").and_then(|o| o.as_i64()).unwrap_or_default() != 2 {
         return fallback;
     }
 
@@ -432,12 +532,69 @@ fn spot_tint_to_cmyk(
         av + tint * (bv - av)
     };
 
-    [
-        lerp(&c0[0], &c1[0]),
-        lerp(&c0[1], &c1[1]),
-        lerp(&c0[2], &c1[2]),
-        lerp(&c0[3], &c1[3]),
-    ]
+    if is_cmyk {
+        if c0.len() < 4 || c1.len() < 4 {
+            return  fallback;
+        }
+        [
+            lerp(&c0[0], &c1[0]),
+            lerp(&c0[1], &c1[1]),
+            lerp(&c0[2], &c1[2]),
+            lerp(&c0[3], &c1[3]),
+        ]
+    } else {
+        if c0.len() < 3 || c1.len() < 3 {
+            return  fallback;
+        }
+        let lab_l = lerp(&c0[0], &c1[0]);
+        let lab_a = lerp(&c0[1], &c1[1]);
+        let lab_b = lerp(&c0[2], &c1[2]);
+        lab_to_cmyk(lab_l, lab_a, lab_b, dst_icc, intent).unwrap_or(fallback)
+    }
+}
+
+#[cfg(feature = "bundled-profiles")]
+fn lab_to_cmyk(l: f32, a: f32, b: f32, dst_icc: Option<&[u8]>, intent: RenderingIntent) -> Option<[f32; 4]> {
+    use lcms2::{CIExyY, Flags, GlobalContext, Intent, PixelFormat, Profile, Transform};
+    use crate::profiles::US_WEB_COATED_SWOP;
+
+    let lab_profile = Profile::new_lab4_context(GlobalContext::new(), CIExyY::d50()).ok()?;
+    // Prefer the caller-supplied destination bytes (the user's configured target profile).
+    // Fall back to US Web Coated SWOP only when no profile is provided, e.g. when called
+    // from the standalone `flatten_spot_colors` which has no PdfColorConverter context.
+    let cmyk_profile = match dst_icc {
+        Some(bytes) => Profile::new_icc(bytes).ok()?,
+        None => Profile::new_icc(US_WEB_COATED_SWOP.bytes.as_ref()).ok()?,
+    };
+
+    let t: Transform<u8, u8, _, _> = Transform::new_flags(
+        &lab_profile,
+        PixelFormat::Lab_8,
+        &cmyk_profile,
+        PixelFormat::CMYK_8,
+        Intent::from(intent),
+        Flags::NO_CACHE,
+    ).ok()?;
+
+    let l_u8 = (l / 100.0 * 255.0).round().clamp(0.0, 255.0) as u8;
+    let a_u8 = (a + 128.0).round().clamp(0.0, 255.0) as u8;
+    let b_u8 = (b + 128.0).round().clamp(0.0, 255.0) as u8;
+
+    let input = [l_u8, a_u8, b_u8];
+    let mut output = [0u8; 4];
+    t.transform_pixels(&input, &mut output);
+
+    Some([
+        output[0] as f32 / 255.0,
+        output[1] as f32 / 255.0,
+        output[2] as f32 / 255.0,
+        output[3] as f32 / 255.0,
+    ])
+}
+
+#[cfg(not(feature = "bundled-profiles"))]
+fn lab_to_cmyk(_l: f32, _a: f32, _b: f32, _dst_icc: Option<&[u8]>, _intent: RenderingIntent) -> Option<[f32; 4]> {
+    None
 }
 
 fn dst_fill_op(cs: &ColorSpaceKind) -> &'static str {
@@ -830,7 +987,7 @@ mod tests {
     #[test]
     fn flatten_spot_empty_ops_returns_empty_and_zero() {
         let (doc, page_id) = make_minimal_doc(vec![]);
-        let (out, count) = flatten_spot_ops(&[], &spot_set(&["CS1"]), &doc, page_id);
+        let (out, count) = flatten_spot_ops(&[], &spot_set(&["CS1"]), &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert!(out.is_empty());
         assert_eq!(count, 0);
     }
@@ -839,7 +996,7 @@ mod tests {
     fn flatten_spot_cs_for_non_spot_alias_passes_through() {
         let (doc, page_id) = make_minimal_doc(vec![]);
         let ops = vec![spot_name_op("cs", "DeviceCMYK")];
-        let (out, count) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        let (out, count) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].operator, "cs");
         assert_eq!(count, 0);
@@ -849,7 +1006,7 @@ mod tests {
     fn flatten_spot_cs_for_spot_alias_is_dropped() {
         let (doc, page_id) = make_minimal_doc(vec![]);
         let ops = vec![spot_name_op("cs", "CS1"), tint_op("scn", 0.5)];
-        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert!(
             out.iter().all(|o| o.operator != "cs"),
             "cs op for spot alias must be dropped"
@@ -860,7 +1017,7 @@ mod tests {
     fn flatten_spot_scn_after_spot_cs_becomes_k_op() {
         let (doc, page_id) = make_minimal_doc(vec![]);
         let ops = vec![spot_name_op("cs", "CS1"), tint_op("scn", 0.5)];
-        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert!(
             out.iter().any(|o| o.operator == "k"),
             "scn after spot cs must become k"
@@ -871,7 +1028,7 @@ mod tests {
     fn flatten_spot_k_op_from_scn_has_four_operands() {
         let (doc, page_id) = make_minimal_doc(vec![]);
         let ops = vec![spot_name_op("cs", "CS1"), tint_op("scn", 0.75)];
-        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         let k_op = out.iter().find(|o| o.operator == "k").unwrap();
         assert_eq!(k_op.operands.len(), 4);
     }
@@ -880,7 +1037,7 @@ mod tests {
     fn flatten_spot_scn_increments_count() {
         let (doc, page_id) = make_minimal_doc(vec![]);
         let ops = vec![spot_name_op("cs", "CS1"), tint_op("scn", 0.5)];
-        let (_, count) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        let (_, count) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert_eq!(count, 1);
     }
 
@@ -892,7 +1049,7 @@ mod tests {
             tint_op("scn", 0.5),
             tint_op("scn", 1.0),
         ];
-        let (_, count) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        let (_, count) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert_eq!(count, 2);
     }
 
@@ -900,7 +1057,7 @@ mod tests {
     fn flatten_spot_scn_without_prior_spot_cs_passes_through() {
         let (doc, page_id) = make_minimal_doc(vec![]);
         let ops = vec![tint_op("scn", 0.5)];
-        let (out, count) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        let (out, count) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].operator, "scn");
         assert_eq!(count, 0);
@@ -914,7 +1071,7 @@ mod tests {
             tint_op("scn", 0.5),
             cmyk_op("k", 0.0, 0.0, 0.0, 1.0),
         ];
-        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         let k_ops: Vec<_> = out.iter().filter(|o| o.operator == "k").collect();
         // both the flattened spot and the original device op produce a k
         assert_eq!(k_ops.len(), 2);
@@ -924,7 +1081,7 @@ mod tests {
     fn flatten_spot_uppercase_cs_for_spot_is_dropped() {
         let (doc, page_id) = make_minimal_doc(vec![]);
         let ops = vec![spot_name_op("CS", "CS1"), tint_op("SCN", 0.5)];
-        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert!(
             out.iter().all(|o| o.operator != "CS"),
             "CS op for spot alias must be dropped"
@@ -935,7 +1092,7 @@ mod tests {
     fn flatten_spot_scn_stroke_emits_uppercase_k() {
         let (doc, page_id) = make_minimal_doc(vec![]);
         let ops = vec![spot_name_op("CS", "CS1"), tint_op("SCN", 0.5)];
-        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert!(
             out.iter().any(|o| o.operator == "K"),
             "SCN stroke must become K (stroke), not k (fill)"
@@ -948,7 +1105,7 @@ mod tests {
     fn flatten_spot_sc_after_spot_cs_becomes_k_op() {
         let (doc, page_id) = make_minimal_doc(vec![]);
         let ops = vec![spot_name_op("cs", "CS1"), tint_op("sc", 0.5)];
-        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert!(
             out.iter().any(|o| o.operator == "k"),
             "sc after spot cs must become k"
@@ -959,7 +1116,7 @@ mod tests {
     fn flatten_spot_sc_increments_count() {
         let (doc, page_id) = make_minimal_doc(vec![]);
         let ops = vec![spot_name_op("cs", "CS1"), tint_op("sc", 0.8)];
-        let (_, count) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        let (_, count) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert_eq!(count, 1);
     }
 
@@ -967,7 +1124,7 @@ mod tests {
     fn flatten_spot_uppercase_sc_after_spot_cs_becomes_uppercase_k() {
         let (doc, page_id) = make_minimal_doc(vec![]);
         let ops = vec![spot_name_op("CS", "CS1"), tint_op("SC", 0.5)];
-        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        let (out, _) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert!(
             out.iter().any(|o| o.operator == "K"),
             "SC after spot CS must become K"
@@ -978,7 +1135,7 @@ mod tests {
     fn flatten_spot_sc_without_prior_spot_cs_passes_through() {
         let (doc, page_id) = make_minimal_doc(vec![]);
         let ops = vec![tint_op("sc", 0.5)];
-        let (out, count) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id);
+        let (out, count) = flatten_spot_ops(&ops, &spot_set(&["CS1"]), &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].operator, "sc");
         assert_eq!(count, 0);
@@ -989,14 +1146,14 @@ mod tests {
     #[test]
     fn spot_tint_fallback_when_no_resources() {
         let (doc, page_id) = make_minimal_doc(vec![]);
-        let result = spot_tint_to_cmyk("CS1", 0.8, &doc, page_id);
+        let result = spot_tint_to_cmyk("CS1", 0.8, &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert_eq!(result, [0.0, 0.0, 0.0, 0.8]);
     }
 
     #[test]
     fn spot_tint_unknown_alias_returns_fallback() {
         let (doc, page_id) = make_spot_doc(vec![], "CS1");
-        let result = spot_tint_to_cmyk("UNKNOWN", 0.6, &doc, page_id);
+        let result = spot_tint_to_cmyk("UNKNOWN", 0.6, &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert_eq!(result, [0.0, 0.0, 0.0, 0.6]);
     }
 
@@ -1004,7 +1161,7 @@ mod tests {
     fn spot_tint_zero_tint_returns_c0() {
         // C0 = [0, 0, 0, 0]
         let (doc, page_id) = make_spot_doc(vec![], "CS1");
-        let result = spot_tint_to_cmyk("CS1", 0.0, &doc, page_id);
+        let result = spot_tint_to_cmyk("CS1", 0.0, &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert_eq!(result, [0.0, 0.0, 0.0, 0.0]);
     }
 
@@ -1012,7 +1169,7 @@ mod tests {
     fn spot_tint_full_tint_returns_c1() {
         // C1 = [1, 0, 0, 0]
         let (doc, page_id) = make_spot_doc(vec![], "CS1");
-        let result = spot_tint_to_cmyk("CS1", 1.0, &doc, page_id);
+        let result = spot_tint_to_cmyk("CS1", 1.0, &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert!((result[0] - 1.0).abs() < 1e-5, "C = {}", result[0]);
         assert!(result[1].abs() < 1e-5);
         assert!(result[2].abs() < 1e-5);
@@ -1023,7 +1180,7 @@ mod tests {
     fn spot_tint_half_tint_interpolates_linearly() {
         // C0=[0,0,0,0], C1=[1,0,0,0], tint=0.5 → [0.5, 0, 0, 0]
         let (doc, page_id) = make_spot_doc(vec![], "CS1");
-        let result = spot_tint_to_cmyk("CS1", 0.5, &doc, page_id);
+        let result = spot_tint_to_cmyk("CS1", 0.5, &doc, page_id, None, RenderingIntent::RelativeColorimetric);
         assert!((result[0] - 0.5).abs() < 1e-5, "C = {}", result[0]);
         assert!(result[1].abs() < 1e-5);
         assert!(result[2].abs() < 1e-5);

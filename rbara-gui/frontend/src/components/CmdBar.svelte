@@ -65,6 +65,13 @@
     { value: 'p', sig: '.p', hint: 'values as 0–100 percentage' },
     { value: 'd', sig: '.d', hint: 'values as 0.0–1.0 direct' },
   ]
+  const SP_METHODS = [
+    {
+      value: 'icc',
+      sig: '.icc(profile|d)',
+      hint: 'destination CMYK ICC profile  ·  d = default (SWOP)',
+    },
+  ]
 
   // ─── Chord helpers ────────────────────────────────────────────────────────────
   /** Split "src(0.5,0.3).d" → ["src(0.5,0.3)", "d"] respecting paren depth */
@@ -287,6 +294,47 @@
     }
   }
 
+  function parseSpCmd(raw) {
+    const lo = raw.toLowerCase()
+    const empty = {
+      cmd: ':sp',
+      profile: null,
+      isDefault: false,
+      stage: 'methods',
+      activeMeth: null,
+      activeArg: null,
+    }
+    if (lo === 'sp') return empty
+    const rest = lo.slice(2) // after 'sp'
+    if (!rest.startsWith('.')) return null
+    const segs = splitMethodChain(rest.slice(1))
+    if (segs.length === 0) return empty
+    const seg = segs[0]
+    const pi = seg.indexOf('(')
+    if (pi === -1) return { ...empty, stage: 'method-name', activeMeth: seg }
+    const name = seg.slice(0, pi)
+    if (name !== 'icc') return null
+    const pj = seg.lastIndexOf(')')
+    if (pj <= pi)
+      return {
+        ...empty,
+        stage: 'method-arg',
+        activeMeth: 'icc',
+        activeArg: seg.slice(pi + 1),
+      }
+    const arg = seg.slice(pi + 1, pj).trim()
+    const isDefault = arg === 'd'
+    const profile = isDefault ? null : arg || null
+    return {
+      cmd: ':sp',
+      profile,
+      isDefault,
+      stage: 'complete',
+      activeMeth: 'icc',
+      activeArg: null,
+    }
+  }
+
   function reconstructXInput(p) {
     let s = 'x'
     if (p.fmt !== null || p.fmtDefault)
@@ -394,6 +442,12 @@
       if (res) return res
     }
 
+    // ─── :sp  flatten spots with ICC ─────────────────────────────────────────
+    if (/^sp(\..*|$)/i.test(t)) {
+      const res = parseSpCmd(t)
+      if (res) return res
+    }
+
     // delete / scope range commands: N, N-M, N,M,K  prefix
     const m = t.match(/^([0-9,\-\s]*)?(bd|ba|sd|s)$/i)
     if (!m) return null
@@ -429,6 +483,19 @@
     const q = parsed.query.trim().toLowerCase()
     if (!q) return allProfiles
     return allProfiles.filter(
+      (p) =>
+        p.value.toLowerCase().includes(q) || p.label.toLowerCase().includes(q),
+    )
+  })
+
+  // --- Profile picker for :sp.icc() ---
+  let filteredSpProfiles = $derived.by(() => {
+    if (!parsed || parsed.cmd !== ':sp' || parsed.stage !== 'method-arg')
+      return []
+    const q = (parsed.activeArg ?? '').trim().toLowerCase()
+    const cmyk = allProfiles.filter((p) => p.color_space === 'CMYK')
+    if (!q) return cmyk
+    return cmyk.filter(
       (p) =>
         p.value.toLowerCase().includes(q) || p.label.toLowerCase().includes(q),
     )
@@ -538,6 +605,16 @@
       if (parsed.stage === 'await-modifier') return M_MODS
       return []
     }
+    if (parsed.cmd === ':sp') {
+      if (parsed.stage === 'methods' || parsed.stage === 'method-name') {
+        const q = parsed.activeMeth ?? ''
+        return SP_METHODS.filter((m) => m.value.startsWith(q))
+      }
+      if (parsed.stage === 'method-arg' && parsed.activeMeth === 'icc') {
+        return filteredSpProfiles
+      }
+      return []
+    }
     return []
   })
 
@@ -632,6 +709,11 @@
           parsed.isDefault ||
           (parsed.values !== null && parsed.modifier !== null)
         )
+      case ':sp':
+        return (
+          parsed.isDefault ||
+          (parsed.profile !== null && parsed.profile.length > 0)
+        )
       default:
         return false
     }
@@ -652,7 +734,11 @@
       (parsed?.cmd === ':m' &&
         (parsed.stage === 'methods' ||
           parsed.stage === 'method-name' ||
-          parsed.stage === 'await-modifier')),
+          parsed.stage === 'await-modifier')) ||
+      (parsed?.cmd === ':sp' &&
+        (parsed.stage === 'methods' ||
+          parsed.stage === 'method-name' ||
+          parsed.stage === 'method-arg')),
   )
 
   // Enter key selection: only the original value-returning pickers
@@ -696,6 +782,13 @@
         app.cmdBarInput = app.cmdBarInput.trimEnd() + '.' + opt.value
       } else {
         app.cmdBarInput = `m.${opt.value}(`
+      }
+    } else if (parsed.cmd === ':sp') {
+      const opt = activeOptions[selectedOptionIdx]
+      if (parsed.stage === 'method-arg' && parsed.activeMeth === 'icc') {
+        app.cmdBarInput = `sp.icc(${opt.value})`
+      } else {
+        app.cmdBarInput = `sp.${opt.value}(`
       }
     }
   }
@@ -1152,6 +1245,56 @@
             <span class="text dim"
               >set remap source · destination · tolerance</span
             >
+          {/if}
+        {:else if parsed.cmd === ':sp'}
+          {#if activeOptions.length > 0}
+            <span class="label"
+              >{parsed.stage === 'method-arg'
+                ? 'destination profile:'
+                : 'flatten spots:'}</span
+            >
+            <div class="option-list" bind:this={optionListEl}>
+              {#each activeOptions as opt, i (opt.value ?? opt)}
+                <div
+                  class="option-row {parsed.stage === 'method-arg'
+                    ? 'profile-row'
+                    : 'method-row'}"
+                  class:sel={i === selectedOptionIdx}
+                >
+                  {#if parsed.stage === 'method-arg'}
+                    <span class="profile-cs {opt.color_space.toLowerCase()}"
+                      >{opt.color_space}</span
+                    >
+                    <span class="profile-label">{opt.label}</span>
+                    <span class="profile-value">{opt.value}</span>
+                  {:else}
+                    <span class="method-sig">{opt.sig}</span>
+                    {#if opt.hint}<span class="method-hint">{opt.hint}</span
+                      >{/if}
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {:else if parsed.stage === 'method-arg'}
+            <span class="label">.icc(</span><span class="text dim"
+              >profile name or d</span
+            ><span class="label">)</span>
+            <span class="text dim"
+              >— now: {app.params.spotIccProfile ?? 'default'}</span
+            >
+          {:else if isValid}
+            <span class="label">flatten spots →</span>
+            {#if parsed.isDefault}
+              <span class="chord-val">default profile</span>
+            {:else}
+              <span class="chord-val">{parsed.profile}</span>
+            {/if}
+            <span class="text dim"
+              >was: {app.params.spotIccProfile ?? 'default'}</span
+            >
+          {:else}
+            <span class="chord-sig">:sp.icc(profile|d)</span>
+            <span class="text dim">flatten spot colors with ICC profile</span>
           {/if}
         {:else if parsed.cmd === 'ba'}
           <span class="text"
