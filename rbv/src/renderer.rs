@@ -3,7 +3,11 @@ use glutin::{
     surface::{GlSurface, Surface as GlWindowSurface, WindowSurface},
 };
 use image::DynamicImage;
-use rustybara::{geometry::Rect as PdfRect, pages::PageBoxes};
+use rustybara::{
+    geometry::Rect as PdfRect,
+    objects::{ObjectKind, PageObject, PathPoint, PdfColor},
+    pages::PageBoxes,
+};
 use skia_safe::{
     AlphaType, ColorType, Data, ImageInfo,
     gpu::{self, DirectContext, SurfaceOrigin, backend_render_targets, gl::FramebufferInfo},
@@ -11,9 +15,44 @@ use skia_safe::{
 
 type WindowSurfaceType = GlWindowSurface<WindowSurface>;
 
+// ── Overlay types ─────────────────────────────────────────────────────────────
+
 pub struct OverlayData<'a> {
     pub boxes: &'a PageBoxes,
 }
+
+/// Diagnostics panel data populated on a selection click.
+pub struct ColorPanel {
+    /// RGBA pixel sampled from the rasterized image at the click position.
+    pub pixel_rgba: [u8; 4],
+    /// Fill color of the selected object, if any.
+    pub pdf_color: Option<PdfColor>,
+}
+
+/// Acrobat-style full-page wireframe overlay.
+///
+/// When active the page image is replaced by a white background with all page
+/// objects drawn as black outlines. The optionally-selected object receives a
+/// distinct blue highlight stroke on top.
+pub struct PageWireframe<'a> {
+    /// All objects on the page in back-to-front paint order.
+    pub objects: &'a [PageObject],
+    /// Page media box used to convert PDF coords → screen coords.
+    pub media_box: &'a PdfRect,
+    /// Object to highlight with a blue outline (the current selection, if any).
+    pub selected: Option<&'a PageObject>,
+}
+
+/// Debug diagnostic overlay — shown when the viewer is in debug mode (Ctrl+Shift+D).
+///
+/// The caller (viewer) builds all text lines from its own state; the renderer
+/// just draws them verbatim in a fixed panel at the top-right of the window.
+pub struct DebugOverlay<'a> {
+    /// Pre-formatted lines of diagnostic text, newest entries last.
+    pub lines: &'a [String],
+}
+
+// ── Renderer ──────────────────────────────────────────────────────────────────
 
 pub struct SkiaRenderer {
     gl_context: PossiblyCurrentContext,
@@ -38,6 +77,8 @@ pub fn image_to_skia(img: &DynamicImage) -> skia_safe::Image {
         .expect("failed to create Skia image")
 }
 
+// ── Coordinate helpers ────────────────────────────────────────────────────────
+
 fn pdf_rect_to_skia(
     pdf_rect: &PdfRect,
     media_box: &PdfRect,
@@ -58,6 +99,52 @@ fn pdf_rect_to_skia(
         bottom,
     }
 }
+
+/// Convert a single PDF page-space point to screen-space, applying the Y-axis flip.
+///
+/// Consistent with [`pdf_rect_to_skia`]: PDF origin is bottom-left (Y-up),
+/// screen origin is top-left (Y-down).
+fn pdf_point_to_screen(
+    pdf_x: f64,
+    pdf_y: f64,
+    media_box: &PdfRect,
+    page_screen_rect: skia_safe::Rect,
+) -> skia_safe::Point {
+    let scale_x = page_screen_rect.width() / media_box.width as f32;
+    let scale_y = page_screen_rect.height() / media_box.height as f32;
+    let sx = page_screen_rect.left() + (pdf_x as f32 - media_box.x as f32) * scale_x;
+    let sy = page_screen_rect.top() + (media_box.top() as f32 - pdf_y as f32) * scale_y;
+    skia_safe::Point::new(sx, sy)
+}
+
+// ── Font helper ───────────────────────────────────────────────────────────────
+
+/// Create a font with an explicitly-resolved system typeface.
+///
+/// `Font::default()` produces a font whose underlying typeface can be empty in
+/// certain GPU driver configurations, causing `TextBlob::from_str` to return
+/// `None` for every string and silently skipping all text rendering.
+/// Querying the system `FontMgr` for a known family guarantees a real typeface
+/// with actual glyph data.
+fn make_ui_font(size: f32) -> skia_safe::Font {
+    let mgr = skia_safe::FontMgr::new();
+    // Try common Windows/cross-platform fonts in preference order.
+    // Empty string "" asks the manager for its own default family.
+    let typeface = ["Consolas", "Courier New", "Arial", "Helvetica", ""]
+        .iter()
+        .find_map(|family| mgr.match_family_style(family, skia_safe::FontStyle::normal()));
+    match typeface {
+        Some(tf) => skia_safe::Font::new(tf, size),
+        None => {
+            // Absolute fallback — may still have no glyphs, but we've tried everything.
+            let mut f = skia_safe::Font::default();
+            f.set_size(size);
+            f
+        }
+    }
+}
+
+// ── Draw helpers ──────────────────────────────────────────────────────────────
 
 fn draw_overlays(
     canvas: &skia_safe::Canvas,
@@ -97,6 +184,241 @@ fn draw_overlays(
     }
 }
 
+/// Draw a single page object as a wireframe outline using the supplied `paint`.
+///
+/// - Path objects (`Fill`, `Stroke`, `FillStroke`) → actual subpath outline.
+/// - Image objects → bounding rect with an × through it (Acrobat-style placeholder).
+/// - Text blocks / Form XObjects → bounding rect.
+fn draw_wireframe_object(
+    canvas: &skia_safe::Canvas,
+    obj: &PageObject,
+    media_box: &PdfRect,
+    page_screen_rect: skia_safe::Rect,
+    paint: &skia_safe::Paint,
+) {
+    match &obj.kind {
+        ObjectKind::Fill | ObjectKind::FillStroke | ObjectKind::Stroke => {
+            if obj.subpaths.is_empty() {
+                // No path data → fall back to bbox rect
+                let r = pdf_rect_to_skia(&obj.bbox, media_box, page_screen_rect);
+                canvas.draw_rect(r, paint);
+                return;
+            }
+            // skia-safe 0.97: PathBuilder for incremental construction; detach() → Path.
+            let mut builder = skia_safe::PathBuilder::new();
+            for sub in &obj.subpaths {
+                for &point in &sub.points {
+                    match point {
+                        PathPoint::MoveTo(lx, ly) => {
+                            let (px, py) = obj.ctm.transform_point(lx, ly);
+                            builder
+                                .move_to(pdf_point_to_screen(px, py, media_box, page_screen_rect));
+                        }
+                        PathPoint::LineTo(lx, ly) => {
+                            let (px, py) = obj.ctm.transform_point(lx, ly);
+                            builder
+                                .line_to(pdf_point_to_screen(px, py, media_box, page_screen_rect));
+                        }
+                        PathPoint::CurveTo(c1x, c1y, c2x, c2y, ex, ey) => {
+                            let (s1x, s1y) = obj.ctm.transform_point(c1x, c1y);
+                            let (s2x, s2y) = obj.ctm.transform_point(c2x, c2y);
+                            let (sex, sey) = obj.ctm.transform_point(ex, ey);
+                            builder.cubic_to(
+                                pdf_point_to_screen(s1x, s1y, media_box, page_screen_rect),
+                                pdf_point_to_screen(s2x, s2y, media_box, page_screen_rect),
+                                pdf_point_to_screen(sex, sey, media_box, page_screen_rect),
+                            );
+                        }
+                        PathPoint::Close => {
+                            builder.close();
+                        }
+                    }
+                }
+            }
+            let path = builder.detach();
+            canvas.draw_path(&path, paint);
+        }
+        ObjectKind::Image => {
+            // Acrobat-style image placeholder: rect with an × inside.
+            let r = pdf_rect_to_skia(&obj.bbox, media_box, page_screen_rect);
+            canvas.draw_rect(r, paint);
+            canvas.draw_line((r.left(), r.top()), (r.right(), r.bottom()), paint);
+            canvas.draw_line((r.right(), r.top()), (r.left(), r.bottom()), paint);
+        }
+        ObjectKind::Text(_) | ObjectKind::FormXObject => {
+            let r = pdf_rect_to_skia(&obj.bbox, media_box, page_screen_rect);
+            canvas.draw_rect(r, paint);
+        }
+    }
+}
+
+/// Draw the Acrobat-style full-page wireframe.
+///
+/// Replaces the raster page image with a white background and draws all page
+/// objects as thin black outlines. The selected object (if any) receives a
+/// thicker blue highlight stroke drawn on top.
+fn draw_page_wireframe(
+    canvas: &skia_safe::Canvas,
+    wf: &PageWireframe<'_>,
+    page_screen_rect: skia_safe::Rect,
+) {
+    // White page background
+    let mut bg = skia_safe::Paint::default();
+    bg.set_color(skia_safe::Color::WHITE);
+    canvas.draw_rect(page_screen_rect, &bg);
+
+    // Thin black outline for every page object
+    let mut outline = skia_safe::Paint::default();
+    outline.set_style(skia_safe::paint::Style::Stroke);
+    outline.set_stroke_width(0.5);
+    outline.set_color(skia_safe::Color::BLACK);
+    outline.set_anti_alias(true);
+    for obj in wf.objects {
+        draw_wireframe_object(canvas, obj, wf.media_box, page_screen_rect, &outline);
+    }
+
+    // Selected object: bright blue, slightly thicker
+    if let Some(sel) = wf.selected {
+        let mut sel_paint = skia_safe::Paint::default();
+        sel_paint.set_style(skia_safe::paint::Style::Stroke);
+        sel_paint.set_stroke_width(2.0);
+        sel_paint.set_color(skia_safe::Color::from_argb(255, 30, 120, 255));
+        sel_paint.set_anti_alias(true);
+        draw_wireframe_object(canvas, sel, wf.media_box, page_screen_rect, &sel_paint);
+    }
+
+    // Page boundary (subtle gray border so the page edge is visible)
+    let mut border = skia_safe::Paint::default();
+    border.set_style(skia_safe::paint::Style::Stroke);
+    border.set_stroke_width(1.0);
+    border.set_color(skia_safe::Color::from_argb(200, 120, 120, 120));
+    canvas.draw_rect(page_screen_rect, &border);
+}
+
+/// Draw the diagnostic color panel in the bottom-left corner.
+///
+/// Shows the sampled RGBA pixel value and the PDF fill color of the selected object.
+/// This is an MVP overlay; a proper UI panel is planned for a future iteration.
+fn draw_color_panel(
+    canvas: &skia_safe::Canvas,
+    panel: &ColorPanel,
+    _win_w: f32,
+    win_h: f32,
+) {
+    let panel_w = 260.0_f32;
+    let panel_h = 64.0_f32;
+    let margin = 10.0_f32;
+    let x = margin;
+    let y = win_h - panel_h - margin;
+
+    // Semi-transparent dark background
+    let mut bg = skia_safe::Paint::default();
+    bg.set_color(skia_safe::Color::from_argb(210, 15, 15, 15));
+    bg.set_anti_alias(true);
+    canvas.draw_rect(skia_safe::Rect::from_xywh(x, y, panel_w, panel_h), &bg);
+
+    // Thin border
+    let mut border = skia_safe::Paint::default();
+    border.set_style(skia_safe::paint::Style::Stroke);
+    border.set_stroke_width(1.0);
+    border.set_color(skia_safe::Color::from_argb(180, 200, 200, 200));
+    canvas.draw_rect(skia_safe::Rect::from_xywh(x, y, panel_w, panel_h), &border);
+
+    let font = make_ui_font(11.0_f32);
+    let mut txt = skia_safe::Paint::default();
+    txt.set_color(skia_safe::Color::from_argb(255, 210, 210, 210));
+    txt.set_anti_alias(true);
+
+    let [r, g, b, a] = panel.pixel_rgba;
+    let pixel_str = format!("Pixel   R:{r}  G:{g}  B:{b}  A:{a}");
+    if let Some(blob) = skia_safe::TextBlob::from_str(&pixel_str, &font) {
+        canvas.draw_text_blob(&blob, (x + 8.0, y + 22.0), &txt);
+    }
+
+    let color_str = match panel.pdf_color {
+        Some(PdfColor::DeviceGray(v)) => format!("PdfColor  Gray: {v:.3}"),
+        Some(PdfColor::DeviceRgb(r, g, b)) => {
+            format!("PdfColor  RGB: {r:.3}  {g:.3}  {b:.3}")
+        }
+        Some(PdfColor::DeviceCmyk(c, m, yv, k)) => {
+            format!("PdfColor  CMYK: {c:.2}  {m:.2}  {yv:.2}  {k:.2}")
+        }
+        None => "PdfColor  n/a".to_string(),
+    };
+    if let Some(blob) = skia_safe::TextBlob::from_str(&color_str, &font) {
+        canvas.draw_text_blob(&blob, (x + 8.0, y + 48.0), &txt);
+    }
+}
+
+/// Draw the debug diagnostic overlay in the top-right corner of the window.
+///
+/// Renders each line of `lines` in a semi-transparent dark panel using a
+/// monospace-like default font. Designed to be readable over any page content.
+fn draw_debug_overlay(
+    canvas: &skia_safe::Canvas,
+    lines: &[String],
+    win_w: f32,
+    win_h: f32,
+) {
+    if lines.is_empty() {
+        return;
+    }
+
+    let font_size = 11.0_f32;
+    let line_h = 15.0_f32;
+    let pad_x = 10.0_f32;
+    let pad_y = 8.0_f32;
+    let panel_w = 370.0_f32;
+    let panel_h = pad_y + lines.len() as f32 * line_h + pad_y;
+
+    // Clamp panel height so it doesn't exceed the window.
+    let panel_h = panel_h.min(win_h - 20.0);
+    let x = win_w - panel_w - 10.0;
+    let y = 10.0_f32;
+
+    // Background — dark navy, distinct from the page/prepress overlays.
+    let mut bg = skia_safe::Paint::default();
+    bg.set_color(skia_safe::Color::from_argb(225, 8, 12, 28));
+    bg.set_anti_alias(true);
+    canvas.draw_rect(skia_safe::Rect::from_xywh(x, y, panel_w, panel_h), &bg);
+
+    // Green border (classic terminal aesthetic).
+    let mut border = skia_safe::Paint::default();
+    border.set_style(skia_safe::paint::Style::Stroke);
+    border.set_stroke_width(1.0);
+    border.set_color(skia_safe::Color::from_argb(200, 60, 200, 80));
+    canvas.draw_rect(skia_safe::Rect::from_xywh(x, y, panel_w, panel_h), &border);
+
+    let font = make_ui_font(font_size);
+
+    // Header / section separator lines — bright green.
+    let mut bright = skia_safe::Paint::default();
+    bright.set_color(skia_safe::Color::from_argb(255, 100, 255, 128));
+    bright.set_anti_alias(true);
+
+    // Body lines — softer green so headers stand out.
+    let mut dim = skia_safe::Paint::default();
+    dim.set_color(skia_safe::Color::from_argb(255, 140, 218, 155));
+    dim.set_anti_alias(true);
+
+    let max_lines = ((panel_h - pad_y * 2.0) / line_h) as usize;
+    for (i, line) in lines.iter().take(max_lines).enumerate() {
+        let ty = y + pad_y + (i as f32 + 1.0) * line_h;
+        let paint = if i == 0 || line.starts_with('\u{2500}') {
+            &bright
+        } else {
+            &dim
+        };
+        // TextBlob::from_str + draw_text_blob is the reliable GPU-safe text path in
+        // skia-safe 0.97 (draw_str can silently produce nothing in some GPU drivers).
+        if let Some(blob) = skia_safe::TextBlob::from_str(line.as_str(), &font) {
+            canvas.draw_text_blob(&blob, (x + pad_x, ty), paint);
+        }
+    }
+}
+
+// ── Surface helpers ───────────────────────────────────────────────────────────
+
 fn make_skia_surface(
     gr_context: &mut DirectContext,
     width: u32,
@@ -119,6 +441,8 @@ fn make_skia_surface(
     )
     .expect("Skia GPU surface")
 }
+
+// ── SkiaRenderer ──────────────────────────────────────────────────────────────
 
 impl SkiaRenderer {
     /// Construct from an already-current GL context and window surface.
@@ -144,46 +468,76 @@ impl SkiaRenderer {
         }
     }
 
-    /// Draw the page bitmap and, optionally, prepress overlays ontot the Skia surface.
-    /// If `page_image` is `None` the canvas is cleared and the call returns early,
-    /// overlays are skipped because the page rect is undefined without an image.
+    /// Draw the page and optional overlays onto the Skia surface.
+    ///
+    /// Rendering order (back to front):
+    /// 1. Background clear (dark grey)
+    /// 2a. **Normal mode** – raster page image
+    /// 2b. **Wireframe mode** – white page rect + all object outlines + selection highlight
+    /// 3. Prepress box overlays (`overlays`) — shown in both modes
+    /// 4. Color diagnostics panel (`color_panel`)
+    /// 5. Debug overlay (`debug`) — always on top, even before a page has loaded
     pub fn draw(
         &mut self,
         page_image: Option<&skia_safe::Image>,
         zoom: f32,
         pan: [f32; 2],
         overlays: Option<&OverlayData<'_>>,
+        wireframe: Option<&PageWireframe<'_>>,
+        color_panel: Option<&ColorPanel>,
+        debug: Option<&DebugOverlay<'_>>,
     ) {
         let canvas = self.skia_surface.canvas();
         canvas.clear(skia_safe::Color::from_argb(255, 30, 30, 30));
 
-        let Some(img) = page_image else { return };
-
-        let img_w = img.width() as f32;
-        let img_h = img.height() as f32;
+        // win_w / win_h must be known before the page-image check so the debug
+        // overlay can be drawn even while a page is still loading.
         let win_w = self.width as f32;
         let win_h = self.height as f32;
 
-        let base_scale = (win_w / img_w).min(win_h / img_h);
-        let scale = base_scale * zoom;
+        // The page position is always derived from the raster image dimensions.
+        // Wireframe mode uses the same dst rect so pan/zoom stay consistent.
+        if let Some(img) = page_image {
+            let img_w = img.width() as f32;
+            let img_h = img.height() as f32;
 
-        let draw_w = img_w * scale;
-        let draw_h = img_h * scale;
-        let x = (win_w - draw_w) / 2.0 + pan[0];
-        let y = (win_h - draw_h) / 2.0 + pan[1];
+            let base_scale = (win_w / img_w).min(win_h / img_h);
+            let scale = base_scale * zoom;
 
-        let src = skia_safe::Rect::from_wh(img_w, img_h);
-        let dst = skia_safe::Rect::from_xywh(x, y, draw_w, draw_h);
+            let draw_w = img_w * scale;
+            let draw_h = img_h * scale;
+            let x = (win_w - draw_w) / 2.0 + pan[0];
+            let y = (win_h - draw_h) / 2.0 + pan[1];
 
-        canvas.draw_image_rect(
-            img,
-            Some((&src, skia_safe::canvas::SrcRectConstraint::Strict)),
-            dst,
-            &skia_safe::Paint::default(),
-        );
+            let src = skia_safe::Rect::from_wh(img_w, img_h);
+            let dst = skia_safe::Rect::from_xywh(x, y, draw_w, draw_h);
 
-        if let Some(ov) = overlays {
-            draw_overlays(canvas, ov, dst);
+            if let Some(wf) = wireframe {
+                // Wireframe mode: white page background + object outlines.
+                draw_page_wireframe(canvas, wf, dst);
+            } else {
+                // Normal mode: render the rasterized page image.
+                canvas.draw_image_rect(
+                    img,
+                    Some((&src, skia_safe::canvas::SrcRectConstraint::Strict)),
+                    dst,
+                    &skia_safe::Paint::default(),
+                );
+            }
+
+            // Prepress box overlays render in both modes.
+            if let Some(ov) = overlays {
+                draw_overlays(canvas, ov, dst);
+            }
+        }
+
+        if let Some(panel) = color_panel {
+            draw_color_panel(canvas, panel, win_w, win_h);
+        }
+
+        // Debug overlay renders on top of everything, including the loading state.
+        if let Some(dbg) = debug {
+            draw_debug_overlay(canvas, dbg.lines, win_w, win_h);
         }
     }
 
@@ -205,7 +559,12 @@ impl SkiaRenderer {
 
 #[cfg(test)]
 mod tests {
-    use super::{image_to_skia, pdf_rect_to_skia};
+    use super::{
+        draw_debug_overlay, draw_wireframe_object, image_to_skia, pdf_point_to_screen,
+        pdf_rect_to_skia,
+    };
+    use rustybara::objects::{ObjectKind, PageObject, PdfColor, SubPath, PathPoint};
+    use rustybara::geometry::Matrix;
     use image::{DynamicImage, RgbaImage};
     use rustybara::geometry::Rect as PdfRect;
 
@@ -328,6 +687,80 @@ mod tests {
         let r = pdf_rect_to_skia(&media, &media, screen);
         assert!((r.width() - 306.0).abs() < 0.1, "width={}", r.width());
         assert!((r.height() - 396.0).abs() < 0.1, "height={}", r.height());
+    }
+
+    // ── pdf_point_to_screen ───────────────────────────────────────────────────
+
+    // PDF origin (0, 0) is bottom-left → should map to screen bottom-left at 1:1.
+    #[test]
+    fn pdf_origin_maps_to_screen_bottom_left() {
+        let media = PdfRect::new(0.0, 0.0, 612.0, 792.0);
+        let screen = skia_safe::Rect::from_xywh(0.0, 0.0, 612.0, 792.0);
+        let pt = pdf_point_to_screen(0.0, 0.0, &media, screen);
+        assert!((pt.x - 0.0).abs() < 0.1, "x={}", pt.x);
+        assert!((pt.y - 792.0).abs() < 0.1, "y={}", pt.y); // bottom of screen
+    }
+
+    // PDF top-left (0, page_height) → screen top-left (0, 0).
+    #[test]
+    fn pdf_top_left_maps_to_screen_top_left() {
+        let media = PdfRect::new(0.0, 0.0, 612.0, 792.0);
+        let screen = skia_safe::Rect::from_xywh(0.0, 0.0, 612.0, 792.0);
+        let pt = pdf_point_to_screen(0.0, 792.0, &media, screen);
+        assert!((pt.x - 0.0).abs() < 0.1, "x={}", pt.x);
+        assert!((pt.y - 0.0).abs() < 0.1, "y={}", pt.y);
+    }
+
+    // PDF center maps to screen center at 1:1 scale.
+    #[test]
+    fn pdf_center_maps_to_screen_center() {
+        let media = PdfRect::new(0.0, 0.0, 612.0, 792.0);
+        let screen = skia_safe::Rect::from_xywh(0.0, 0.0, 612.0, 792.0);
+        let pt = pdf_point_to_screen(306.0, 396.0, &media, screen);
+        assert!((pt.x - 306.0).abs() < 0.1, "x={}", pt.x);
+        assert!((pt.y - 396.0).abs() < 0.1, "y={}", pt.y);
+    }
+
+    // Point result is consistent with pdf_rect_to_skia for the same coordinate.
+    #[test]
+    fn point_consistent_with_rect_corner() {
+        let media = PdfRect::new(0.0, 0.0, 612.0, 792.0);
+        let trim = PdfRect::new(36.0, 36.0, 540.0, 720.0);
+        let screen = skia_safe::Rect::from_xywh(0.0, 0.0, 612.0, 792.0);
+        let rect = pdf_rect_to_skia(&trim, &media, screen);
+        // The top-left corner of trim in PDF space is (36, 756)
+        let pt = pdf_point_to_screen(36.0, 756.0, &media, screen);
+        assert!((pt.x - rect.left()).abs() < 0.1, "x vs rect.left: {}", pt.x);
+        assert!((pt.y - rect.top()).abs() < 0.1, "y vs rect.top: {}", pt.y);
+    }
+
+    // ── draw_debug_overlay ───────────────────────────────────────────────────
+
+    // Verify the debug overlay draws without panicking on a CPU raster surface.
+    #[test]
+    fn draw_debug_overlay_no_panic() {
+        let mut surface = skia_safe::surfaces::raster_n32_premul((600, 400)).expect("surface");
+        let canvas = surface.canvas();
+        let lines = vec![
+            "── DEBUG (Ctrl+Shift+D) ─────────────────".to_string(),
+            "Zoom  1.000×    Pan  [+0.0, +0.0]".to_string(),
+            "Cursor  (300.0, 200.0)  screen".to_string(),
+            "        (245.3, 396.0)  pdf".to_string(),
+            "Page  #0   Objects: 12".to_string(),
+            "Overlays: OFF   Wireframe: OFF".to_string(),
+            "Selected  none".to_string(),
+            "─── Log ─────────────────────────────────".to_string(),
+            "  Page loaded: 12 objects, page 0".to_string(),
+        ];
+        draw_debug_overlay(canvas, &lines, 600.0, 400.0);
+    }
+
+    // Empty lines list → nothing drawn, no panic.
+    #[test]
+    fn draw_debug_overlay_empty_lines() {
+        let mut surface = skia_safe::surfaces::raster_n32_premul((200, 100)).expect("surface");
+        let canvas = surface.canvas();
+        draw_debug_overlay(canvas, &[], 200.0, 100.0);
     }
 
     #[test]
