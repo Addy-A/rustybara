@@ -1,6 +1,7 @@
-use crate::renderer::{image_to_skia, SkiaRenderer};
+use crate::renderer::{image_to_skia, OverlayData, SkiaRenderer};
 use image::DynamicImage;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use rustybara::pages::PageBoxes;
 use rustybara::raster::RenderConfig;
 use rustybara::PdfPipeline;
 use std::path::PathBuf;
@@ -32,6 +33,8 @@ struct Viewer {
     config: RenderConfig,
     state: Option<SkiaState>,
     pending_image: Option<DynamicImage>,
+    page_boxes: Option<PageBoxes>,
+    show_overlays: bool,
     zoom: f32,
     pan: [f32; 2],
     ctrl_held: bool,
@@ -75,13 +78,80 @@ impl Viewer {
 
 impl ApplicationHandler<ViewerEvent> for Viewer {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        use glutin::{
+            config::ConfigTemplateBuilder,
+            context::{ContextApi, ContextAttributesBuilder, NotCurrentGlContext},
+            display::{Display, DisplayApiPreference},
+            prelude::*,
+            surface::SurfaceAttributesBuilder,
+        };
+        use glutin_winit::GlWindow;
+        use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+
         let window = Arc::new(
             event_loop
                 .create_window(Window::default_attributes().with_title("rbv"))
                 .expect("create window"),
         );
         let size = window.inner_size();
-        let renderer = SkiaRenderer::new(window.clone());
+        let width = size.width.max(1);
+        let height = size.height.max(1);
+
+        let raw_window = window.window_handle().expect("window handle").as_raw();
+        let raw_display = event_loop
+            .display_handle()
+            .expect("display handle")
+            .as_raw();
+
+        let gl_display = unsafe {
+            #[cfg(target_os = "windows")]
+            let pref = DisplayApiPreference::EglThenWgl(Some(raw_window));
+            #[cfg(target_os = "linux")]
+            let pref = DisplayApiPreference::EglThenGlx(Box::new(|_| {}));
+            #[cfg(target_os = "macos")]
+            let pref = DisplayApiPreference::Cgl;
+            Display::new(raw_display, pref).expect("GL display")
+        };
+
+        let config_template = ConfigTemplateBuilder::new()
+            .with_alpha_size(8)
+            .with_stencil_size(8)
+            .build();
+
+        let gl_config = unsafe {
+            gl_display
+                .find_configs(config_template)
+                .expect("find GL configs")
+                .next()
+                .expect("no GL config found")
+        };
+
+        let surface_attrs = window
+            .build_surface_attributes(SurfaceAttributesBuilder::new())
+            .expect("surface attributes");
+        let gl_surface = unsafe {
+            gl_display
+                .create_window_surface(&gl_config, &surface_attrs)
+                .expect("GL window surface")
+        };
+
+        let gl_context = unsafe {
+            let core = ContextAttributesBuilder::new()
+                .with_context_api(ContextApi::OpenGl(None))
+                .build(Some(raw_window));
+            let gles = ContextAttributesBuilder::new()
+                .with_context_api(ContextApi::Gles(None))
+                .build(Some(raw_window));
+            gl_display
+                .create_context(&gl_config, &core)
+                .or_else(|_| gl_display.create_context(&gl_config, &gles))
+                .expect("GL context")
+        }
+        .make_current(&gl_surface)
+        .expect("make context current");
+
+        let renderer = SkiaRenderer::from_gl(gl_context, gl_surface, width, height);
+
         let page_image = self.pending_image.as_ref().map(image_to_skia);
         if page_image.is_some() {
             window.request_redraw();
@@ -90,8 +160,8 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
             window,
             renderer,
             page_image,
-            width: size.width.max(1),
-            height: size.height.max(1),
+            width,
+            height,
         });
         self.pending_image = None;
     }
@@ -106,9 +176,17 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
 
             WindowEvent::RedrawRequested => {
                 let state = self.state.as_mut().unwrap();
-                state
-                    .renderer
-                    .draw(state.page_image.as_ref(), self.zoom, self.pan);
+                let overlays = if self.show_overlays {
+                    self.page_boxes.as_ref().map(|b| OverlayData { boxes: b })
+                } else {
+                    None
+                };
+                state.renderer.draw(
+                    state.page_image.as_ref(),
+                    self.zoom,
+                    self.pan,
+                    overlays.as_ref(),
+                );
                 state.renderer.present();
             }
 
@@ -116,7 +194,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 let state = self.state.as_mut().unwrap();
                 state.width = size.width.max(1);
                 state.height = size.height.max(1);
-                state.renderer.resize(state.width, state.height);
+                state.renderer.resize(size.width.max(1), size.height.max(1));
                 state.window.request_redraw();
             }
 
@@ -147,6 +225,9 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                     KeyCode::Digit0 | KeyCode::Numpad0 if self.ctrl_held => {
                         self.zoom = 1.0;
                         self.pan = [0.0, 0.0];
+                    }
+                    KeyCode::KeyO if !self.ctrl_held => {
+                        self.show_overlays = !self.show_overlays;
                     }
                     _ => {}
                 }
@@ -215,6 +296,13 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
             }
             ViewerEvent::FileChanged => {
                 if let Ok(new_pipeline) = PdfPipeline::open(&self.file) {
+                    self.page_boxes = new_pipeline
+                        .doc()
+                        .get_pages()
+                        .values()
+                        .nth(self.page as usize)
+                        .copied()
+                        .and_then(|id| PageBoxes::read(new_pipeline.doc(), id).ok());
                     self.pipeline = Arc::new(new_pipeline);
                 }
                 self.spawn_render(self.page);
@@ -226,6 +314,14 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
 
 pub fn run(file: PathBuf, page: u32, config: RenderConfig) {
     let pipeline = Arc::new(PdfPipeline::open(&file).expect("open PDF"));
+
+    let page_boxes = pipeline
+        .doc()
+        .get_pages()
+        .values()
+        .nth(page as usize)
+        .copied()
+        .and_then(|id| PageBoxes::read(pipeline.doc(), id).ok());
 
     let event_loop = EventLoop::<ViewerEvent>::with_user_event()
         .build()
@@ -273,6 +369,8 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig) {
         config,
         state: None,
         pending_image: None,
+        page_boxes,
+        show_overlays: false,
         zoom: 1.0,
         pan: [0.0, 0.0],
         ctrl_held: false,
@@ -285,24 +383,17 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig) {
     event_loop.run_app(&mut viewer).expect("run app");
 }
 
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    // Helper: build a Viewer-like zoom/pan state for unit testing the math
     struct ZoomState {
         zoom: f32,
         pan: [f32; 2],
     }
 
     impl ZoomState {
-        fn apply_zoom(
-            &mut self,
-            factor: f32,
-            focal: Option<[f32; 2]>,
-            win_w: f32,
-            win_h: f32,
-        ) {
+        fn apply_zoom(&mut self, factor: f32, focal: Option<[f32; 2]>, win_w: f32, win_h: f32) {
             let old_zoom = self.zoom;
             self.zoom = (self.zoom * factor).clamp(0.05, 50.0);
             let r = self.zoom / old_zoom;
@@ -315,31 +406,36 @@ mod tests {
         }
     }
 
-    // Zoom from identity at window centre leaves pan unchanged
     #[test]
     fn zoom_center_pan_unchanged() {
-        let mut s = ZoomState { zoom: 1.0, pan: [0.0, 0.0] };
+        let mut s = ZoomState {
+            zoom: 1.0,
+            pan: [0.0, 0.0],
+        };
         s.apply_zoom(2.0, None, 800.0, 600.0);
         assert_eq!(s.zoom, 2.0);
-        assert!( s.pan[0].abs() < 1e-4, "pan x should be 0, got {}", s.pan[0]);
-        assert!(s.pan[1].abs() < 1e-4, "pan y should be 0, got {}", s.pan[1]);
+        assert!(s.pan[0].abs() < 1e-4, "pan x={}", s.pan[0]);
+        assert!(s.pan[1].abs() < 1e-4, "pan y={}", s.pan[1]);
     }
 
-    // Zoom at top-left corner (0,0) shifts pan toward centre
     #[test]
     fn zoom_corner_focal() {
-        let mut s = ZoomState { zoom: 1.0, pan: [0.0, 0.0] };
+        let mut s = ZoomState {
+            zoom: 1.0,
+            pan: [0.0, 0.0],
+        };
         s.apply_zoom(2.0, Some([0.0, 0.0]), 800.0, 600.0);
         assert_eq!(s.zoom, 2.0);
-        // focal (0,0) is (-400,-300) from centre; (1-r) = -1, so pan shifts +400/+300
         assert!((s.pan[0] - 400.0).abs() < 1e-3, "pan x={}", s.pan[0]);
         assert!((s.pan[1] - 300.0).abs() < 1e-3, "pan y={}", s.pan[1]);
     }
 
-    // Zoom in then zoom out returns to original zoom (within float tolerance)
     #[test]
     fn zoom_in_out_roundtrip() {
-        let mut s = ZoomState { zoom: 1.0, pan: [0.0, 0.0] };
+        let mut s = ZoomState {
+            zoom: 1.0,
+            pan: [0.0, 0.0],
+        };
         s.apply_zoom(1.1, None, 800.0, 600.0);
         s.apply_zoom(1.0 / 1.1, None, 800.0, 600.0);
         assert!((s.zoom - 1.0).abs() < 1e-5, "zoom={}", s.zoom);
@@ -347,33 +443,38 @@ mod tests {
         assert!(s.pan[1].abs() < 1e-4);
     }
 
-    // Zoom clamps at minimum (0.05)
     #[test]
     fn zoom_clamps_minimum() {
-        let mut s = ZoomState { zoom: 0.06, pan: [0.0, 0.0] };
+        let mut s = ZoomState {
+            zoom: 0.06,
+            pan: [0.0, 0.0],
+        };
         s.apply_zoom(0.1, None, 800.0, 600.0);
         assert_eq!(s.zoom, 0.05);
     }
 
-    // Zoom clamps at maximum (50.0)
     #[test]
     fn zoom_clamps_maximum() {
-        let mut s = ZoomState { zoom: 49.0, pan: [0.0, 0.0] };
+        let mut s = ZoomState {
+            zoom: 49.0,
+            pan: [0.0, 0.0],
+        };
         s.apply_zoom(10.0, None, 800.0, 600.0);
         assert_eq!(s.zoom, 50.0);
     }
 
-    // Zoom factor 1.0 is a no-op on both zoom and pan
     #[test]
     fn zoom_factor_one_noop() {
-        let mut s = ZoomState { zoom: 2.0, pan: [50.0, -30.0] };
+        let mut s = ZoomState {
+            zoom: 2.0,
+            pan: [50.0, -30.0],
+        };
         s.apply_zoom(1.0, Some([100.0, 200.0]), 800.0, 600.0);
         assert!((s.zoom - 2.0).abs() < 1e-5);
         assert!((s.pan[0] - 50.0).abs() < 1e-4);
         assert!((s.pan[1] - -30.0).abs() < 1e-4);
     }
 
-    // Pan drag: delta applied correctly
     #[test]
     fn pan_drag_delta() {
         let pan_start = [10.0_f32, 20.0_f32];
@@ -385,4 +486,6 @@ mod tests {
         ];
         assert_eq!(new_pan, [40.0, 30.0]);
     }
+
+    // Overlay toggle is bool negation — verified by inspection, no state machine test needed.
 }

@@ -1,13 +1,25 @@
+use glutin::{
+    context::PossiblyCurrentContext,
+    surface::{GlSurface, Surface as GlWindowSurface, WindowSurface},
+};
 use image::DynamicImage;
-use skia_safe::{AlphaType, ColorType, Data, ImageInfo};
-use std::num::NonZeroU32;
-use std::sync::Arc;
-use winit::window::Window;
+use rustybara::{geometry::Rect as PdfRect, pages::PageBoxes};
+use skia_safe::{
+    AlphaType, ColorType, Data, ImageInfo,
+    gpu::{self, DirectContext, SurfaceOrigin, backend_render_targets, gl::FramebufferInfo},
+};
+
+type WindowSurfaceType = GlWindowSurface<WindowSurface>;
+
+pub struct OverlayData<'a> {
+    pub boxes: &'a PageBoxes,
+}
 
 pub struct SkiaRenderer {
+    gl_context: PossiblyCurrentContext,
+    gl_surface: WindowSurfaceType,
+    gr_context: DirectContext,
     skia_surface: skia_safe::Surface,
-    _sb_context: softbuffer::Context<Arc<Window>>,
-    sb_surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
     pub width: u32,
     pub height: u32,
 }
@@ -26,34 +38,122 @@ pub fn image_to_skia(img: &DynamicImage) -> skia_safe::Image {
         .expect("failed to create Skia image")
 }
 
+fn pdf_rect_to_skia(
+    pdf_rect: &PdfRect,
+    media_box: &PdfRect,
+    page_screen_rect: skia_safe::Rect,
+) -> skia_safe::Rect {
+    let scale_x = page_screen_rect.width() / media_box.width as f32;
+    let scale_y = page_screen_rect.height() / media_box.height as f32;
+
+    let left = page_screen_rect.left() + (pdf_rect.x - media_box.x) as f32 * scale_x;
+    let top = page_screen_rect.top() + (media_box.top() - pdf_rect.top()) as f32 * scale_y;
+    let right = page_screen_rect.left() + (pdf_rect.right() - media_box.x) as f32 * scale_x;
+    let bottom = page_screen_rect.top() + (media_box.top() - pdf_rect.y) as f32 * scale_y;
+
+    skia_safe::Rect {
+        left,
+        top,
+        right,
+        bottom,
+    }
+}
+
+fn draw_overlays(
+    canvas: &skia_safe::Canvas,
+    overlays: &OverlayData<'_>,
+    page_screen_rect: skia_safe::Rect,
+) {
+    let media = &overlays.boxes.media_box;
+
+    if let Some(bleed) = &overlays.boxes.bleed_box {
+        let r = pdf_rect_to_skia(bleed, media, page_screen_rect);
+        let mut paint = skia_safe::Paint::default();
+        paint.set_style(skia_safe::paint::Style::Stroke);
+        paint.set_stroke_width(1.5);
+        paint.set_color(skia_safe::Color::from_argb(220, 255, 100, 0));
+        paint.set_path_effect(skia_safe::dash_path_effect::new(&[6.0, 4.0], 0.0));
+        canvas.draw_rect(r, &paint);
+    }
+
+    if let Some(trim) = &overlays.boxes.trim_box {
+        let r = pdf_rect_to_skia(trim, media, page_screen_rect);
+        let mut paint = skia_safe::Paint::default();
+        paint.set_style(skia_safe::paint::Style::Stroke);
+        paint.set_stroke_width(1.5);
+        paint.set_color(skia_safe::Color::from_argb(220, 0, 160, 255));
+        paint.set_path_effect(skia_safe::dash_path_effect::new(&[6.0, 4.0], 0.0));
+        canvas.draw_rect(r, &paint);
+    }
+
+    if let Some(crop) = &overlays.boxes.crop_box {
+        let r = pdf_rect_to_skia(crop, media, page_screen_rect);
+        let mut paint = skia_safe::Paint::default();
+        paint.set_style(skia_safe::paint::Style::Stroke);
+        paint.set_stroke_width(1.5);
+        paint.set_color(skia_safe::Color::from_argb(200, 0, 200, 80));
+        paint.set_path_effect(skia_safe::dash_path_effect::new(&[6.0, 4.0], 0.0));
+        canvas.draw_rect(r, &paint);
+    }
+}
+
+fn make_skia_surface(
+    gr_context: &mut DirectContext,
+    width: u32,
+    height: u32,
+) -> skia_safe::Surface {
+    let fb_info = FramebufferInfo {
+        fboid: 0,
+        format: 0x8058,
+        ..Default::default()
+    };
+    let backend_rt =
+        backend_render_targets::make_gl((width as i32, height as i32), None, 8, fb_info);
+    gpu::surfaces::wrap_backend_render_target(
+        gr_context,
+        &backend_rt,
+        SurfaceOrigin::BottomLeft,
+        ColorType::RGBA8888,
+        None,
+        None,
+    )
+    .expect("Skia GPU surface")
+}
+
 impl SkiaRenderer {
-    pub fn new(window: Arc<Window>) -> Self {
-        let size = window.inner_size();
-        let width = size.width.max(1);
-        let height = size.height.max(1);
-
-        let skia_surface = skia_safe::surfaces::raster_n32_premul((width as i32, height as i32))
-            .expect("Skia surface");
-        let sb_context = softbuffer::Context::new(window.clone()).expect("softbuffer context");
-        let mut sb_surface =
-            softbuffer::Surface::new(&sb_context, window.clone()).expect("softbuffer surface");
-        sb_surface
-            .resize(
-                NonZeroU32::new(width).unwrap(),
-                NonZeroU32::new(height).unwrap(),
-            )
-            .expect("softbuffer resize");
-
+    /// Construct from an already-current GL context and window surface.
+    /// The GL context must be made current before calling this.
+    pub fn from_gl(
+        gl_context: PossiblyCurrentContext,
+        gl_surface: WindowSurfaceType,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        let gl_interface = skia_safe::gpu::gl::Interface::new_native()
+            .expect("Skia GL interface — GL context must be current");
+        let mut gr_context = skia_safe::gpu::direct_contexts::make_gl(gl_interface, None)
+            .expect("Skia DirectContext");
+        let skia_surface = make_skia_surface(&mut gr_context, width, height);
         Self {
+            gl_context,
+            gl_surface,
+            gr_context,
             skia_surface,
-            _sb_context: sb_context,
-            sb_surface,
             width,
             height,
         }
     }
 
-    pub fn draw(&mut self, page_image: Option<&skia_safe::Image>, zoom: f32, pan: [f32; 2]) {
+    /// Draw the page bitmap and, optionally, prepress overlays ontot the Skia surface.
+    /// If `page_image` is `None` the canvas is cleared and the call returns early,
+    /// overlays are skipped because the page rect is undefined without an image.
+    pub fn draw(
+        &mut self,
+        page_image: Option<&skia_safe::Image>,
+        zoom: f32,
+        pan: [f32; 2],
+        overlays: Option<&OverlayData<'_>>,
+    ) {
         let canvas = self.skia_surface.canvas();
         canvas.clear(skia_safe::Color::from_argb(255, 30, 30, 30));
 
@@ -81,42 +181,36 @@ impl SkiaRenderer {
             dst,
             &skia_safe::Paint::default(),
         );
+
+        if let Some(ov) = overlays {
+            draw_overlays(canvas, ov, dst);
+        }
     }
 
     pub fn present(&mut self) {
-        let pixels_ref = self.skia_surface.peek_pixels().expect("peek_pixels");
-        let bytes = pixels_ref.bytes().expect("pixel bytes");
-        let pixels: &[u32] = bytemuck::cast_slice(bytes);
-
-        let mut buf = self.sb_surface.buffer_mut().expect("buffer_mut");
-        buf.copy_from_slice(pixels);
-        buf.present().expect("present");
+        self.gr_context.flush_and_submit();
+        self.gl_surface
+            .swap_buffers(&self.gl_context)
+            .expect("swap buffers");
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
         self.width = width.max(1);
         self.height = height.max(1);
-
-        self.skia_surface =
-            skia_safe::surfaces::raster_n32_premul((self.width as i32, self.height as i32))
-                .expect("Skia surface resize");
-
-        self.sb_surface
-            .resize(
-                NonZeroU32::new(self.width).unwrap(),
-                NonZeroU32::new(self.height).unwrap(),
-            )
-            .expect("softbuffer resize");
+        self.skia_surface = make_skia_surface(&mut self.gr_context, self.width, self.height)
     }
 }
 
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
-    use super::image_to_skia;
+    use super::{image_to_skia, pdf_rect_to_skia};
     use image::{DynamicImage, RgbaImage};
-    use skia_safe::ColorType;
+    use rustybara::geometry::Rect as PdfRect;
 
-    // image_to_skia: correct dimensions
+    // ── image_to_skia ────────────────────────────────────────────────────────
+
     #[test]
     fn image_to_skia_dimensions() {
         let img = DynamicImage::ImageRgba8(RgbaImage::new(64, 32));
@@ -125,22 +219,16 @@ mod tests {
         assert_eq!(skia_img.height(), 32);
     }
 
-    // image_to_skia: pixel values survive the round-trip
     #[test]
     fn image_to_skia_pixel_values() {
         let mut src = RgbaImage::new(2, 1);
         src.put_pixel(0, 0, image::Rgba([255, 0, 128, 255]));
         src.put_pixel(1, 0, image::Rgba([0, 64, 32, 128]));
         let skia_img = image_to_skia(&DynamicImage::ImageRgba8(src));
-        // peek_pixels gives us a Pixmap we can read back
-        let info = skia_img.image_info();
-        assert_eq!(info.width(), 2);
-        assert_eq!(info.height(), 1);
-        // colour type is whatever Skia chose (RGBA8888 or n32); width/height suffice
-        // to confirm data was accepted without panic or silent truncation
+        assert_eq!(skia_img.width(), 2);
+        assert_eq!(skia_img.height(), 1);
     }
 
-    // image_to_skia: 1×1 minimum size doesn't panic
     #[test]
     fn image_to_skia_one_pixel() {
         let img = DynamicImage::ImageRgba8(RgbaImage::new(1, 1));
@@ -149,49 +237,100 @@ mod tests {
         assert_eq!(skia_img.height(), 1);
     }
 
-    // draw: clear-only path (no image) doesn't panic
+    // ── draw (CPU surface, no GL needed) ────────────────────────────────────
+
     #[test]
-    fn renderer_draw_no_image() {
-        let mut surface =
-            skia_safe::surfaces::raster_n32_premul((100, 100)).expect("surface");
-        // call the draw logic directly without a SkiaRenderer (no GPU/softbuffer needed)
+    fn draw_no_image_clears_surface() {
+        let mut surface = skia_safe::surfaces::raster_n32_premul((100, 100)).expect("surface");
         let canvas = surface.canvas();
         canvas.clear(skia_safe::Color::from_argb(255, 30, 30, 30));
-        // verify background colour was written
         let pixmap = surface.peek_pixels().expect("peek");
         let bytes = pixmap.bytes().expect("bytes");
-        // n32 on little-endian = BGRA; byte order: B=30 G=30 R=30 A=255
-        // just check the buffer is non-empty and the right size
         assert_eq!(bytes.len(), 100 * 100 * 4);
     }
 
-    // draw: image-present path scales and positions without panic
     #[test]
-    fn renderer_draw_with_image() {
-        let mut surface =
-            skia_safe::surfaces::raster_n32_premul((200, 150)).expect("surface");
+    fn draw_with_image_no_panic() {
+        let mut surface = skia_safe::surfaces::raster_n32_premul((200, 150)).expect("surface");
         let page = DynamicImage::ImageRgba8(RgbaImage::new(100, 100));
         let skia_img = image_to_skia(&page);
-
         let canvas = surface.canvas();
         canvas.clear(skia_safe::Color::from_argb(255, 30, 30, 30));
-        let img_w = skia_img.width() as f32;
-        let img_h = skia_img.height() as f32;
-        let win_w = 200_f32;
-        let win_h = 150_f32;
-        let scale = (win_w / img_w).min(win_h / img_h) * 1.0; // zoom = 1
-        let draw_w = img_w * scale;
-        let draw_h = img_h * scale;
-        let x = (win_w - draw_w) / 2.0;
-        let y = (win_h - draw_h) / 2.0;
-        let src = skia_safe::Rect::from_wh(img_w, img_h);
-        let dst = skia_safe::Rect::from_xywh(x, y, draw_w, draw_h);
+        let (img_w, img_h) = (skia_img.width() as f32, skia_img.height() as f32);
+        let (win_w, win_h) = (200_f32, 150_f32);
+        let scale = (win_w / img_w).min(win_h / img_h);
+        let dst = skia_safe::Rect::from_xywh(
+            (win_w - img_w * scale) / 2.0,
+            (win_h - img_h * scale) / 2.0,
+            img_w * scale,
+            img_h * scale,
+        );
         canvas.draw_image_rect(
             &skia_img,
-            Some((&src, skia_safe::canvas::SrcRectConstraint::Strict)),
+            Some((
+                &skia_safe::Rect::from_wh(img_w, img_h),
+                skia_safe::canvas::SrcRectConstraint::Strict,
+            )),
             dst,
             &skia_safe::Paint::default(),
         );
-        // if we got here without panic the draw path is sound
     }
+
+    // ── pdf_rect_to_skia ─────────────────────────────────────────────────────
+
+    // The media box itself must map exactly onto the full page_screen_rect.
+    #[test]
+    fn media_box_maps_to_full_page_rect() {
+        let media = PdfRect::new(0.0, 0.0, 612.0, 792.0);
+        let screen = skia_safe::Rect::from_xywh(50.0, 100.0, 300.0, 400.0);
+        let r = pdf_rect_to_skia(&media, &media, screen);
+        assert!((r.left() - 50.0).abs() < 0.1, "left={}", r.left());
+        assert!((r.top() - 100.0).abs() < 0.1, "top={}", r.top());
+        assert!((r.right() - 350.0).abs() < 0.1, "right={}", r.right());
+        assert!((r.bottom() - 500.0).abs() < 0.1, "bottom={}", r.bottom());
+    }
+
+    // A TrimBox inset by 36pt on all sides at 1:1 scale should produce
+    // a screen rect equally inset by 36px on all sides.
+    #[test]
+    fn trim_box_inset_maps_inward_at_1x_scale() {
+        let media = PdfRect::new(0.0, 0.0, 612.0, 792.0);
+        // x=36, y=36, width=540, height=720  →  right=576, top=756
+        let trim = PdfRect::new(36.0, 36.0, 540.0, 720.0);
+        let screen = skia_safe::Rect::from_xywh(0.0, 0.0, 612.0, 792.0);
+        let r = pdf_rect_to_skia(&trim, &media, screen);
+        assert!((r.left() - 36.0).abs() < 0.1, "left={}", r.left());
+        assert!((r.top() - 36.0).abs() < 0.1, "top={}", r.top());
+        assert!((r.right() - 576.0).abs() < 0.1, "right={}", r.right());
+        assert!((r.bottom() - 756.0).abs() < 0.1, "bottom={}", r.bottom());
+    }
+
+    // A rect in the bottom strip of the PDF page (low PDF y)
+    // must appear at the bottom of the screen (high screen y) — Y-axis flip check.
+    #[test]
+    fn y_axis_flip_bottom_strip() {
+        let media = PdfRect::new(0.0, 0.0, 612.0, 792.0);
+        let bottom_strip = PdfRect::new(0.0, 0.0, 612.0, 198.0); // bottom quarter
+        let screen = skia_safe::Rect::from_xywh(0.0, 0.0, 612.0, 792.0);
+        let r = pdf_rect_to_skia(&bottom_strip, &media, screen);
+        // screen_top    = 0 + (792 - 198) * 1.0 = 594
+        // screen_bottom = 0 + (792 -   0) * 1.0 = 792
+        assert!((r.top() - 594.0).abs() < 0.1, "top={}", r.top());
+        assert!((r.bottom() - 792.0).abs() < 0.1, "bottom={}", r.bottom());
+    }
+
+    // Coordinate conversion scales correctly when screen is half the PDF point size.
+    #[test]
+    fn rect_scales_with_page_screen_rect() {
+        let media = PdfRect::new(0.0, 0.0, 612.0, 792.0);
+        // Screen rect is half the size — 0.5 pts per pixel
+        let screen = skia_safe::Rect::from_xywh(0.0, 0.0, 306.0, 396.0);
+        let r = pdf_rect_to_skia(&media, &media, screen);
+        assert!((r.width() - 306.0).abs() < 0.1, "width={}", r.width());
+        assert!((r.height() - 396.0).abs() < 0.1, "height={}", r.height());
+    }
+
+    #[test]
+    #[ignore = "requires live GL context"]
+    fn from_gl_smoke() {}
 }

@@ -8,8 +8,9 @@ license = "GPL-3.0-only"
 image = "0.25.10"
 rustybara = { path = "../rustybara", features = ["raster"] }
 winit = "0.30.13"
-skia-safe = "0.97.0"
-softbuffer = "0.4.8"
-bytemuck = { version = "1", features = ["derive"] }
+skia-safe = { version = "0.97.0", features = ["gl"] }
+glutin = "0.32.3"
+glutin-winit = "0.5.0"
+raw-window-handle = "0.6.2"
 clap = { version = "4", features = ["derive"] }
 notify = "8.2.0"
