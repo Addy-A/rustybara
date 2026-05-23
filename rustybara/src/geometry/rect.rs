@@ -224,4 +224,60 @@ impl Rect {
             || self.top() <= trim.y // entirely below
             || self.y >= trim.top() // entirely above
     }
+
+    /// Returns `true` if the point `(x, y)` lies inside this rectangle.
+    ///
+    /// Uses a half-open interval `[left, right]` * `[bottom, top]` so that
+    /// shared edges between adjacent rectangles register in exacgtly one of them.
+    ///
+    /// # Arguments
+    ///
+    /// * `x` — X-coordinate to test (PDF space: left = smaller value).
+    /// * `y` — Y-coordinate to test (PDF space: bottom = smaller value).
+    ///
+    /// # Examples
+    ///
+    /// ```no_test
+    /// use rustybara::geometry::Rect;
+    /// let r = Rect::new(0.0, 0.0, 100.0, 100.0);
+    /// assert!(r.contains_point(50.0, 50.0));
+    /// assert!(!r.contains_point(150.0, 50.0));
+    /// ```
+    pub fn contains_point(&self, x: f64, y: f64) -> bool {
+        x >= self.x && x < self.right() && y >= self.y && y < self.top()
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contains_point_center() {
+        let r = Rect::new(10.0, 10.0, 100.0, 100.0);
+        assert!(r.contains_point(60.0, 60.0));
+    }
+
+    #[test]
+    fn contains_point_on_left_bottom_edge_is_inside() {
+        // Half-open: left and bottom edges are inclusive.
+        let r = Rect::new(10.0, 10.0, 100.0, 100.0);
+        assert!(r.contains_point(10.0, 10.0));
+    }
+
+    #[test]
+    fn contains_point_on_right_top_edge_is_outside() {
+        // Half-open: right and top edges are exclusive.
+        let r = Rect::new(10.0, 10.0, 100.0, 100.0);
+        assert!(!r.contains_point(110.0, 60.0)); // right() = 110
+        assert!(!r.contains_point(60.0, 110.0)); // top()   = 110
+    }
+
+    #[test]
+    fn contains_point_below_rect() {
+        let r = Rect::new(10.0, 10.0, 100.0, 100.0);
+        assert!(!r.contains_point(60.0, 5.0));
+    }
 }

@@ -194,7 +194,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 let state = self.state.as_mut().unwrap();
                 state.width = size.width.max(1);
                 state.height = size.height.max(1);
-                state.renderer.resize(size.width.max(1), size.height.max(1));
+                state.renderer.resize(size.width, size.height);
                 state.window.request_redraw();
             }
 
