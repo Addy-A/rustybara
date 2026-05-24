@@ -4889,6 +4889,7 @@ dependencies = [
  "pdfium-render",
  "rayon",
  "rustybara-icc",
+ "ttf-parser",
  "webp",
 ]
 

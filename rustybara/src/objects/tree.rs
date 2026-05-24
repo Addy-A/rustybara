@@ -576,10 +576,18 @@ fn xobject_kind(doc: &Document, page_id: ObjectId, name_obj: &Object) -> ObjectK
 }
 
 /// Dereference a single indirect object; return the object unchanged if it is not a reference.
-fn deref<'a>(doc: &'a Document, obj: &'a Object) -> &'a Object {
+pub fn deref<'a>(doc: &'a Document, obj: &'a Object) -> &'a Object {
     match obj {
         Object::Reference(id) => doc.get_object(*id).unwrap_or(obj),
         _ => obj,
+    }
+}
+
+pub fn ref_id(obj: &Object) -> Option<ObjectId> {
+    if let Object::Reference(id) = obj {
+        Some(*id)
+    } else {
+        None
     }
 }
 

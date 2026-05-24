@@ -68,6 +68,8 @@ pub mod encode;
 pub mod error;
 pub mod geometry;
 pub mod objects;
+#[cfg(feature = "outline")]
+pub mod outline;
 pub mod pages;
 pub mod pipeline;
 #[cfg(feature = "raster")]

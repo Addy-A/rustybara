@@ -3,14 +3,15 @@ use glutin::{
     surface::{GlSurface, Surface as GlWindowSurface, WindowSurface},
 };
 use image::DynamicImage;
+use rustybara::outline::paths::{GlyphVerb, PositionedGlyph};
 use rustybara::{
     geometry::Rect as PdfRect,
     objects::{ObjectKind, PageObject, PathPoint, PdfColor},
     pages::PageBoxes,
 };
 use skia_safe::{
+    gpu::{self, backend_render_targets, gl::FramebufferInfo, DirectContext, SurfaceOrigin},
     AlphaType, ColorType, Data, ImageInfo,
-    gpu::{self, DirectContext, SurfaceOrigin, backend_render_targets, gl::FramebufferInfo},
 };
 
 type WindowSurfaceType = GlWindowSurface<WindowSurface>;
@@ -41,6 +42,8 @@ pub struct PageWireframe<'a> {
     pub media_box: &'a PdfRect,
     /// Object to highlight with a blue outline (the current selection, if any).
     pub selected: Option<&'a PageObject>,
+    /// Per-glyph outline paths in PDF page space. Empty slice = fallback to bbox rects.
+    pub glyph_outlines: &'a [PositionedGlyph],
 }
 
 /// Debug diagnostic overlay — shown when the viewer is in debug mode (Ctrl+Shift+D).
@@ -211,13 +214,21 @@ fn draw_wireframe_object(
                     match point {
                         PathPoint::MoveTo(lx, ly) => {
                             let (px, py) = obj.ctm.transform_point(lx, ly);
-                            builder
-                                .move_to(pdf_point_to_screen(px, py, media_box, page_screen_rect));
+                            builder.move_to(pdf_point_to_screen(
+                                px,
+                                py,
+                                media_box,
+                                page_screen_rect,
+                            ));
                         }
                         PathPoint::LineTo(lx, ly) => {
                             let (px, py) = obj.ctm.transform_point(lx, ly);
-                            builder
-                                .line_to(pdf_point_to_screen(px, py, media_box, page_screen_rect));
+                            builder.line_to(pdf_point_to_screen(
+                                px,
+                                py,
+                                media_box,
+                                page_screen_rect,
+                            ));
                         }
                         PathPoint::CurveTo(c1x, c1y, c2x, c2y, ex, ey) => {
                             let (s1x, s1y) = obj.ctm.transform_point(c1x, c1y);
@@ -252,6 +263,52 @@ fn draw_wireframe_object(
     }
 }
 
+/// Draw all glyph outlines produced by `rustybara::outline::outline_page_text`.
+///
+/// Each [`PositionedGlyph`] is a sequence of [`GlyphVerb`]s in PDF page space;
+/// we mape them to screen space through [`pdf_point_to_screen`] and stroke them.
+fn draw_glyph_outlines(
+    canvas: &skia_safe::Canvas,
+    glyphs: &[PositionedGlyph],
+    media_box: &PdfRect,
+    page_screen_rect: skia_safe::Rect,
+    paint: &skia_safe::Paint,
+) {
+    for glyph in glyphs {
+        if glyph.verbs.is_empty() {
+            continue;
+        }
+        let mut builder = skia_safe::PathBuilder::new();
+        for verb in &glyph.verbs {
+            match *verb {
+                GlyphVerb::MoveTo(x, y) => {
+                    builder.move_to(pdf_point_to_screen(x, y, media_box, page_screen_rect));
+                }
+                GlyphVerb::LineTo(x, y) => {
+                    builder.line_to(pdf_point_to_screen(x, y, media_box, page_screen_rect));
+                }
+                GlyphVerb::QuadTo(cx, cy, x, y) => {
+                    builder.quad_to(
+                        pdf_point_to_screen(cx, cy, media_box, page_screen_rect),
+                        pdf_point_to_screen(x, y, media_box, page_screen_rect),
+                    );
+                }
+                GlyphVerb::CubicTo(c1x, c1y, c2x, c2y, x, y) => {
+                    builder.cubic_to(
+                        pdf_point_to_screen(c1x, c1y, media_box, page_screen_rect),
+                        pdf_point_to_screen(c2x, c2y, media_box, page_screen_rect),
+                        pdf_point_to_screen(x, y, media_box, page_screen_rect),
+                    );
+                }
+                GlyphVerb::Close => {
+                    builder.close();
+                }
+            }
+        }
+        canvas.draw_path(&builder.detach(), paint);
+    }
+}
+
 /// Draw the Acrobat-style full-page wireframe.
 ///
 /// Replaces the raster page image with a white background and draws all page
@@ -262,22 +319,38 @@ fn draw_page_wireframe(
     wf: &PageWireframe<'_>,
     page_screen_rect: skia_safe::Rect,
 ) {
-    // White page background
     let mut bg = skia_safe::Paint::default();
     bg.set_color(skia_safe::Color::WHITE);
     canvas.draw_rect(page_screen_rect, &bg);
 
-    // Thin black outline for every page object
     let mut outline = skia_safe::Paint::default();
     outline.set_style(skia_safe::paint::Style::Stroke);
     outline.set_stroke_width(0.5);
     outline.set_color(skia_safe::Color::BLACK);
     outline.set_anti_alias(true);
+
+    let have_glyphs = !wf.glyph_outlines.is_empty();
+
     for obj in wf.objects {
+        // When glyph outlines are available, skip the coarse text bbox rect —
+        // the actual glyph paths drawn below are more informative.
+        if have_glyphs && matches!(obj.kind, ObjectKind::Text(_)) {
+            continue;
+        }
         draw_wireframe_object(canvas, obj, wf.media_box, page_screen_rect, &outline);
     }
 
-    // Selected object: bright blue, slightly thicker
+    // Draw actual glyph paths on top of all other objects.
+    if have_glyphs {
+        draw_glyph_outlines(
+            canvas,
+            wf.glyph_outlines,
+            wf.media_box,
+            page_screen_rect,
+            &outline,
+        );
+    }
+
     if let Some(sel) = wf.selected {
         let mut sel_paint = skia_safe::Paint::default();
         sel_paint.set_style(skia_safe::paint::Style::Stroke);
@@ -287,7 +360,6 @@ fn draw_page_wireframe(
         draw_wireframe_object(canvas, sel, wf.media_box, page_screen_rect, &sel_paint);
     }
 
-    // Page boundary (subtle gray border so the page edge is visible)
     let mut border = skia_safe::Paint::default();
     border.set_style(skia_safe::paint::Style::Stroke);
     border.set_stroke_width(1.0);
@@ -299,12 +371,7 @@ fn draw_page_wireframe(
 ///
 /// Shows the sampled RGBA pixel value and the PDF fill color of the selected object.
 /// This is an MVP overlay; a proper UI panel is planned for a future iteration.
-fn draw_color_panel(
-    canvas: &skia_safe::Canvas,
-    panel: &ColorPanel,
-    _win_w: f32,
-    win_h: f32,
-) {
+fn draw_color_panel(canvas: &skia_safe::Canvas, panel: &ColorPanel, _win_w: f32, win_h: f32) {
     let panel_w = 260.0_f32;
     let panel_h = 64.0_f32;
     let margin = 10.0_f32;
@@ -354,12 +421,7 @@ fn draw_color_panel(
 ///
 /// Renders each line of `lines` in a semi-transparent dark panel using a
 /// monospace-like default font. Designed to be readable over any page content.
-fn draw_debug_overlay(
-    canvas: &skia_safe::Canvas,
-    lines: &[String],
-    win_w: f32,
-    win_h: f32,
-) {
+fn draw_debug_overlay(canvas: &skia_safe::Canvas, lines: &[String], win_w: f32, win_h: f32) {
     if lines.is_empty() {
         return;
     }

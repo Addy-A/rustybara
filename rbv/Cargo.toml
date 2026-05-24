@@ -6,7 +6,7 @@ license = "GPL-3.0-only"
 
 [dependencies]
 image = "0.25.10"
-rustybara = { path = "../rustybara", features = ["raster"] }
+rustybara = { path = "../rustybara", features = ["raster", "outline"] }
 winit = "0.30.13"
 skia-safe = { version = "0.97.0", features = ["gl"] }
 glutin = "0.32.3"

@@ -1,8 +1,13 @@
 use crate::export::export_wireframe;
-use crate::renderer::{ColorPanel, DebugOverlay, OverlayData, PageWireframe, SkiaRenderer, image_to_skia};
+use crate::renderer::{
+    image_to_skia, ColorPanel, DebugOverlay, OverlayData, PageWireframe, SkiaRenderer,
+};
 use image::{DynamicImage, GenericImageView};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use rustybara::objects::{ObjectKind, ObjectTree, PageObject, PdfColor, build_object_tree, hit_test};
+use rustybara::objects::{
+    build_object_tree, hit_test, ObjectKind, ObjectTree, PageObject, PdfColor,
+};
+use rustybara::outline::paths::{outline_page_text, PositionedGlyph};
 use rustybara::pages::PageBoxes;
 use rustybara::raster::RenderConfig;
 use rustybara::PdfPipeline;
@@ -44,6 +49,8 @@ struct Viewer {
     page_boxes: Option<PageBoxes>,
     /// Cached object tree for the current page, used for hit-testing.
     object_tree: Option<ObjectTree>,
+    /// Glyph outlines for wireframe text rendering. `none` until page loads.
+    glyph_outlines: Option<Vec<PositionedGlyph>>,
     /// The topmost object under the last selection click (owned clone).
     selected_object: Option<PageObject>,
     /// Color diagnostic data captured at the last selection click.
@@ -221,19 +228,18 @@ impl Viewer {
         });
 
         // Debug log.
-        let kind_str = self.selected_object.as_ref().map_or("none", |obj| {
-            match &obj.kind {
+        let kind_str = self
+            .selected_object
+            .as_ref()
+            .map_or("none", |obj| match &obj.kind {
                 ObjectKind::Fill => "Fill",
                 ObjectKind::Stroke => "Stroke",
                 ObjectKind::FillStroke => "FillStroke",
                 ObjectKind::Text(_) => "Text",
                 ObjectKind::Image => "Image",
                 ObjectKind::FormXObject => "FormXObject",
-            }
-        });
-        self.push_log(format!(
-            "Click ({pdf_x:.1}, {pdf_y:.1}) → {kind_str}"
-        ));
+            });
+        self.push_log(format!("Click ({pdf_x:.1}, {pdf_y:.1}) → {kind_str}"));
     }
 
     // ── Wireframe PDF export ──────────────────────────────────────────────────
@@ -247,8 +253,7 @@ impl Viewer {
     /// Does nothing (and logs a message) if no object tree or page boxes are
     /// loaded yet.
     fn export_wireframe_pdf(&mut self) {
-        let (Some(tree), Some(boxes)) =
-            (self.object_tree.as_ref(), self.page_boxes.as_ref())
+        let (Some(tree), Some(boxes)) = (self.object_tree.as_ref(), self.page_boxes.as_ref())
         else {
             self.push_log("Export skipped: no object tree loaded");
             return;
@@ -261,10 +266,7 @@ impl Viewer {
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("page");
-            let dir = self
-                .file
-                .parent()
-                .unwrap_or(std::path::Path::new("."));
+            let dir = self.file.parent().unwrap_or(std::path::Path::new("."));
             dir.join(format!("{}_wireframe_diag.pdf", stem))
         };
 
@@ -467,9 +469,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 } else {
                     None
                 };
-                let debug_overlay = debug_lines
-                    .as_deref()
-                    .map(|lines| DebugOverlay { lines });
+                let debug_overlay = debug_lines.as_deref().map(|lines| DebugOverlay { lines });
 
                 let state = self.state.as_mut().unwrap();
                 let overlays = if self.show_overlays {
@@ -490,6 +490,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                             objects: &tree.objects,
                             media_box: &boxes.media_box,
                             selected: self.selected_object.as_ref(),
+                            glyph_outlines: self.glyph_outlines.as_deref().unwrap_or(&[]),
                         })
                 } else {
                     None
@@ -678,6 +679,8 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                         page_id.and_then(|id| PageBoxes::read(new_pipeline.doc(), id).ok());
                     self.object_tree =
                         page_id.and_then(|id| build_object_tree(new_pipeline.doc(), id).ok());
+                    self.glyph_outlines =
+                        page_id.and_then(|id| outline_page_text(new_pipeline.doc(), id).ok());
 
                     self.pipeline = Arc::new(new_pipeline);
                 }
@@ -707,6 +710,7 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig) {
 
     let page_boxes = page_id.and_then(|id| PageBoxes::read(pipeline.doc(), id).ok());
     let object_tree = page_id.and_then(|id| build_object_tree(pipeline.doc(), id).ok());
+    let glyph_outlines = page_id.and_then(|id| outline_page_text(pipeline.doc(), id).ok());
 
     let event_loop = EventLoop::<ViewerEvent>::with_user_event()
         .build()
@@ -757,6 +761,7 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig) {
         current_image: None,
         page_boxes,
         object_tree,
+        glyph_outlines,
         selected_object: None,
         color_info: None,
         show_overlays: false,
@@ -909,11 +914,8 @@ mod tests {
     // Screen top-left (0, 0) → PDF top-left (0, page_height) at 1:1 scale.
     #[test]
     fn screen_to_pdf_top_left_corner() {
-        let (px, py) = screen_to_pdf_math(
-            [0.0, 0.0],
-            0.0, 0.0, 612.0, 792.0,
-            0.0, 792.0, 612.0, 792.0,
-        );
+        let (px, py) =
+            screen_to_pdf_math([0.0, 0.0], 0.0, 0.0, 612.0, 792.0, 0.0, 792.0, 612.0, 792.0);
         assert!((px - 0.0).abs() < 0.1, "pdf_x={px}");
         assert!((py - 792.0).abs() < 0.1, "pdf_y={py}");
     }
@@ -923,8 +925,14 @@ mod tests {
     fn screen_to_pdf_center() {
         let (px, py) = screen_to_pdf_math(
             [306.0, 396.0],
-            0.0, 0.0, 612.0, 792.0,
-            0.0, 792.0, 612.0, 792.0,
+            0.0,
+            0.0,
+            612.0,
+            792.0,
+            0.0,
+            792.0,
+            612.0,
+            792.0,
         );
         assert!((px - 306.0).abs() < 0.1, "pdf_x={px}");
         assert!((py - 396.0).abs() < 0.1, "pdf_y={py}");
@@ -935,8 +943,14 @@ mod tests {
     fn screen_to_pdf_bottom_left() {
         let (px, py) = screen_to_pdf_math(
             [0.0, 792.0],
-            0.0, 0.0, 612.0, 792.0,
-            0.0, 792.0, 612.0, 792.0,
+            0.0,
+            0.0,
+            612.0,
+            792.0,
+            0.0,
+            792.0,
+            612.0,
+            792.0,
         );
         assert!((px - 0.0).abs() < 0.1, "pdf_x={px}");
         assert!((py - 0.0).abs() < 0.1, "pdf_y={py}");
@@ -949,8 +963,14 @@ mod tests {
         // Center of page rect on screen = (50+153, 100+198) = (203, 298)
         let (px, py) = screen_to_pdf_math(
             [203.0, 298.0],
-            50.0, 100.0, 306.0, 396.0,
-            0.0, 792.0, 612.0, 792.0,
+            50.0,
+            100.0,
+            306.0,
+            396.0,
+            0.0,
+            792.0,
+            612.0,
+            792.0,
         );
         assert!((px - 306.0).abs() < 0.5, "pdf_x={px}");
         assert!((py - 396.0).abs() < 0.5, "pdf_y={py}");
@@ -1031,6 +1051,4 @@ mod tests {
         // The overlay iterates rev() so newest (back) shows first.
         assert_eq!(log.back().unwrap(), "msg 2");
     }
-
-    // Overlay toggle is bool negation — verified by inspection, no state machine test needed.
 }
