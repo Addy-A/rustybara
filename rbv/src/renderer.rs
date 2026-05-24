@@ -559,12 +559,7 @@ impl SkiaRenderer {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        draw_debug_overlay, draw_wireframe_object, image_to_skia, pdf_point_to_screen,
-        pdf_rect_to_skia,
-    };
-    use rustybara::objects::{ObjectKind, PageObject, PdfColor, SubPath, PathPoint};
-    use rustybara::geometry::Matrix;
+    use super::{draw_debug_overlay, image_to_skia, pdf_point_to_screen, pdf_rect_to_skia};
     use image::{DynamicImage, RgbaImage};
     use rustybara::geometry::Rect as PdfRect;
 

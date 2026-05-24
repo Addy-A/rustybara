@@ -1,3 +1,4 @@
+use crate::export::export_wireframe;
 use crate::renderer::{ColorPanel, DebugOverlay, OverlayData, PageWireframe, SkiaRenderer, image_to_skia};
 use image::{DynamicImage, GenericImageView};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -233,6 +234,48 @@ impl Viewer {
         self.push_log(format!(
             "Click ({pdf_x:.1}, {pdf_y:.1}) → {kind_str}"
         ));
+    }
+
+    // ── Wireframe PDF export ──────────────────────────────────────────────────
+
+    /// Export the current page's object tree as a diagnostic wireframe PDF.
+    ///
+    /// Bound to `Ctrl+Shift+E`.  The output file is written next to the source
+    /// PDF with the suffix `_wireframe_diag.pdf`.  The full output path is
+    /// pushed to the debug ring-buffer so it appears in the debug overlay.
+    ///
+    /// Does nothing (and logs a message) if no object tree or page boxes are
+    /// loaded yet.
+    fn export_wireframe_pdf(&mut self) {
+        let (Some(tree), Some(boxes)) =
+            (self.object_tree.as_ref(), self.page_boxes.as_ref())
+        else {
+            self.push_log("Export skipped: no object tree loaded");
+            return;
+        };
+
+        // Derive output path: same directory as the source PDF, same stem + suffix.
+        let output_path = {
+            let stem = self
+                .file
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("page");
+            let dir = self
+                .file
+                .parent()
+                .unwrap_or(std::path::Path::new("."));
+            dir.join(format!("{}_wireframe_diag.pdf", stem))
+        };
+
+        match export_wireframe(tree, &boxes.media_box, &output_path) {
+            Ok(()) => {
+                self.push_log(format!("Exported: {}", output_path.display()));
+            }
+            Err(e) => {
+                self.push_log(format!("Export failed: {e}"));
+            }
+        }
     }
 
     // ── Debug overlay lines ───────────────────────────────────────────────────
@@ -522,6 +565,10 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                             "Debug mode: {}",
                             if self.debug_mode { "ON" } else { "OFF" }
                         ));
+                    }
+                    KeyCode::KeyE if self.ctrl_held && self.shift_held => {
+                        // Ctrl+Shift+E — export wireframe as a diagnostic PDF.
+                        self.export_wireframe_pdf();
                     }
                     KeyCode::Escape => {
                         std::process::exit(0);

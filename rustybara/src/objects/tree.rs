@@ -307,15 +307,26 @@ pub fn build_object_tree(doc: &Document, page_id: ObjectId) -> crate::Result<Obj
             }
             "Do" if !op.operands.is_empty() => {
                 let kind = xobject_kind(doc, page_id, &op.operands[0]);
-                // Images and forms occupy the unit square [0, 1]^2 in local space;
-                // the CTM maps that to page space.
-                let unit = Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 1.0,
-                    height: 1.0,
+                let local_bbox = match &kind {
+                    ObjectKind::FormXObject => {
+                        // Form XObjects define their extent via /BBox in their stream dict.
+                        // Falling back to the unit square produces a 1x1 bbox – wrong.
+                        read_form_bbox(doc, page_id, &op.operands[0]).unwrap_or(Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 1.0,
+                            height: 1.0,
+                        })
+                    }
+                    // Image XObjects are defined on [0,1]^2 by PDF spec – unit square is correct.
+                    _ => Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 1.0,
+                        height: 1.0,
+                    },
                 };
-                let bbox = gs.ctm.transform_rect(&unit);
+                let bbox = gs.ctm.transform_rect(&local_bbox);
                 objects.push(PageObject {
                     bbox,
                     ctm: gs.ctm,
@@ -570,6 +581,43 @@ fn deref<'a>(doc: &'a Document, obj: &'a Object) -> &'a Object {
         Object::Reference(id) => doc.get_object(*id).unwrap_or(obj),
         _ => obj,
     }
+}
+
+fn read_form_bbox(doc: &Document, page_id: ObjectId, name_obj: &Object) -> Option<Rect> {
+    let name = match name_obj {
+        Object::Name(n) => n.as_slice(),
+        _ => return None,
+    };
+    let page_obj = doc.get_object(page_id).ok()?;
+    let page_dict = page_obj.as_dict().ok()?;
+    let res_val = page_dict.get(b"Resources").ok()?;
+    let res_obj = deref(doc, res_val);
+    let res_dict = res_obj.as_dict().ok()?;
+    let xo_val = res_dict.get(b"XObject").ok()?;
+    let xo_obj = deref(doc, xo_val);
+    let xo_dict = xo_obj.as_dict().ok()?;
+    let xref = xo_dict.get(name).ok()?;
+    let xobj_id = if let Object::Reference(id) = xref {
+        *id
+    } else {
+        return None;
+    };
+    let xobj = doc.get_object(xobj_id).ok()?;
+    let stream = if let Object::Stream(s) = xobj {
+        s
+    } else {
+        return None;
+    };
+    let bbox_arr = stream.dict.get(b"BBox").ok()?.as_array().ok()?;
+    if bbox_arr.len() < 4 {
+        return None;
+    }
+    Some(Rect::from_corners(
+        object_to_f64(&bbox_arr[0]),
+        object_to_f64(&bbox_arr[1]),
+        object_to_f64(&bbox_arr[2]),
+        object_to_f64(&bbox_arr[3]),
+    ))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
