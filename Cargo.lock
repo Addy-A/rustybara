@@ -4677,6 +4677,7 @@ dependencies = [
  "notify",
  "raw-window-handle",
  "rustybara",
+ "rustybara-icc",
  "skia-safe",
  "tempfile",
  "winit",

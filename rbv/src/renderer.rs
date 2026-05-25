@@ -28,6 +28,10 @@ pub struct ColorPanel {
     pub pixel_rgba: [u8; 4],
     /// Fill color of the selected object, if any.
     pub pdf_color: Option<PdfColor>,
+    /// ICC-converted CMYK values (0.0–1.0 per channel, C/M/Y/K order) derived
+    /// from `pixel_rgba` via the active source → US Web Coated SWOP transform.
+    /// `None` when no ICC transform was available at click time.
+    pub pixel_cmyk: Option<[f32; 4]>,
 }
 
 /// Acrobat-style full-page wireframe overlay.
@@ -362,13 +366,62 @@ fn draw_page_wireframe(
     canvas.draw_rect(page_screen_rect, &border);
 }
 
+/// Draw the sampling-point crosshair marker at `screen_pos`.
+///
+/// The caller is responsible for converting the stored PDF sampling coordinates
+/// into current screen coordinates (accounting for zoom and pan) before calling
+/// this function.
+///
+/// The marker is a classic two-ring crosshair: a thin white halo ring behind a
+/// thin orange-red accent ring, with four tick lines extending outward. This
+/// stays visible against both light (page) and dark (margins) backgrounds.
+///
+/// Drawing order:
+///   1. White drop-shadow strokes (slightly thicker) for contrast.
+///   2. Orange-red accent strokes on top.
+fn draw_sample_marker(canvas: &skia_safe::Canvas, screen_pos: [f32; 2]) {
+    let [cx, cy] = screen_pos;
+
+    // Tick line geometry: gap inside the circle, length outside.
+    const INNER: f32 = 8.0; // start of tick (px from centre)
+    const OUTER: f32 = 16.0; // end of tick
+
+    // ── white halo (drawn first, slightly wider) ──────────────────────────────
+    let mut white = skia_safe::Paint::default();
+    white.set_style(skia_safe::paint::Style::Stroke);
+    white.set_color(skia_safe::Color::from_argb(200, 255, 255, 255));
+    white.set_stroke_width(2.5);
+    white.set_anti_alias(true);
+
+    canvas.draw_circle((cx, cy), 6.0, &white);
+    canvas.draw_line((cx, cy - OUTER), (cx, cy - INNER), &white);
+    canvas.draw_line((cx, cy + INNER), (cx, cy + OUTER), &white);
+    canvas.draw_line((cx - OUTER, cy), (cx - INNER, cy), &white);
+    canvas.draw_line((cx + INNER, cy), (cx + OUTER, cy), &white);
+
+    // ── accent ring + ticks (orange-red, drawn on top) ────────────────────────
+    let mut accent = skia_safe::Paint::default();
+    accent.set_style(skia_safe::paint::Style::Stroke);
+    accent.set_color(skia_safe::Color::from_argb(255, 255, 80, 0));
+    accent.set_stroke_width(1.5);
+    accent.set_anti_alias(true);
+
+    canvas.draw_circle((cx, cy), 6.0, &accent);
+    canvas.draw_line((cx, cy - OUTER), (cx, cy - INNER), &accent);
+    canvas.draw_line((cx, cy + INNER), (cx, cy + OUTER), &accent);
+    canvas.draw_line((cx - OUTER, cy), (cx - INNER, cy), &accent);
+    canvas.draw_line((cx + INNER, cy), (cx + OUTER, cy), &accent);
+}
+
 /// Draw the diagnostic color panel in the bottom-left corner.
 ///
-/// Shows the sampled RGBA pixel value and the PDF fill color of the selected object.
-/// This is an MVP overlay; a proper UI panel is planned for a future iteration.
+/// Three rows (top-to-bottom):
+///   1. Sampled pixel RGBA
+///   2. PDF object fill/stroke color from the content stream
+///   3. ICC-converted CMYK estimate (sRGB or AdobeRGB → US Web Coated SWOP)
 fn draw_color_panel(canvas: &skia_safe::Canvas, panel: &ColorPanel, _win_w: f32, win_h: f32) {
-    let panel_w = 260.0_f32;
-    let panel_h = 64.0_f32;
+    let panel_w = 300.0_f32;
+    let panel_h = 82.0_f32;
     let margin = 10.0_f32;
     let x = margin;
     let y = win_h - panel_h - margin;
@@ -391,12 +444,14 @@ fn draw_color_panel(canvas: &skia_safe::Canvas, panel: &ColorPanel, _win_w: f32,
     txt.set_color(skia_safe::Color::from_argb(255, 210, 210, 210));
     txt.set_anti_alias(true);
 
+    // Row 1 — sampled pixel RGBA
     let [r, g, b, a] = panel.pixel_rgba;
     let pixel_str = format!("Pixel   R:{r}  G:{g}  B:{b}  A:{a}");
     if let Some(blob) = skia_safe::TextBlob::from_str(&pixel_str, &font) {
-        canvas.draw_text_blob(&blob, (x + 8.0, y + 22.0), &txt);
+        canvas.draw_text_blob(&blob, (x + 8.0, y + 18.0), &txt);
     }
 
+    // Row 2 — PDF object color from the content stream
     let color_str = match panel.pdf_color {
         Some(PdfColor::DeviceGray(v)) => format!("PdfColor  Gray: {v:.3}"),
         Some(PdfColor::DeviceRgb(r, g, b)) => {
@@ -408,7 +463,22 @@ fn draw_color_panel(canvas: &skia_safe::Canvas, panel: &ColorPanel, _win_w: f32,
         None => "PdfColor  n/a".to_string(),
     };
     if let Some(blob) = skia_safe::TextBlob::from_str(&color_str, &font) {
-        canvas.draw_text_blob(&blob, (x + 8.0, y + 48.0), &txt);
+        canvas.draw_text_blob(&blob, (x + 8.0, y + 40.0), &txt);
+    }
+
+    // Row 3 — ICC pixel estimate (sRGB|AdobeRGB → US Web Coated SWOP), percent format
+    let cmyk_str = match panel.pixel_cmyk {
+        Some([c, m, yv, k]) => format!(
+            "ICC CMYK  C:{:.0}%  M:{:.0}%  Y:{:.0}%  K:{:.0}%",
+            c * 100.0,
+            m * 100.0,
+            yv * 100.0,
+            k * 100.0,
+        ),
+        None => "ICC CMYK  —".to_string(),
+    };
+    if let Some(blob) = skia_safe::TextBlob::from_str(&cmyk_str, &font) {
+        canvas.draw_text_blob(&blob, (x + 8.0, y + 62.0), &txt);
     }
 }
 
@@ -532,8 +602,10 @@ impl SkiaRenderer {
     /// 2a. **Normal mode** – raster page image
     /// 2b. **Wireframe mode** – white page rect + all object outlines + selection highlight
     /// 3. Prepress box overlays (`overlays`) — shown in both modes
-    /// 4. Color diagnostics panel (`color_panel`)
-    /// 5. Debug overlay (`debug`) — always on top, even before a page has loaded
+    /// 4. Sampling crosshair marker (`sample_marker`) — screen-space coords pre-projected
+    ///    by the caller from PDF coordinates using the current zoom/pan
+    /// 5. Color diagnostics panel (`color_panel`)
+    /// 6. Debug overlay (`debug`) — always on top, even before a page has loaded
     pub fn draw(
         &mut self,
         page_image: Option<&skia_safe::Image>,
@@ -541,6 +613,7 @@ impl SkiaRenderer {
         pan: [f32; 2],
         overlays: Option<&OverlayData<'_>>,
         wireframe: Option<&PageWireframe<'_>>,
+        sample_marker: Option<[f32; 2]>,
         color_panel: Option<&ColorPanel>,
         debug: Option<&DebugOverlay<'_>>,
     ) {
@@ -586,6 +659,11 @@ impl SkiaRenderer {
             if let Some(ov) = overlays {
                 draw_overlays(canvas, ov, dst);
             }
+        }
+
+        // Sampling crosshair — drawn before the text panel so the panel sits on top.
+        if let Some(pos) = sample_marker {
+            draw_sample_marker(canvas, pos);
         }
 
         if let Some(panel) = color_panel {

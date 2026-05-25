@@ -11,6 +11,7 @@ use rustybara::outline::paths::{outline_page_text, PositionedGlyph};
 use rustybara::pages::PageBoxes;
 use rustybara::raster::RenderConfig;
 use rustybara::PdfPipeline;
+use rustybara_icc::{ColorTransform, RenderingIntent};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -55,6 +56,10 @@ struct Viewer {
     selected_object: Option<PageObject>,
     /// Color diagnostic data captured at the last selection click.
     color_info: Option<ColorPanel>,
+    /// PDF-space coordinates of the last sampling click, used to project the
+    /// crosshair marker each frame through the current zoom/pan transform.
+    /// `None` when no selection has been made or the click was outside the page.
+    sampling_pdf_pos: Option<(f64, f64)>,
     show_overlays: bool,
     /// When `true`, the selected object's wireframe is drawn each frame.
     show_wireframe: bool,
@@ -68,6 +73,10 @@ struct Viewer {
     debug_mode: bool,
     /// Ring buffer of recent debug log entries (capped at [`DEBUG_LOG_CAP`]).
     debug_log: VecDeque<String>,
+    /// Cached sRGB (or AdobeRGB 1998 fallback) → US Web Coated SWOP transform
+    /// for the ICC CMYK pixel readout. Built lazily on first selection click and
+    /// reused for all subsequent clicks.
+    icc_transform: Option<ColorTransform>,
     _watcher: RecommendedWatcher,
     proxy: EventLoopProxy<ViewerEvent>,
 }
@@ -189,6 +198,7 @@ impl Viewer {
         let Some((pdf_x, pdf_y)) = self.screen_to_pdf(self.cursor_pos) else {
             self.selected_object = None;
             self.color_info = None;
+            self.sampling_pdf_pos = None;
             self.push_log("Click outside page — selection cleared");
             return;
         };
@@ -222,9 +232,42 @@ impl Viewer {
             .as_ref()
             .and_then(|obj| obj.fill_color.or(obj.stroke_color));
 
+        // Build the ICC transform lazily on first click; reuse for all subsequent clicks.
+        if self.icc_transform.is_none() {
+            match build_icc_transform() {
+                Some(t) => {
+                    self.push_log(format!(
+                        "ICC transform ready: {} → SWOP",
+                        if t.src_channels() == 3 { "RGB" } else { "?" }
+                    ));
+                    self.icc_transform = Some(t);
+                }
+                None => {
+                    self.push_log("ICC transform init failed — pixel CMYK unavailable".to_string());
+                }
+            }
+        }
+
+        // Convert the sampled RGB pixel to CMYK via the ICC transform.
+        // Alpha is not passed through — ICC operates on device RGB only.
+        let pixel_cmyk = self.icc_transform.as_ref().map(|t| {
+            let [r, g, b, _a] = pixel_rgba;
+            let cmyk_u8 = t.convert(&[r, g, b]);
+            [
+                cmyk_u8[0] as f32 / 255.0,
+                cmyk_u8[1] as f32 / 255.0,
+                cmyk_u8[2] as f32 / 255.0,
+                cmyk_u8[3] as f32 / 255.0,
+            ]
+        });
+
+        // Store PDF coords for zoom/pan-invariant marker projection each frame.
+        self.sampling_pdf_pos = Some((pdf_x, pdf_y));
+
         self.color_info = Some(ColorPanel {
             pixel_rgba,
             pdf_color,
+            pixel_cmyk,
         });
 
         // Debug log.
@@ -360,6 +403,85 @@ impl Viewer {
     }
 }
 
+// ── ICC helpers ───────────────────────────────────────────────────────────────
+
+/// Try to locate and validate an sRGB ICC profile from the OS color management
+/// system. On Windows this scans `System32\spool\drivers\color\`; on macOS
+/// it checks the standard ColorSync directories; on Linux it tries common
+/// FreeDesktop paths.
+///
+/// Uses [`rustybara_icc::profiles::IccProfile::from_user_bytes`] for validation
+/// (same approach as rbara-gui's `load_persisted_profiles`). Only profiles
+/// whose detected color space is `Rgb` are returned; any file that parses as a
+/// different space (e.g. a stray `.icm` in the color directory) is skipped.
+///
+/// Returns `None` if no valid RGB profile was found, in which case the caller
+/// should fall back to the bundled `AdobeRGB1998` profile.
+fn find_system_srgb() -> Option<rustybara_icc::profiles::IccProfile> {
+    use rustybara_icc::{ColorSpaceKind, profiles::IccProfile};
+
+    #[cfg(target_os = "windows")]
+    let candidates: &[&str] = &[
+        "C:\\Windows\\System32\\spool\\drivers\\color\\sRGB Color Space Profile.icm",
+        "C:\\Windows\\System32\\spool\\drivers\\color\\sRGB_IEC61966-2-1.icm",
+        "C:\\Windows\\System32\\spool\\drivers\\color\\sRGB IEC61966-2-1.icm",
+    ];
+    #[cfg(target_os = "macos")]
+    let candidates: &[&str] = &[
+        "/System/Library/ColorSync/Profiles/sRGB IEC61966-2.1.icc",
+        "/Library/ColorSync/Profiles/sRGB.icc",
+    ];
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let candidates: &[&str] = &[
+        "/usr/share/color/icc/sRGB.icc",
+        "/usr/share/colorhug/sRGB.icc",
+        "/usr/share/color/icc/colord/sRGB.icc",
+    ];
+
+    for path in candidates {
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        let stem = std::path::Path::new(path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("sRGB")
+            .to_string();
+        if let Ok(profile) = IccProfile::from_user_bytes(stem.clone(), stem, bytes) {
+            if profile.color_space == ColorSpaceKind::Rgb {
+                return Some(profile);
+            }
+        }
+    }
+    None
+}
+
+/// Build the RGB → US Web Coated SWOP color transform used for pixel readout.
+///
+/// Priority:
+///   1. sRGB from the OS ICC system (detected by [`find_system_srgb`]).
+///   2. Bundled `AdobeRGB1998` (always available with the `bundled-profiles`
+///      feature) as a fallback when no system sRGB profile is present.
+///
+/// Returns `None` only if transform construction fails (e.g. lcms2 error),
+/// which should not happen with valid bundled profiles.
+fn build_icc_transform() -> Option<ColorTransform> {
+    use rustybara_icc::profiles;
+
+    let dst = &profiles::US_WEB_COATED_SWOP;
+    let intent = RenderingIntent::RelativeColorimetric;
+
+    if let Some(srgb) = find_system_srgb() {
+        match ColorTransform::from_bytes(&srgb.bytes, &dst.bytes, intent) {
+            Ok(t) => return Some(t),
+            Err(_) => {} // fall through to AdobeRGB fallback
+        }
+    }
+
+    // Fall back to bundled AdobeRGB 1998.
+    ColorTransform::new(&profiles::ADOBE_RGB_1998, dst, intent).ok()
+}
+
 // ── ApplicationHandler ────────────────────────────────────────────────────────
 
 impl ApplicationHandler<ViewerEvent> for Viewer {
@@ -471,6 +593,22 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 };
                 let debug_overlay = debug_lines.as_deref().map(|lines| DebugOverlay { lines });
 
+                // Project the sampling point from PDF coords to screen coords each frame
+                // so the crosshair marker tracks with zoom and pan changes.
+                // Done before the mutable `state` borrow below because `compute_page_rect`
+                // borrows `self.state` immutably.
+                let sample_screen_pos: Option<[f32; 2]> =
+                    self.sampling_pdf_pos.and_then(|(pdf_x, pdf_y)| {
+                        let page_rect = self.compute_page_rect()?;
+                        let media = &self.page_boxes.as_ref()?.media_box;
+                        let rel_x = ((pdf_x - media.x) / media.width) as f32;
+                        let rel_y = ((media.top() - pdf_y) / media.height) as f32;
+                        Some([
+                            page_rect.left() + rel_x * page_rect.width(),
+                            page_rect.top() + rel_y * page_rect.height(),
+                        ])
+                    });
+
                 let state = self.state.as_mut().unwrap();
                 let overlays = if self.show_overlays {
                     self.page_boxes.as_ref().map(|b| OverlayData { boxes: b })
@@ -502,6 +640,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                     self.pan,
                     overlays.as_ref(),
                     wireframe.as_ref(),
+                    sample_screen_pos,
                     self.color_info.as_ref(),
                     debug_overlay.as_ref(),
                 );
@@ -687,6 +826,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 // Page content changed — clear stale selection data.
                 self.selected_object = None;
                 self.color_info = None;
+                self.sampling_pdf_pos = None;
                 self.push_log("File reloaded — selection cleared");
                 self.spawn_render(self.page);
             }
@@ -764,6 +904,7 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig) {
         glyph_outlines,
         selected_object: None,
         color_info: None,
+        sampling_pdf_pos: None,
         show_overlays: false,
         show_wireframe: false,
         zoom: 1.0,
@@ -774,6 +915,7 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig) {
         drag_origin: None,
         debug_mode: false,
         debug_log: VecDeque::with_capacity(DEBUG_LOG_CAP),
+        icc_transform: None,
         _watcher: watcher,
         proxy,
     };
