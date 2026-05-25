@@ -4,7 +4,11 @@
       "Bash(cargo test *)",
       "Bash(grep -n \"endstream\\\\|stream\\\\b\\\\|obj\\\\b\\\\|>>$\\\\|/Type\\\\|/Filter\\\\|/ColorSpace\\\\|/BitsPerComponent\\\\|BI\\\\b\\\\|EI\\\\b\\\\|/Subtype\\\\|/Length\\\\b\" \"c:\\\\Users\\\\mardo\\\\OneDrive\\\\Desktop\\\\rustybara\\\\rustybara\\\\tests\\\\fixtures\\\\pdf_test_data_print_v2.qdf\")",
       "Bash(grep -n \"1\\\\.2000 re$\\\\|14\\\\.4000 re$\" iterOne_fixture_two_wireframe_diag.qdf)",
-      "Bash(grep -an \"^BT$\\\\|^ET$\\\\|Tm$\\\\|^Tf\\\\b\\\\|Tj$\\\\|TJ$\" goal_fixture_two.qdf)"
+      "Bash(grep -an \"^BT$\\\\|^ET$\\\\|Tm$\\\\|^Tf\\\\b\\\\|Tj$\\\\|TJ$\" goal_fixture_two.qdf)",
+      "Bash(grep -an \"^BT$\\\\|^ET$\" \"rustybara/tests/fixtures/skia-testing/goals/goal_fixture_two.qdf\")",
+      "Bash(grep -an \"^BT$\" \"rustybara/tests/fixtures/skia-testing/goals/goal_fixture_two.qdf\")",
+      "Bash(awk 'NR>=9400 && NR<=11600 { *)",
+      "Bash(awk 'NR>=9400 && NR<=11580 { *)"
     ]
   },
   "spinnerTipsEnabled": false

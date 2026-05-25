@@ -329,19 +329,14 @@ fn draw_page_wireframe(
     outline.set_color(skia_safe::Color::BLACK);
     outline.set_anti_alias(true);
 
-    let have_glyphs = !wf.glyph_outlines.is_empty();
-
     for obj in wf.objects {
-        // When glyph outlines are available, skip the coarse text bbox rect —
-        // the actual glyph paths drawn below are more informative.
-        if have_glyphs && matches!(obj.kind, ObjectKind::Text(_)) {
-            continue;
-        }
         draw_wireframe_object(canvas, obj, wf.media_box, page_screen_rect, &outline);
     }
 
-    // Draw actual glyph paths on top of all other objects.
-    if have_glyphs {
+    // Draw glyph outline paths on top of every other object (including text bboxes).
+    // Glyph outlines are drawn whenever available; text bboxes remain visible underneath
+    // so fonts that could not be extracted still show their bounding box.
+    if !wf.glyph_outlines.is_empty() {
         draw_glyph_outlines(
             canvas,
             wf.glyph_outlines,

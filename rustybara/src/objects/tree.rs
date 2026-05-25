@@ -343,22 +343,51 @@ pub fn build_object_tree(doc: &Document, page_id: ObjectId) -> crate::Result<Obj
                 text_origin = None;
                 tm = Matrix::identity();
                 lm = Matrix::identity();
-                font_size = 12.0;
+                // Note: font_size and leading intentionally persist across BT/ET pairs.
+                // PDF spec: BT resets only the text matrix (Tm/Tlm), not the text state.
                 leading = 0.0;
             }
             "ET" => {
                 if in_text && !text_buf.is_empty() {
                     let origin = text_origin.unwrap_or(tm);
-                    let (px, py) = gs.ctm.transform_point(origin.e, origin.f);
                     let char_count = text_buf.chars().count() as f64;
-                    let w = (char_count * font_size * 0.5).max(0.1);
-                    let h = (font_size * 1.2).max(0.1);
+
+                    // Estimate text extent in text space.
+                    // 0.5 em per character is a reasonable average for proportional fonts.
+                    let text_w = char_count * 0.5 * font_size;
+                    // Standard ascent/descent proportions relative to the em square.
+                    let ascent = 0.8 * font_size;
+                    let descent = -0.2 * font_size;
+
+                    // Compute axis-aligned bounding box by transforming all four corners
+                    // of the text rectangle through the text matrix (origin) then the CTM.
+                    // This correctly handles scaled, rotated, and sheared text matrices.
+                    let corners: [(f64, f64); 4] = [
+                        (0.0, descent),
+                        (text_w, descent),
+                        (0.0, ascent),
+                        (text_w, ascent),
+                    ];
+                    let mut px_arr = [0.0_f64; 4];
+                    let mut py_arr = [0.0_f64; 4];
+                    for (i, &(lx, ly)) in corners.iter().enumerate() {
+                        let tx = origin.a * lx + origin.c * ly + origin.e;
+                        let ty = origin.b * lx + origin.d * ly + origin.f;
+                        let (cx, cy) = gs.ctm.transform_point(tx, ty);
+                        px_arr[i] = cx;
+                        py_arr[i] = cy;
+                    }
+                    let min_x = px_arr.iter().copied().fold(f64::INFINITY, f64::min);
+                    let max_x = px_arr.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                    let min_y = py_arr.iter().copied().fold(f64::INFINITY, f64::min);
+                    let max_y = py_arr.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
                     objects.push(PageObject {
                         bbox: Rect {
-                            x: px,
-                            y: py,
-                            width: w,
-                            height: h,
+                            x: min_x,
+                            y: min_y,
+                            width: (max_x - min_x).max(0.1),
+                            height: (max_y - min_y).max(0.1),
                         },
                         ctm: gs.ctm,
                         kind: ObjectKind::Text(std::mem::take(&mut text_buf)),
@@ -388,13 +417,16 @@ pub fn build_object_tree(doc: &Document, page_id: ObjectId) -> crate::Result<Obj
                 if op.operator == "TD" {
                     leading = -ty;
                 }
-                let t = Matrix::from_values(1.0, 0.0, 0.0, 1.0, tx, ty);
-                lm = lm.concat(&t);
+                // Apply the offset in the current line matrix's coordinate system.
+                // PDF spec: Tlm = [1 0 0 1 tx ty] × Tlm
+                // Equivalent to: new translation = lm.transform_point(tx, ty)
+                let (new_e, new_f) = lm.transform_point(tx, ty);
+                lm = Matrix::from_values(lm.a, lm.b, lm.c, lm.d, new_e, new_f);
                 tm = lm;
             }
             "T*" if in_text => {
-                let t = Matrix::from_values(1.0, 0.0, 0.0, 1.0, 0.0, -leading);
-                lm = lm.concat(&t);
+                let (new_e, new_f) = lm.transform_point(0.0, -leading);
+                lm = Matrix::from_values(lm.a, lm.b, lm.c, lm.d, new_e, new_f);
                 tm = lm;
             }
             "Tj" | "'" if in_text && !op.operands.is_empty() => {
