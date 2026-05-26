@@ -30,11 +30,26 @@ const MAX_FORM_DEPTH: u8 = 8;
 ///
 /// This is a concrete sampled value on a single object and is distinct from
 /// [`crate::pipeline::DocumentColorKind`], which classifies the document as a whole.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PdfColor {
     DeviceGray(f64),
     DeviceRgb(f64, f64, f64),
     DeviceCmyk(f64, f64, f64, f64),
+    Separation { name: String, tint: f64 },
+}
+
+/// Active colorspace for fill or stroke, tracked when `cs`/`CS` operators are encountered
+///
+/// Only colorspaces relevant to color readout and separation preview are named;
+/// everything else collapses to `Other` and produces a no-op when `scn`/`SCN` arrive.
+#[derive(Clone, Debug, Default)]
+enum ColorSpace {
+    #[default]
+    DeviceGray,
+    DeviceRgb,
+    DeviceCmyk,
+    Separation(String),
+    Other,
 }
 
 /// A single path segment stored in local (pre-CTM) coordinates.
@@ -110,6 +125,8 @@ struct GraphicsState {
     fill_color: PdfColor,
     stroke_color: PdfColor,
     stroke_width: f64,
+    fill_cs: ColorSpace,
+    stroke_cs: ColorSpace,
 }
 
 impl Default for GraphicsState {
@@ -119,6 +136,8 @@ impl Default for GraphicsState {
             fill_color: PdfColor::DeviceGray(0.0),
             stroke_color: PdfColor::DeviceGray(0.0),
             stroke_width: 1.0,
+            fill_cs: ColorSpace::DeviceGray,
+            stroke_cs: ColorSpace::DeviceGray,
         }
     }
 }
@@ -205,7 +224,6 @@ fn parse_content(
     for op in operations {
         match op.operator.as_str() {
             // ── Graphics state ─────────────────────────────────────────────────
-
             "q" => gs_stack.push(gs.clone()),
             "Q" => {
                 if let Some(prev) = gs_stack.pop() {
@@ -223,7 +241,6 @@ fn parse_content(
             }
 
             // ── Color operators ────────────────────────────────────────────────
-
             "G" if !op.operands.is_empty() => {
                 gs.stroke_color = PdfColor::DeviceGray(object_to_f64(&op.operands[0]));
             }
@@ -261,8 +278,25 @@ fn parse_content(
                 );
             }
 
-            // ── Path construction ──────────────────────────────────────────────
+            // ── Extended colorspace operators ──────────────────────────────────────────────
+            "cs" if !op.operands.is_empty() => {
+                if let Object::Name(name) = &op.operands[0] {
+                    gs.fill_cs = resolve_colorspace(doc, resource_parent_id, name);
+                }
+            }
+            "CS" if !op.operands.is_empty() => {
+                if let Object::Name(name) = &op.operands[0] {
+                    gs.stroke_cs = resolve_colorspace(doc, resource_parent_id, name);
+                }
+            }
+            "scn" | "sc" => {
+                gs.fill_color = color_from_cs(&gs.fill_cs, &op.operands);
+            }
+            "SCN" | "SC" => {
+                gs.stroke_color = color_from_cs(&gs.stroke_cs, &op.operands);
+            }
 
+            // ── Path construction ──────────────────────────────────────────────
             "m" if op.operands.len() >= 2 => {
                 if !current_sub.points.is_empty() {
                     subpaths.push(std::mem::take(&mut current_sub));
@@ -330,25 +364,54 @@ fn parse_content(
             }
 
             // ── Paint operators ────────────────────────────────────────────────
-
             "S" => {
-                commit_paint(&mut objects, &mut subpaths, &mut current_sub, &gs, ObjectKind::Stroke);
+                commit_paint(
+                    &mut objects,
+                    &mut subpaths,
+                    &mut current_sub,
+                    &gs,
+                    ObjectKind::Stroke,
+                );
             }
             "s" => {
                 // close-and-stroke (equivalent to h S)
                 current_sub.points.push(PathPoint::Close);
-                commit_paint(&mut objects, &mut subpaths, &mut current_sub, &gs, ObjectKind::Stroke);
+                commit_paint(
+                    &mut objects,
+                    &mut subpaths,
+                    &mut current_sub,
+                    &gs,
+                    ObjectKind::Stroke,
+                );
             }
             "f" | "f*" | "F" => {
-                commit_paint(&mut objects, &mut subpaths, &mut current_sub, &gs, ObjectKind::Fill);
+                commit_paint(
+                    &mut objects,
+                    &mut subpaths,
+                    &mut current_sub,
+                    &gs,
+                    ObjectKind::Fill,
+                );
             }
             "B" | "B*" => {
-                commit_paint(&mut objects, &mut subpaths, &mut current_sub, &gs, ObjectKind::FillStroke);
+                commit_paint(
+                    &mut objects,
+                    &mut subpaths,
+                    &mut current_sub,
+                    &gs,
+                    ObjectKind::FillStroke,
+                );
             }
             "b" | "b*" => {
                 // close-and-fill+stroke
                 current_sub.points.push(PathPoint::Close);
-                commit_paint(&mut objects, &mut subpaths, &mut current_sub, &gs, ObjectKind::FillStroke);
+                commit_paint(
+                    &mut objects,
+                    &mut subpaths,
+                    &mut current_sub,
+                    &gs,
+                    ObjectKind::FillStroke,
+                );
             }
             "n" => {
                 // Discard path without painting (e.g. after W/W* clipping paths).
@@ -357,7 +420,6 @@ fn parse_content(
             }
 
             // ── XObject placement ──────────────────────────────────────────────
-
             "Do" if !op.operands.is_empty() => {
                 if let Object::Name(name) = &op.operands[0] {
                     match resolve_xobject(doc, resource_parent_id, name) {
@@ -365,8 +427,12 @@ fn parse_content(
                             if depth == 0 {
                                 // Recursion budget exhausted — emit the form's declared
                                 // /BBox as a placeholder so its footprint isn't lost.
-                                let local_bbox = form_bbox_from_id(doc, form_id)
-                                    .unwrap_or(Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 });
+                                let local_bbox = form_bbox_from_id(doc, form_id).unwrap_or(Rect {
+                                    x: 0.0,
+                                    y: 0.0,
+                                    width: 1.0,
+                                    height: 1.0,
+                                });
                                 objects.push(PageObject {
                                     bbox: gs.ctm.transform_rect(&local_bbox),
                                     ctm: gs.ctm,
@@ -408,7 +474,6 @@ fn parse_content(
             }
 
             // ── Text blocks ────────────────────────────────────────────────────
-
             "BT" => {
                 in_text = true;
                 text_buf.clear();
@@ -463,7 +528,7 @@ fn parse_content(
                         },
                         ctm: gs.ctm,
                         kind: ObjectKind::Text(std::mem::take(&mut text_buf)),
-                        fill_color: Some(gs.fill_color),
+                        fill_color: Some(gs.fill_color.clone()),
                         stroke_color: None,
                         stroke_width: 0.0,
                         subpaths: vec![],
@@ -566,8 +631,12 @@ fn parse_form_xobject(
     objects: &mut Vec<PageObject>,
     depth: u8,
 ) {
-    let Ok(form_obj) = doc.get_object(form_id) else { return };
-    let Object::Stream(stream) = form_obj else { return };
+    let Ok(form_obj) = doc.get_object(form_id) else {
+        return;
+    };
+    let Object::Stream(stream) = form_obj else {
+        return;
+    };
 
     // A form's /Matrix maps its local space into the parent user space.
     // The effective CTM for objects inside is parent_ctm × form_matrix.
@@ -590,7 +659,9 @@ fn parse_form_xobject(
         Ok(b) => b,
         Err(_) => stream.content.clone(),
     };
-    let Ok(content) = lopdf::content::Content::decode(&bytes) else { return };
+    let Ok(content) = lopdf::content::Content::decode(&bytes) else {
+        return;
+    };
 
     // Use the form's own ID as the resource parent so that nested Do operators
     // resolve XObject names from the form's /Resources, not the page's.
@@ -693,6 +764,88 @@ fn form_bbox_from_id(doc: &Document, form_id: ObjectId) -> Option<Rect> {
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
+/// Produce a [`PdfColor`] from raw `scn`/`SCN` operands given the active [`ColorSpace`]
+///
+/// The operand count and meaning are colorspace-specific:
+/// - [`ColorSpace::DeviceGray`] / [`ColorSpace::Separation`] — one operand (gray or tint)
+/// - [`ColorSpace::DeviceRgb`] — three operands (r, g, b)
+/// - [`ColorSpace::DeviceCmyk`] — four operands (c, m, y, k)
+/// - [`ColorSpace::Other`] — returns `DeviceGray(0.0)` as a safe no-op
+///
+/// Missing operands default to `0.0`.
+fn color_from_cs(cs: &ColorSpace, operands: &[Object]) -> PdfColor {
+    let get = |i: usize| operands.get(i).map(object_to_f64).unwrap_or(0.0);
+    match cs {
+        ColorSpace::DeviceGray => PdfColor::DeviceGray(get(0)),
+        ColorSpace::DeviceRgb => PdfColor::DeviceRgb(get(0), get(1), get(2)),
+        ColorSpace::DeviceCmyk => PdfColor::DeviceCmyk(get(0), get(1), get(2), get(3)),
+        ColorSpace::Separation(name) => PdfColor::Separation {
+            name: name.clone(),
+            tint: get(0),
+        },
+        ColorSpace::Other => PdfColor::DeviceGray(0.0),
+    }
+}
+
+/// Resolve a colorspace name to a [`ColorSpace`] value.
+///
+/// Device colorspace name (`DeviceGray`, `DeviceRgb`, `DeviceCmyk`) are recognised
+/// without any dictionary lookup. All other names are looked up in `resource_parent_id`
+/// -> `/Resources/ColorSpace` and inspected as arrays. A `[/Separation /inkname /altspace tinfn]`
+/// array produces [`ColorSpace::Separation`] with the ink name from the second element.
+/// Anything else – ICCBased, Indexed, unknown – collapses to [`ColorSpace::Other`].
+fn resolve_colorspace(doc: &Document, resource_parent_id: ObjectId, name: &[u8]) -> ColorSpace {
+    match name {
+        b"DeviceGray" => return ColorSpace::DeviceGray,
+        b"DeviceRGB" => return ColorSpace::DeviceRgb,
+        b"DeviceCMYK" => return ColorSpace::DeviceCmyk,
+        _ => {}
+    }
+
+    let cs_dict = match colorspace_dict_for(doc, resource_parent_id) {
+        Some(d) => d,
+        None => return ColorSpace::Other,
+    };
+
+    let cs_object = match cs_dict.get(name).ok() {
+        Some(o) => deref(doc, o),
+        None => return ColorSpace::Other,
+    };
+
+    if let Ok(arr) = cs_object.as_array() {
+        if arr.len() >= 2 {
+            if let Object::Name(kind) = &arr[0] {
+                if kind == b"Separation" {
+                    let ink_name = match &arr[1] {
+                        Object::Name(n) => String::from_utf8_lossy(n).into_owned(),
+                        _ => "Unknown".to_string(),
+                    };
+                    return ColorSpace::Separation(ink_name);
+                }
+            }
+        }
+    }
+
+    ColorSpace::Other
+}
+
+/// Retrieve an owned clone of the `/ColorSpace` sub-dictionary reachable from
+/// `resource_parent_id`, or `None` if the chain cannot be navigated.
+///
+/// Handles both page objects (`Object::Dictionary`) and Form XObject streams
+/// (`Object::Stream`) as the resource parent, mirroring [`xobject_dict_for`].
+fn colorspace_dict_for(doc: &Document, resource_parent_id: ObjectId) -> Option<Dictionary> {
+    let parent_obj = doc.get_object(resource_parent_id).ok()?;
+    let resources_obj: &Object = match parent_obj {
+        Object::Dictionary(d) => deref(doc, d.get(b"Resources").ok()?),
+        Object::Stream(s) => deref(doc, s.dict.get(b"Resources").ok()?),
+        _ => return None,
+    };
+    let res_dict = resources_obj.as_dict().ok()?;
+    let cs_object = deref(doc, res_dict.get(b"ColorSpace").ok()?);
+    Some(cs_object.as_dict().ok()?.clone())
+}
+
 /// Convert six operands to a [`Matrix`].
 ///
 /// Mirrors `operands_to_matrix` from `stream::filter`, which is private to that module.
@@ -724,9 +877,9 @@ fn commit_paint(
     }
     let bbox = path_bbox(subpaths, &gs.ctm);
     let (fill_color, stroke_color) = match &kind {
-        ObjectKind::Fill => (Some(gs.fill_color), None),
-        ObjectKind::Stroke => (None, Some(gs.stroke_color)),
-        ObjectKind::FillStroke => (Some(gs.fill_color), Some(gs.stroke_color)),
+        ObjectKind::Fill => (Some(gs.fill_color.clone()), None),
+        ObjectKind::Stroke => (None, Some(gs.stroke_color.clone())),
+        ObjectKind::FillStroke => (Some(gs.fill_color.clone()), Some(gs.stroke_color.clone())),
         _ => (None, None),
     };
     objects.push(PageObject {
@@ -777,7 +930,12 @@ fn path_bbox(subpaths: &[SubPath], ctm: &Matrix) -> Rect {
     if xmin.is_finite() {
         Rect::from_corners(xmin, ymin, xmax, ymax)
     } else {
-        Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }
     }
 }
 
@@ -828,6 +986,30 @@ mod tests {
         assert_eq!(
             PdfColor::DeviceCmyk(0.0, 0.0, 0.0, 1.0),
             PdfColor::DeviceCmyk(0.0, 0.0, 0.0, 1.0),
+        );
+    }
+
+    #[test]
+    fn pdf_color_eq_separation() {
+        assert_eq!(
+            PdfColor::Separation {
+                name: "PANTONE 485 C".to_string(),
+                tint: 1.0
+            },
+            PdfColor::Separation {
+                name: "PANTONE 485 C".to_string(),
+                tint: 1.0
+            },
+        );
+        assert_ne!(
+            PdfColor::Separation {
+                name: "PANTONE 485 C".to_string(),
+                tint: 1.0
+            },
+            PdfColor::Separation {
+                name: "PANTONE 485 C".to_string(),
+                tint: 0.5
+            },
         );
     }
 

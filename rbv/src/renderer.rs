@@ -452,13 +452,16 @@ fn draw_color_panel(canvas: &skia_safe::Canvas, panel: &ColorPanel, _win_w: f32,
     }
 
     // Row 2 — PDF object color from the content stream
-    let color_str = match panel.pdf_color {
+    let color_str = match &panel.pdf_color {
         Some(PdfColor::DeviceGray(v)) => format!("PdfColor  Gray: {v:.3}"),
         Some(PdfColor::DeviceRgb(r, g, b)) => {
             format!("PdfColor  RGB: {r:.3}  {g:.3}  {b:.3}")
         }
         Some(PdfColor::DeviceCmyk(c, m, yv, k)) => {
             format!("PdfColor  CMYK: {c:.2}  {m:.2}  {yv:.2}  {k:.2}")
+        }
+        Some(PdfColor::Separation { name, tint }) => {
+            format!("PdfColor Spot: {name} @{tint:.3}")
         }
         None => "PdfColor  n/a".to_string(),
     };

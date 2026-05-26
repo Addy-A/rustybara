@@ -232,10 +232,12 @@ impl Viewer {
         let pixel_rgba = self.sample_pixel(self.cursor_pos).unwrap_or([0, 0, 0, 0]);
 
         // Prefer fill color; fall back to stroke color.
-        let pdf_color = self
-            .selected_object
-            .as_ref()
-            .and_then(|obj| obj.fill_color.or(obj.stroke_color));
+        let pdf_color = self.selected_object.as_ref().and_then(|obj| {
+            obj.fill_color
+                .as_ref()
+                .or(obj.stroke_color.as_ref())
+                .cloned()
+        });
 
         // Build the ICC transform lazily on first click; reuse for all subsequent clicks.
         if self.icc_transform.is_none() {
@@ -349,8 +351,7 @@ impl Viewer {
             .nth(page as usize)
             .copied();
         self.page_boxes = page_id.and_then(|id| PageBoxes::read(self.pipeline.doc(), id).ok());
-        self.object_tree =
-            page_id.and_then(|id| build_object_tree(self.pipeline.doc(), id).ok());
+        self.object_tree = page_id.and_then(|id| build_object_tree(self.pipeline.doc(), id).ok());
         self.glyph_outlines =
             page_id.and_then(|id| outline_page_text(self.pipeline.doc(), id).ok());
 
@@ -441,13 +442,16 @@ impl Viewer {
                 ObjectKind::Image => "Image",
                 ObjectKind::FormXObject => "FormXObject",
             };
-            let color_str = match obj.fill_color.or(obj.stroke_color) {
+            let color_str = match obj.fill_color.as_ref().or(obj.stroke_color.as_ref()) {
                 Some(PdfColor::DeviceGray(v)) => format!("Gray({v:.3})"),
                 Some(PdfColor::DeviceRgb(r, g, b)) => {
                     format!("RGB({r:.2} {g:.2} {b:.2})")
                 }
                 Some(PdfColor::DeviceCmyk(c, m, y, k)) => {
                     format!("CMYK({c:.2} {m:.2} {y:.2} {k:.2})")
+                }
+                Some(PdfColor::Separation { name, tint }) => {
+                    format!("Spot({name} @ {tint:.3})")
                 }
                 None => "n/a".to_string(),
             };
@@ -485,7 +489,7 @@ impl Viewer {
 /// Returns `None` if no valid RGB profile was found, in which case the caller
 /// should fall back to the bundled `AdobeRGB1998` profile.
 fn find_system_srgb() -> Option<rustybara_icc::profiles::IccProfile> {
-    use rustybara_icc::{ColorSpaceKind, profiles::IccProfile};
+    use rustybara_icc::{profiles::IccProfile, ColorSpaceKind};
 
     #[cfg(target_os = "windows")]
     let candidates: &[&str] = &[
@@ -1091,7 +1095,11 @@ mod tests {
 
     impl NavState {
         fn new(page: u32, page_count: u32) -> Self {
-            Self { page, page_count, digit_buf: String::new() }
+            Self {
+                page,
+                page_count,
+                digit_buf: String::new(),
+            }
         }
         fn navigate(&mut self, target: u32) {
             let clamped = target.min(self.page_count.saturating_sub(1));
