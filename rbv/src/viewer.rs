@@ -2,10 +2,12 @@ use crate::export::export_wireframe;
 use crate::renderer::{
     image_to_skia, ColorPanel, DebugOverlay, OverlayData, PageWireframe, SkiaRenderer,
 };
+use crate::ui_state::{extract_spot_names, PlateMode};
 use image::{DynamicImage, GenericImageView};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use rustybara::objects::{
-    build_object_tree, hit_test, ObjectKind, ObjectTree, PageObject, PdfColor,
+    build_object_tree, filter_by_ink, hit_test, CmykChannel, ObjectKind, ObjectTree, PageObject,
+    PdfColor,
 };
 use rustybara::outline::paths::{outline_page_text, PositionedGlyph};
 use rustybara::pages::PageBoxes;
@@ -43,6 +45,9 @@ pub enum ViewerEvent {
 struct SkiaState {
     window: Arc<Window>,
     renderer: SkiaRenderer,
+    /// egui-winit integration — translates winit events into egui input and
+    /// handles platform output (cursor changes, clipboard, IME).
+    egui_winit: egui_winit::State,
     page_image: Option<skia_safe::Image>,
     width: u32,
     height: u32,
@@ -94,6 +99,22 @@ struct Viewer {
     /// Accumulated digit characters for a `<N>g` page-jump prefix.
     /// Cleared on every navigation action or Escape.
     digit_buf: String,
+    /// Shared egui context — cloned cheaply (Arc) into the egui-winit State.
+    egui_ctx: egui::Context,
+    /// Which ink plate is currently isolated in the tools panel.
+    active_plate: PlateMode,
+    /// Spot-color names present on the current page, sorted alphabetically.
+    plate_spot_names: Vec<String>,
+    /// Whether the prepress tools panel is currently visible.
+    /// Hidden by default; toggled by the floating ⚙ button.
+    show_tools_panel: bool,
+    /// True when the pointer was over any egui surface in the last rendered frame.
+    ///
+    /// Used to gate PDF pan / selection so clicks inside the egui panel or the
+    /// floating toggle button don't also trigger viewer interactions.
+    /// One-frame delay is acceptable — the pointer must have been hovering there
+    /// before a press can register.
+    egui_pointer_over_panel: bool,
 }
 
 impl Viewer {
@@ -364,6 +385,11 @@ impl Viewer {
         self.object_tree = page_id.and_then(|id| build_object_tree(self.pipeline.doc(), id).ok());
         self.glyph_outlines =
             page_id.and_then(|id| outline_page_text(self.pipeline.doc(), id).ok());
+        self.plate_spot_names = self
+            .object_tree
+            .as_ref()
+            .map(extract_spot_names)
+            .unwrap_or_default();
 
         // Clear stale selection and images from the previous page.
         self.selected_object = None;
@@ -642,6 +668,15 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
 
         let renderer = SkiaRenderer::from_gl(gl_context, gl_surface, width, height);
 
+        let egui_winit = egui_winit::State::new(
+            self.egui_ctx.clone(),
+            egui::ViewportId::ROOT,
+            event_loop,
+            Some(window.scale_factor() as f32),
+            None,
+            None, // max_texture_side — None lets egui query it automatically
+        );
+
         let page_image = self.pending_image.as_ref().map(image_to_skia);
         if page_image.is_some() {
             window.request_redraw();
@@ -649,6 +684,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
         self.state = Some(SkiaState {
             window,
             renderer,
+            egui_winit,
             page_image,
             width,
             height,
@@ -662,12 +698,75 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
             return;
         }
 
+        // Forward to egui before processing viewer input. Structural window
+        // events (resize, redraw, close) are never consumed by egui.
+        let egui_consumed = match &event {
+            WindowEvent::RedrawRequested
+            | WindowEvent::Resized(_)
+            | WindowEvent::CloseRequested => false,
+            _ => {
+                let state = self.state.as_mut().unwrap();
+                let resp = state.egui_winit.on_window_event(&state.window, &event);
+                if resp.repaint {
+                    state.window.request_redraw();
+                }
+                resp.consumed
+            }
+        };
+        if egui_consumed {
+            return;
+        }
+
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 
             WindowEvent::RedrawRequested => {
-                // Build debug lines first — this borrows `self` immutably (reads self.state),
-                // so it must complete before we take the mutable `state` borrow below.
+                // ── Phase 1: take egui input ──────────────────────────────────
+                let raw_egui_input = {
+                    let state = self.state.as_mut().unwrap();
+                    state.egui_winit.take_egui_input(&state.window)
+                };
+
+                // ── Phase 2: run egui frame ───────────────────────────────────
+                // Clone is a cheap Arc bump; lets the closure borrow other fields
+                // of `self` without conflicting with the egui_ctx borrow.
+                let egui_ctx = self.egui_ctx.clone();
+                let mut egui_over = false;
+                let full_output = egui_ctx.run_ui(raw_egui_input, |ctx| {
+                    egui_over = build_egui_ui(
+                        ctx,
+                        &mut self.active_plate,
+                        &self.plate_spot_names,
+                        self.object_tree.as_ref(),
+                        self.selected_object.as_ref(),
+                        self.color_info.as_ref(),
+                        &mut self.show_tools_panel,
+                    );
+                });
+                // Store for next-frame use in mouse-event gating.
+                self.egui_pointer_over_panel = egui_over;
+
+                let egui::FullOutput {
+                    platform_output,
+                    textures_delta,
+                    shapes,
+                    pixels_per_point,
+                    ..
+                } = full_output;
+
+                // ── Phase 3: handle platform output (cursor, clipboard) ───────
+                {
+                    let state = self.state.as_mut().unwrap();
+                    state
+                        .egui_winit
+                        .handle_platform_output(&state.window, platform_output);
+                }
+
+                // ── Phase 4: tessellate ───────────────────────────────────────
+                let egui_primitives =
+                    self.egui_ctx.tessellate(shapes, pixels_per_point);
+
+                // ── Phase 5: build debug overlay (immutable borrows) ──────────
                 let debug_lines: Option<Vec<String>> = if self.debug_mode {
                     Some(self.build_debug_lines())
                 } else {
@@ -675,10 +774,9 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 };
                 let debug_overlay = debug_lines.as_deref().map(|lines| DebugOverlay { lines });
 
-                // Project the sampling point from PDF coords to screen coords each frame
-                // so the crosshair marker tracks with zoom and pan changes.
-                // Done before the mutable `state` borrow below because `compute_page_rect`
-                // borrows `self.state` immutably.
+                // ── Phase 6: project sample crosshair ────────────────────────
+                // compute_page_rect borrows self.state immutably — must happen
+                // before the mutable borrow taken in phase 7.
                 let sample_screen_pos: Option<[f32; 2]> =
                     self.sampling_pdf_pos.and_then(|(pdf_x, pdf_y)| {
                         let page_rect = self.compute_page_rect()?;
@@ -691,6 +789,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                         ])
                     });
 
+                // ── Phase 7: draw ─────────────────────────────────────────────
                 let state = self.state.as_mut().unwrap();
                 let overlays = if self.show_overlays {
                     self.page_boxes.as_ref().map(|b| OverlayData { boxes: b })
@@ -698,16 +797,30 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                     None
                 };
 
+                // Plate filter — pre-compute before the wireframe block so the owned
+                // Vec<PageObject> outlives the PageWireframe borrow below.
+                // Only allocated when a non-All plate is active AND the tree is loaded.
+                let filtered_for_plate: Option<Vec<PageObject>> = self
+                    .active_plate
+                    .to_ink_selector()
+                    .and_then(|sel| {
+                        self.object_tree.as_ref().map(|tree| {
+                            filter_by_ink(tree, &sel).into_iter().cloned().collect()
+                        })
+                    });
+
                 // Wireframe: Acrobat-style full-page mode (W key).
-                // Passes the full object tree + optional selected object for highlighting.
+                // When a plate is active the wireframe only draws objects on that ink.
                 // Borrows from self.object_tree / self.page_boxes / self.selected_object;
-                // these are different fields from self.state, so partial-field borrow is fine.
+                // these are different fields from self.state so partial-field borrow is fine.
                 let wireframe = if self.show_wireframe {
                     self.object_tree
                         .as_ref()
                         .zip(self.page_boxes.as_ref())
                         .map(|(tree, boxes)| PageWireframe {
-                            objects: &tree.objects,
+                            objects: filtered_for_plate
+                                .as_deref()
+                                .unwrap_or(&tree.objects),
                             media_box: &boxes.media_box,
                             selected: self.selected_object.as_ref(),
                             glyph_outlines: self.glyph_outlines.as_deref().unwrap_or(&[]),
@@ -715,6 +828,9 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 } else {
                     None
                 };
+
+                // Texture uploads must precede the egui draw call.
+                state.renderer.update_egui_textures(&textures_delta);
 
                 state.renderer.draw(
                     state.page_image.as_ref(),
@@ -726,6 +842,12 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                     self.color_info.as_ref(),
                     debug_overlay.as_ref(),
                 );
+
+                state.renderer.draw_egui(&egui_primitives, pixels_per_point);
+
+                // Free textures egui no longer references.
+                state.renderer.free_egui_textures(&textures_delta);
+
                 state.renderer.present();
             }
 
@@ -916,25 +1038,36 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 button: MouseButton::Left,
                 state: btn_state,
                 ..
-            } => match btn_state {
-                ElementState::Pressed => {
-                    self.drag_origin = Some((self.cursor_pos, self.pan));
-                }
-                ElementState::Released => {
-                    // Disambiguate pan drag vs click using a 4-pixel distance threshold.
-                    // If the cursor moved less than 4px from press to release it's a click;
-                    // larger displacement means the user was panning.
-                    if let Some((cursor_start, _)) = self.drag_origin {
-                        let dx = self.cursor_pos[0] - cursor_start[0];
-                        let dy = self.cursor_pos[1] - cursor_start[1];
-                        if dx * dx + dy * dy < 16.0 {
-                            self.handle_selection_click();
-                            self.state.as_ref().unwrap().window.request_redraw();
+            } => {
+                match btn_state {
+                    ElementState::Pressed => {
+                        // Don't start a PDF pan/selection when the pointer was over
+                        // any egui surface last frame.  `egui_pointer_over_panel` is
+                        // set from build_egui_ui's rect-contains check — more reliable
+                        // than egui_wants_pointer_input() which only fires during active
+                        // drags, not passive hover-over-panel.
+                        if !self.egui_pointer_over_panel {
+                            self.drag_origin = Some((self.cursor_pos, self.pan));
                         }
                     }
-                    self.drag_origin = None;
+                    ElementState::Released => {
+                        // Disambiguate pan drag vs click using a 4-pixel distance threshold.
+                        if let Some((cursor_start, _)) = self.drag_origin {
+                            let dx = self.cursor_pos[0] - cursor_start[0];
+                            let dy = self.cursor_pos[1] - cursor_start[1];
+                            if dx * dx + dy * dy < 16.0 && !self.egui_pointer_over_panel {
+                                self.handle_selection_click();
+                            }
+                        }
+                        self.drag_origin = None;
+                    }
                 }
-            },
+                // Always redraw on mouse events so egui's run_ui sees both the press
+                // and the release — without this, a panel click where drag_origin was
+                // never set reaches no request_redraw() path, the release event never
+                // enters run_ui, and radio/button widgets never fire clicked().
+                self.state.as_ref().unwrap().window.request_redraw();
+            }
             _ => {}
         }
     }
@@ -980,6 +1113,11 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                         page_id.and_then(|id| build_object_tree(new_pipeline.doc(), id).ok());
                     self.glyph_outlines =
                         page_id.and_then(|id| outline_page_text(new_pipeline.doc(), id).ok());
+                    self.plate_spot_names = self
+                        .object_tree
+                        .as_ref()
+                        .map(extract_spot_names)
+                        .unwrap_or_default();
 
                     self.pipeline = Arc::new(new_pipeline);
                 }
@@ -1017,6 +1155,11 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                                 .and_then(|id| build_object_tree(self.pipeline.doc(), id).ok());
                             self.glyph_outlines = page_id
                                 .and_then(|id| outline_page_text(self.pipeline.doc(), id).ok());
+                            self.plate_spot_names = self
+                                .object_tree
+                                .as_ref()
+                                .map(extract_spot_names)
+                                .unwrap_or_default();
 
                             // Clear stale display state.
                             self.selected_object = None;
@@ -1075,6 +1218,7 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig, listen: bool) {
     let page_boxes = page_id.and_then(|id| PageBoxes::read(pipeline.doc(), id).ok());
     let object_tree = page_id.and_then(|id| build_object_tree(pipeline.doc(), id).ok());
     let glyph_outlines = page_id.and_then(|id| outline_page_text(pipeline.doc(), id).ok());
+    let plate_spot_names = object_tree.as_ref().map(extract_spot_names).unwrap_or_default();
 
     let event_loop = EventLoop::<ViewerEvent>::with_user_event()
         .build()
@@ -1174,9 +1318,229 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig, listen: bool) {
         watcher,
         proxy,
         digit_buf: String::new(),
+        egui_ctx: egui::Context::default(),
+        active_plate: PlateMode::All,
+        plate_spot_names,
+        show_tools_panel: false,
+        egui_pointer_over_panel: false,
     };
 
     event_loop.run_app(&mut viewer).expect("run app");
+}
+
+// ── egui UI ───────────────────────────────────────────────────────────────────
+
+/// Build the egui side panel for every frame.
+///
+/// Receives only the specific `Viewer` fields it needs, avoiding a `&mut Viewer`
+/// borrow that would conflict with the `egui_ctx.run(...)` call in the caller.
+// Panel::show(ctx, …) is the correct top-level call; show_inside() requires &mut Ui,
+// so the deprecation message is inapplicable here. Suppress until egui stabilises the API.
+#[allow(deprecated)]
+fn build_egui_ui(
+    ctx: &egui::Context,
+    active_plate: &mut PlateMode,
+    spot_names: &[String],
+    object_tree: Option<&ObjectTree>,
+    selected: Option<&PageObject>,
+    color_info: Option<&ColorPanel>,
+    show_panel: &mut bool,
+) -> bool {
+    // Capture current pointer position in egui's logical-pixel coordinate space.
+    // Used to test whether the pointer is over any egui surface this frame so
+    // the caller can gate PDF pan/selection next frame.
+    let ptr = ctx.pointer_hover_pos();
+
+    // ── Floating toggle button — always visible, does not affect PDF layout ───
+    let btn_resp = egui::Area::new(egui::Id::new("tools_toggle"))
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 8.0))
+        .show(ctx, |ui| {
+            let label = if *show_panel { "✕" } else { "⚙" };
+            if ui
+                .button(egui::RichText::new(label).size(16.0))
+                .on_hover_text(if *show_panel {
+                    "Close Prepress Tools"
+                } else {
+                    "Open Prepress Tools"
+                })
+                .clicked()
+            {
+                *show_panel = !*show_panel;
+            }
+        });
+    let over_btn = ptr.map_or(false, |p| btn_resp.response.rect.contains(p));
+
+    // ── Side panel — only when the toggle is active ───────────────────────────
+    if !*show_panel {
+        return over_btn;
+    }
+
+    let panel_resp = egui::Panel::right("prepress_tools")
+        .default_size(220.0)
+        .min_size(180.0)
+        .show(ctx, |ui| {
+            // ── Plate view ────────────────────────────────────────────────────
+            ui.heading("Plate View");
+            ui.separator();
+
+            ui.radio_value(active_plate, PlateMode::All, "All");
+
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("Process")
+                    .color(egui::Color32::GRAY)
+                    .size(11.0),
+            );
+            for (label, ch) in [
+                ("Cyan", CmykChannel::Cyan),
+                ("Magenta", CmykChannel::Magenta),
+                ("Yellow", CmykChannel::Yellow),
+                ("Black", CmykChannel::Black),
+            ] {
+                ui.radio_value(active_plate, PlateMode::Cmyk(ch), label);
+            }
+
+            if !spot_names.is_empty() {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new("Spot Colors")
+                        .color(egui::Color32::GRAY)
+                        .size(11.0),
+                );
+                egui::ScrollArea::vertical()
+                    .max_height(120.0)
+                    .id_salt("spot_scroll")
+                    .show(ui, |ui| {
+                        for name in spot_names {
+                            ui.radio_value(
+                                active_plate,
+                                PlateMode::Spot(name.clone()),
+                                name.as_str(),
+                            );
+                        }
+                    });
+            }
+
+            // Object count for the active plate.
+            if let Some(selector) = active_plate.to_ink_selector() {
+                if let Some(tree) = object_tree {
+                    let count = filter_by_ink(tree, &selector).len();
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(format!("↳ {count} object(s) on plate"))
+                            .italics()
+                            .size(11.0),
+                    );
+                }
+            }
+
+            // ── Selection ─────────────────────────────────────────────────────
+            ui.separator();
+            ui.heading("Selection");
+
+            let Some(obj) = selected else {
+                ui.label(
+                    egui::RichText::new("Click an object to inspect it")
+                        .color(egui::Color32::GRAY)
+                        .italics(),
+                );
+                return;
+            };
+
+            ui.label(format!("Kind: {:?}", obj.kind));
+
+            // Overprint state.
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new("Overprint").size(12.0).strong());
+            egui::Grid::new("overprint_grid")
+                .num_columns(2)
+                .spacing([8.0, 2.0])
+                .show(ui, |ui| {
+                    ui.label("Fill:");
+                    ui.label(format!("{}", obj.overprint.fill_overprint));
+                    ui.end_row();
+                    ui.label("Stroke:");
+                    ui.label(format!("{}", obj.overprint.stroke_overprint));
+                    ui.end_row();
+                    ui.label("Mode:");
+                    ui.label(format!("{}", obj.overprint.overprint_mode));
+                    ui.end_row();
+                });
+
+            // PDF color values.
+            if let Some(fill) = &obj.fill_color {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Fill Color").size(12.0).strong());
+                show_pdf_color(ui, fill);
+            }
+            if let Some(stroke) = &obj.stroke_color {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Stroke Color").size(12.0).strong());
+                show_pdf_color(ui, stroke);
+            }
+
+            // ICC-sampled pixel readout.
+            if let Some(panel) = color_info {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Sampled Pixel").size(12.0).strong());
+                let [r, g, b, a] = panel.pixel_rgba;
+                ui.horizontal(|ui| {
+                    // Use a painted rect — "██" (U+2588) is absent from egui's
+                    // bundled font and shows as a missing-glyph box.
+                    let swatch_color = egui::Color32::from_rgba_premultiplied(r, g, b, a);
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(16.0, 12.0), egui::Sense::hover());
+                    ui.painter().rect_filled(rect, 2.0, swatch_color);
+                    ui.label(format!("#{r:02X}{g:02X}{b:02X}"));
+                });
+                if let Some([c, m, y, k]) = panel.pixel_cmyk {
+                    ui.label(format!(
+                        "CMYK  {:.0}%  {:.0}%  {:.0}%  {:.0}%",
+                        c * 100.0,
+                        m * 100.0,
+                        y * 100.0,
+                        k * 100.0
+                    ));
+                }
+            }
+        });
+
+    // Return true if the pointer was inside the panel this frame.
+    let over_panel = ptr.map_or(false, |p| panel_resp.response.rect.contains(p));
+    over_btn || over_panel
+}
+
+fn show_pdf_color(ui: &mut egui::Ui, color: &PdfColor) {
+    match color {
+        PdfColor::DeviceGray(v) => {
+            ui.label(format!("Gray {v:.3}"));
+        }
+        PdfColor::DeviceRgb(r, g, b) => {
+            ui.horizontal(|ui| {
+                let swatch_color = egui::Color32::from_rgb(
+                    (r * 255.0) as u8,
+                    (g * 255.0) as u8,
+                    (b * 255.0) as u8,
+                );
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 12.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 2.0, swatch_color);
+                ui.label(format!("RGB  {r:.3}  {g:.3}  {b:.3}"));
+            });
+        }
+        PdfColor::DeviceCmyk(c, m, y, k) => {
+            ui.label(format!(
+                "CMYK  {:.0}%  {:.0}%  {:.0}%  {:.0}%",
+                c * 100.0,
+                m * 100.0,
+                y * 100.0,
+                k * 100.0
+            ));
+        }
+        PdfColor::Separation { name, tint } => {
+            ui.label(format!("Spot \"{name}\"  @{tint:.3}"));
+        }
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

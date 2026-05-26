@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+
+use egui::TextureId;
 use glutin::{
     context::PossiblyCurrentContext,
     surface::{GlSurface, Surface as GlWindowSurface, WindowSurface},
@@ -59,6 +62,23 @@ pub struct DebugOverlay<'a> {
     pub lines: &'a [String],
 }
 
+// ── egui texture cache ────────────────────────────────────────────────────────
+
+/// CPU-side backing for a single egui texture plus a cached Skia image.
+///
+/// egui sends *partial* font-atlas updates (`ImageDelta::pos = Some([x, y])`)
+/// whenever new glyphs are first requested — only the new tile arrives, not the
+/// whole atlas.  Skia images are immutable, so we keep the full RGBA pixel buffer
+/// here, blit the patch into it on each delta, and rebuild the Skia image.
+/// Without this, the whole atlas would be replaced with only the tile, corrupting
+/// every glyph that was already uploaded.
+struct EguiTexture {
+    pixels: Vec<u8>, // flat RGBA u8 row-major: width * height * 4 bytes
+    width: usize,
+    height: usize,
+    image: skia_safe::Image,
+}
+
 // ── Renderer ──────────────────────────────────────────────────────────────────
 
 pub struct SkiaRenderer {
@@ -68,6 +88,7 @@ pub struct SkiaRenderer {
     skia_surface: skia_safe::Surface,
     pub width: u32,
     pub height: u32,
+    egui_textures: HashMap<TextureId, EguiTexture>,
 }
 
 pub fn image_to_skia(img: &DynamicImage) -> skia_safe::Image {
@@ -547,6 +568,23 @@ fn draw_debug_overlay(canvas: &skia_safe::Canvas, lines: &[String], win_w: f32, 
     }
 }
 
+// ── egui image helper ─────────────────────────────────────────────────────────
+
+/// Build a Skia raster image from a flat RGBA u8 buffer.
+///
+/// Free function (not a method) so it can be called while `self.egui_textures`
+/// holds a mutable borrow without triggering an `E0502` conflict.
+fn make_egui_skia_image(rgba: &[u8], w: usize, h: usize) -> Option<skia_safe::Image> {
+    let info = skia_safe::ImageInfo::new(
+        (w as i32, h as i32),
+        skia_safe::ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    let data = skia_safe::Data::new_copy(rgba);
+    skia_safe::images::raster_from_data(&info, data, w * 4)
+}
+
 // ── Surface helpers ───────────────────────────────────────────────────────────
 
 fn make_skia_surface(
@@ -595,6 +633,7 @@ impl SkiaRenderer {
             skia_surface,
             width,
             height,
+            egui_textures: HashMap::new(),
         }
     }
 
@@ -690,6 +729,174 @@ impl SkiaRenderer {
         self.width = width.max(1);
         self.height = height.max(1);
         self.skia_surface = make_skia_surface(&mut self.gr_context, self.width, self.height)
+    }
+
+    // ── egui rendering ────────────────────────────────────────────────────────
+
+    /// Upload or patch egui textures from a frame's [`egui::TexturesDelta`].
+    ///
+    /// egui sends two kinds of deltas:
+    /// * `pos = None` — full texture upload; replace everything.
+    /// * `pos = Some([x, y])` — partial update; blit the tile into the existing
+    ///   CPU buffer at the given offset, then rebuild the Skia image.
+    ///
+    /// Must be called before [`Self::draw_egui`].
+    pub fn update_egui_textures(&mut self, delta: &egui::TexturesDelta) {
+        for (id, image_delta) in &delta.set {
+            // In egui 0.27+, all texture data (including the font atlas) is
+            // delivered as ColorImage — there is no separate Font variant.
+            let (patch_pixels, patch_w, patch_h) = match &image_delta.image {
+                egui::ImageData::Color(img) => {
+                    let pixels: Vec<u8> = img
+                        .pixels
+                        .iter()
+                        .flat_map(|c| [c.r(), c.g(), c.b(), c.a()])
+                        .collect();
+                    (pixels, img.size[0], img.size[1])
+                }
+            };
+
+            if let Some([ox, oy]) = image_delta.pos {
+                // ── Partial update: blit the tile into the existing CPU buffer ──
+                // Use a free-function call to avoid holding `&self` while `self.egui_textures`
+                // is already mutably borrowed.
+                if let Some(existing) = self.egui_textures.get_mut(id) {
+                    for row in 0..patch_h {
+                        let src_off = row * patch_w * 4;
+                        let dst_off = ((oy + row) * existing.width + ox) * 4;
+                        let len = patch_w * 4;
+                        existing.pixels[dst_off..dst_off + len]
+                            .copy_from_slice(&patch_pixels[src_off..src_off + len]);
+                    }
+                    // Rebuild the Skia image from the now-patched buffer.
+                    if let Some(img) =
+                        make_egui_skia_image(&existing.pixels, existing.width, existing.height)
+                    {
+                        existing.image = img;
+                    }
+                }
+            } else {
+                // ── Full upload: replace the whole texture ────────────────────
+                if let Some(img) = make_egui_skia_image(&patch_pixels, patch_w, patch_h) {
+                    self.egui_textures.insert(
+                        *id,
+                        EguiTexture {
+                            pixels: patch_pixels,
+                            width: patch_w,
+                            height: patch_h,
+                            image: img,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    /// Free egui textures that are no longer needed after this frame.
+    /// Must be called after [`Self::draw_egui`].
+    pub fn free_egui_textures(&mut self, delta: &egui::TexturesDelta) {
+        for id in &delta.free {
+            self.egui_textures.remove(id);
+        }
+    }
+
+    /// Draw egui's tessellated output on top of the current Skia frame.
+    ///
+    /// Call after [`Self::draw`] and [`Self::update_egui_textures`],
+    /// and before [`Self::present`].
+    pub fn draw_egui(
+        &mut self,
+        primitives: &[egui::ClippedPrimitive],
+        pixels_per_point: f32,
+    ) {
+        let canvas = self.skia_surface.canvas();
+
+        for egui::ClippedPrimitive { clip_rect, primitive } in primitives {
+            let egui::epaint::Primitive::Mesh(mesh) = primitive else {
+                continue;
+            };
+            if mesh.vertices.is_empty() || mesh.indices.is_empty() {
+                continue;
+            }
+
+            // Look up the texture; skip if the atlas hasn't arrived yet.
+            let Some(tex_entry) = self.egui_textures.get(&mesh.texture_id) else {
+                continue;
+            };
+            let tex = &tex_entry.image;
+            // egui UVs are normalised [0,1]; scale to texture pixel space for Skia.
+            let tex_w = tex.width() as f32;
+            let tex_h = tex.height() as f32;
+
+            let positions: Vec<skia_safe::Point> = mesh
+                .vertices
+                .iter()
+                .map(|v| {
+                    skia_safe::Point::new(
+                        v.pos.x * pixels_per_point,
+                        v.pos.y * pixels_per_point,
+                    )
+                })
+                .collect();
+
+            let tex_coords: Vec<skia_safe::Point> = mesh
+                .vertices
+                .iter()
+                .map(|v| skia_safe::Point::new(v.uv.x * tex_w, v.uv.y * tex_h))
+                .collect();
+
+            let colors: Vec<skia_safe::Color> = mesh
+                .vertices
+                .iter()
+                .map(|v| {
+                    skia_safe::Color::from_argb(
+                        v.color.a(),
+                        v.color.r(),
+                        v.color.g(),
+                        v.color.b(),
+                    )
+                })
+                .collect();
+
+            // egui guarantees mesh index values fit in u16.
+            let indices: Vec<u16> = mesh.indices.iter().map(|&i| i as u16).collect();
+
+            // new_copy returns RCHandle<SkVertices> directly — no Option unwrap needed.
+            let verts = skia_safe::Vertices::new_copy(
+                skia_safe::vertices::VertexMode::Triangles,
+                &positions,
+                &tex_coords,
+                &colors,
+                Some(&indices),
+            );
+
+            let Some(shader) = tex.to_shader(
+                (skia_safe::TileMode::Clamp, skia_safe::TileMode::Clamp),
+                skia_safe::SamplingOptions::new(
+                    skia_safe::FilterMode::Linear,
+                    skia_safe::MipmapMode::None,
+                ),
+                None,
+            ) else {
+                continue;
+            };
+
+            let mut paint = skia_safe::Paint::default();
+            paint.set_anti_alias(true);
+            paint.set_shader(shader);
+
+            let clip = skia_safe::Rect::from_ltrb(
+                clip_rect.min.x * pixels_per_point,
+                clip_rect.min.y * pixels_per_point,
+                clip_rect.max.x * pixels_per_point,
+                clip_rect.max.y * pixels_per_point,
+            );
+
+            canvas.save();
+            canvas.clip_rect(clip, skia_safe::ClipOp::Intersect, false);
+            canvas.draw_vertices(&verts, skia_safe::BlendMode::Modulate, &paint);
+            canvas.restore();
+        }
     }
 }
 
