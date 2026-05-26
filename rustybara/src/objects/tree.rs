@@ -1,12 +1,30 @@
 //! Object tree construction from PDF content streams.
 //!
 //! Parses the PDF operator sequence for a single page and records every
-//! painted element as a [`PageObject`]. All geometry is in **PDF page spec**
+//! painted element as a [`PageObject`]. All geometry is in **PDF page space**
 //! (origin bottom-left, Y increases upward, unit in points).
+//!
+//! ## Form XObject recursion
+//!
+//! When the content stream invokes a Form XObject (`Do` with `/Form` subtype),
+//! this module recurses into the form's own content stream rather than emitting
+//! a single bbox placeholder. Every path, image, and text object inside the
+//! form — at any nesting depth — appears as a first-class [`PageObject`] with
+//! geometry already expressed in page space. Recursion is capped at
+//! [`MAX_FORM_DEPTH`] levels; any form beyond that limit is represented by a
+//! [`ObjectKind::FormXObject`] bbox placeholder so the footprint is not lost.
 
 use crate::geometry::{Matrix, Rect};
 use crate::pages::boxes::object_to_f64;
-use lopdf::{Document, Object, ObjectId};
+use lopdf::{Dictionary, Document, Object, ObjectId};
+
+/// Maximum Form XObject nesting levels to expand before falling back to a
+/// bbox placeholder. Real documents rarely exceed 3–4 levels; 8 prevents
+/// infinite loops on malformed PDFs with circular XObject references without
+/// sacrificing practical coverage.
+const MAX_FORM_DEPTH: u8 = 8;
+
+// ── Public types ──────────────────────────────────────────────────────────────
 
 /// Per-object device paint color.
 ///
@@ -27,7 +45,7 @@ pub enum PathPoint {
     /// `l` — append a straight line to `(x, y)`.
     LineTo(f64, f64),
     /// `c` — cubic Bézier: `(x1, y1)` first control, `(x2, y2)` second control, `(x3, y3)`
-    /// endpoint
+    /// endpoint.
     CurveTo(f64, f64, f64, f64, f64, f64),
     /// `h` — close the subpath with a straight line back to its starting point.
     Close,
@@ -47,6 +65,10 @@ pub enum ObjectKind {
     FillStroke,
     Text(String),
     Image,
+    /// A Form XObject that could not be expanded — either because the recursion
+    /// depth limit ([`MAX_FORM_DEPTH`]) was reached, or the stream could not be
+    /// decoded. The `bbox` field reflects the form's declared `/BBox` transformed
+    /// by the CTM at the call site.
     FormXObject,
 }
 
@@ -62,7 +84,7 @@ pub struct PageObject {
     /// Current transformation matrix when this object was painted.
     pub ctm: Matrix,
     pub kind: ObjectKind,
-    /// Fill color at paint time. Set for [`ObjectKind::Fill`], [`ObjectKind::FillStroke],
+    /// Fill color at paint time. Set for [`ObjectKind::Fill`], [`ObjectKind::FillStroke`],
     /// and [`ObjectKind::Text`]; `None` for pure strokes, images, and form XObjects.
     pub fill_color: Option<PdfColor>,
     /// Stroke color at paint time. Set for [`ObjectKind::Stroke`] and [`ObjectKind::FillStroke`];
@@ -79,6 +101,8 @@ pub struct PageObject {
 pub struct ObjectTree {
     pub objects: Vec<PageObject>,
 }
+
+// ── Graphics state ────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 struct GraphicsState {
@@ -99,30 +123,73 @@ impl Default for GraphicsState {
     }
 }
 
-/// Parse the content stream of `page_id` and return all painted objects in back to front order.
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Parse the content stream of `page_id` and return all painted objects in back-to-front order.
+///
+/// Form XObjects encountered in the content stream are expanded recursively up to
+/// [`MAX_FORM_DEPTH`] nesting levels: every path, image, and text object inside a
+/// placed form appears as a first-class [`PageObject`] with geometry already in page
+/// space. Any form that exceeds the depth cap is emitted as a
+/// [`ObjectKind::FormXObject`] bbox placeholder instead.
 ///
 /// # Operator coverage
 ///
-/// | Operator(s)           | Effect                                   |
-/// |-----------------------|------------------------------------------|
-/// | `q` / `Q`             | Graphics state push / pop                |
-/// | `cm`                  | CTM concatenation                        |
-/// | `w`                   | Stroke line width                        |
-/// | `g`/`G`               | DeviceGray fill / stroke                 |
-/// | `rg`/`RG`             | DeviceRGB fill / stroke                  |
-/// | `k`/`K`               | DeviceCMYK fill / stroke                 |
-/// | `m` `l` `c` `v` `y` `h` `re` | Path construction               |
-/// | `S` `s` `f` `f*` `F` `B` `B*` `b` `b*` `n` | Path painting  |
-/// | `Do`                  | Image / Form XObject placement           |
-/// | `BT` … `ET`           | Text block (one object per block)        |
+/// | Operator(s)                               | Effect                                |
+/// |-------------------------------------------|---------------------------------------|
+/// | `q` / `Q`                                 | Graphics state push / pop             |
+/// | `cm`                                      | CTM concatenation                     |
+/// | `w`                                       | Stroke line width                     |
+/// | `g` / `G`                                 | DeviceGray fill / stroke              |
+/// | `rg` / `RG`                               | DeviceRGB fill / stroke               |
+/// | `k` / `K`                                 | DeviceCMYK fill / stroke              |
+/// | `m` `l` `c` `v` `y` `h` `re`             | Path construction                     |
+/// | `S` `s` `f` `f*` `F` `B` `B*` `b` `b*` `n` | Path painting                     |
+/// | `Do` (Image)                              | Unit-square bbox placeholder          |
+/// | `Do` (Form)                               | Recurse into form content stream      |
+/// | `BT` … `ET`                               | Text block (one object per block)     |
 ///
-/// Unknown operators and clipping paths (`W`/`W*`) are silently skipped.
+/// Unknown operators and clipping paths (`W` / `W*`) are silently skipped.
 pub fn build_object_tree(doc: &Document, page_id: ObjectId) -> crate::Result<ObjectTree> {
     let content = doc.get_and_decode_page_content(page_id)?;
-    let mut objects: Vec<PageObject> = Vec::new();
+    let mut objects = Vec::new();
+    parse_content(
+        doc,
+        &content.operations,
+        &GraphicsState::default(),
+        page_id,
+        &mut objects,
+        MAX_FORM_DEPTH,
+    );
+    Ok(ObjectTree { objects })
+}
 
+// ── Core interpreter ──────────────────────────────────────────────────────────
+
+/// Core content-stream interpreter shared by page streams and Form XObject streams.
+///
+/// Iterates `operations` in the coordinate system established by `initial_gs.ctm`,
+/// appending every painted object to `objects` in back-to-front (paint) order.
+///
+/// **`resource_parent_id`** is the lopdf object ID whose `/Resources/XObject`
+/// dictionary is consulted when a `Do` operator names an XObject. For a page stream
+/// this is the page object ID; for a Form XObject stream it is the form's own object
+/// ID, because each Form carries its own `/Resources` dictionary.
+///
+/// **`depth`** is the remaining Form XObject recursion budget. When it reaches zero,
+/// any Form XObject encountered is recorded as a [`ObjectKind::FormXObject`] bbox
+/// placeholder rather than being expanded. All other operators are processed normally
+/// regardless of depth.
+fn parse_content(
+    doc: &Document,
+    operations: &[lopdf::content::Operation],
+    initial_gs: &GraphicsState,
+    resource_parent_id: ObjectId,
+    mut objects: &mut Vec<PageObject>,
+    depth: u8,
+) {
     let mut gs_stack: Vec<GraphicsState> = Vec::new();
-    let mut gs = GraphicsState::default();
+    let mut gs = initial_gs.clone();
 
     let mut subpaths: Vec<SubPath> = Vec::new();
     let mut current_sub = SubPath::default();
@@ -135,15 +202,17 @@ pub fn build_object_tree(doc: &Document, page_id: ObjectId) -> crate::Result<Obj
     let mut font_size: f64 = 12.0;
     let mut leading: f64 = 0.0;
 
-    for op in &content.operations {
+    for op in operations {
         match op.operator.as_str() {
+            // ── Graphics state ─────────────────────────────────────────────────
+
             "q" => gs_stack.push(gs.clone()),
             "Q" => {
                 if let Some(prev) = gs_stack.pop() {
                     gs = prev;
                 }
-                // Note: the current path is NOT part of the graphics state in the
-                // PDF spec and is intentionally left intact across q/Q.
+                // The current path is NOT part of the graphics state per the PDF
+                // spec and is intentionally left intact across q/Q.
             }
             "cm" if op.operands.len() >= 6 => {
                 let m = ops_to_matrix(&op.operands);
@@ -152,6 +221,9 @@ pub fn build_object_tree(doc: &Document, page_id: ObjectId) -> crate::Result<Obj
             "w" if !op.operands.is_empty() => {
                 gs.stroke_width = object_to_f64(&op.operands[0]);
             }
+
+            // ── Color operators ────────────────────────────────────────────────
+
             "G" if !op.operands.is_empty() => {
                 gs.stroke_color = PdfColor::DeviceGray(object_to_f64(&op.operands[0]));
             }
@@ -160,7 +232,7 @@ pub fn build_object_tree(doc: &Document, page_id: ObjectId) -> crate::Result<Obj
                     object_to_f64(&op.operands[0]),
                     object_to_f64(&op.operands[1]),
                     object_to_f64(&op.operands[2]),
-                )
+                );
             }
             "K" if op.operands.len() >= 4 => {
                 gs.stroke_color = PdfColor::DeviceCmyk(
@@ -188,6 +260,9 @@ pub fn build_object_tree(doc: &Document, page_id: ObjectId) -> crate::Result<Obj
                     object_to_f64(&op.operands[3]),
                 );
             }
+
+            // ── Path construction ──────────────────────────────────────────────
+
             "m" if op.operands.len() >= 2 => {
                 if !current_sub.points.is_empty() {
                     subpaths.push(std::mem::take(&mut current_sub));
@@ -213,8 +288,9 @@ pub fn build_object_tree(doc: &Document, page_id: ObjectId) -> crate::Result<Obj
                     object_to_f64(&op.operands[5]),
                 ));
             }
-            // `v`: current point is implicit first control; operands = x2 y2 x3 y3.
-            // Both control points are set to (x2, y2) as a conservative bbox approximation.
+            // `v`: the current point is the implicit first control point.
+            // Operands are x2 y2 x3 y3; we duplicate (x2,y2) as both control
+            // points — a conservative bbox approximation.
             "v" if op.operands.len() >= 4 => {
                 let x2 = object_to_f64(&op.operands[0]);
                 let y2 = object_to_f64(&op.operands[1]);
@@ -224,7 +300,8 @@ pub fn build_object_tree(doc: &Document, page_id: ObjectId) -> crate::Result<Obj
                     .points
                     .push(PathPoint::CurveTo(x2, y2, x2, y2, x3, y3));
             }
-            // `y`: operands = x1 y1 x3 y3 (x3, y3 is both the second control point and endpoint).
+            // `y`: operands x1 y1 x3 y3; (x3,y3) is both the second control
+            // point and the endpoint per the PDF spec.
             "y" if op.operands.len() >= 4 => {
                 let x1 = object_to_f64(&op.operands[0]);
                 let y1 = object_to_f64(&op.operands[1]);
@@ -251,100 +328,96 @@ pub fn build_object_tree(doc: &Document, page_id: ObjectId) -> crate::Result<Obj
                 current_sub.points.push(PathPoint::LineTo(x, y + h));
                 current_sub.points.push(PathPoint::Close);
             }
+
+            // ── Paint operators ────────────────────────────────────────────────
+
             "S" => {
-                commit_paint(
-                    &mut objects,
-                    &mut subpaths,
-                    &mut current_sub,
-                    &gs,
-                    ObjectKind::Stroke,
-                );
+                commit_paint(&mut objects, &mut subpaths, &mut current_sub, &gs, ObjectKind::Stroke);
             }
             "s" => {
                 // close-and-stroke (equivalent to h S)
                 current_sub.points.push(PathPoint::Close);
-                commit_paint(
-                    &mut objects,
-                    &mut subpaths,
-                    &mut current_sub,
-                    &gs,
-                    ObjectKind::Stroke,
-                );
+                commit_paint(&mut objects, &mut subpaths, &mut current_sub, &gs, ObjectKind::Stroke);
             }
             "f" | "f*" | "F" => {
-                commit_paint(
-                    &mut objects,
-                    &mut subpaths,
-                    &mut current_sub,
-                    &gs,
-                    ObjectKind::Fill,
-                );
+                commit_paint(&mut objects, &mut subpaths, &mut current_sub, &gs, ObjectKind::Fill);
             }
             "B" | "B*" => {
-                commit_paint(
-                    &mut objects,
-                    &mut subpaths,
-                    &mut current_sub,
-                    &gs,
-                    ObjectKind::FillStroke,
-                );
+                commit_paint(&mut objects, &mut subpaths, &mut current_sub, &gs, ObjectKind::FillStroke);
             }
             "b" | "b*" => {
-                // close-and-fill + stroke
+                // close-and-fill+stroke
                 current_sub.points.push(PathPoint::Close);
-                commit_paint(
-                    &mut objects,
-                    &mut subpaths,
-                    &mut current_sub,
-                    &gs,
-                    ObjectKind::FillStroke,
-                );
+                commit_paint(&mut objects, &mut subpaths, &mut current_sub, &gs, ObjectKind::FillStroke);
             }
             "n" => {
-                // Discard path (e.g., used after W/W* clipping paths)
+                // Discard path without painting (e.g. after W/W* clipping paths).
                 subpaths.clear();
                 current_sub = SubPath::default();
             }
+
+            // ── XObject placement ──────────────────────────────────────────────
+
             "Do" if !op.operands.is_empty() => {
-                let kind = xobject_kind(doc, page_id, &op.operands[0]);
-                let local_bbox = match &kind {
-                    ObjectKind::FormXObject => {
-                        // Form XObjects define their extent via /BBox in their stream dict.
-                        // Falling back to the unit square produces a 1x1 bbox – wrong.
-                        read_form_bbox(doc, page_id, &op.operands[0]).unwrap_or(Rect {
-                            x: 0.0,
-                            y: 0.0,
-                            width: 1.0,
-                            height: 1.0,
-                        })
+                if let Object::Name(name) = &op.operands[0] {
+                    match resolve_xobject(doc, resource_parent_id, name) {
+                        Some((form_id, ref subtype)) if subtype == b"Form" => {
+                            if depth == 0 {
+                                // Recursion budget exhausted — emit the form's declared
+                                // /BBox as a placeholder so its footprint isn't lost.
+                                let local_bbox = form_bbox_from_id(doc, form_id)
+                                    .unwrap_or(Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 });
+                                objects.push(PageObject {
+                                    bbox: gs.ctm.transform_rect(&local_bbox),
+                                    ctm: gs.ctm,
+                                    kind: ObjectKind::FormXObject,
+                                    fill_color: None,
+                                    stroke_color: None,
+                                    stroke_width: 0.0,
+                                    subpaths: vec![],
+                                });
+                            } else {
+                                // Expand the form: parse its content stream with
+                                // depth decremented, collecting all inner objects.
+                                parse_form_xobject(doc, form_id, &gs, objects, depth - 1);
+                            }
+                        }
+                        Some((_, ref subtype)) if subtype == b"Image" => {
+                            // Image XObjects are defined on the unit square [0,1]²
+                            // before the current CTM is applied.
+                            let bbox = gs.ctm.transform_rect(&Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: 1.0,
+                                height: 1.0,
+                            });
+                            objects.push(PageObject {
+                                bbox,
+                                ctm: gs.ctm,
+                                kind: ObjectKind::Image,
+                                fill_color: None,
+                                stroke_color: None,
+                                stroke_width: 0.0,
+                                subpaths: vec![],
+                            });
+                        }
+                        // Unknown subtype or lookup failure — skip silently.
+                        _ => {}
                     }
-                    // Image XObjects are defined on [0,1]^2 by PDF spec – unit square is correct.
-                    _ => Rect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: 1.0,
-                        height: 1.0,
-                    },
-                };
-                let bbox = gs.ctm.transform_rect(&local_bbox);
-                objects.push(PageObject {
-                    bbox,
-                    ctm: gs.ctm,
-                    kind,
-                    fill_color: None,
-                    stroke_color: None,
-                    stroke_width: 0.0,
-                    subpaths: vec![],
-                });
+                }
             }
+
+            // ── Text blocks ────────────────────────────────────────────────────
+
             "BT" => {
                 in_text = true;
                 text_buf.clear();
                 text_origin = None;
                 tm = Matrix::identity();
                 lm = Matrix::identity();
-                // Note: font_size and leading intentionally persist across BT/ET pairs.
-                // PDF spec: BT resets only the text matrix (Tm/Tlm), not the text state.
+                // font_size persists across BT/ET per the PDF spec (text state is
+                // not reset by BT, only the text matrix is). leading is reset
+                // because it is part of the text-block positioning context.
                 leading = 0.0;
             }
             "ET" => {
@@ -355,13 +428,12 @@ pub fn build_object_tree(doc: &Document, page_id: ObjectId) -> crate::Result<Obj
                     // Estimate text extent in text space.
                     // 0.5 em per character is a reasonable average for proportional fonts.
                     let text_w = char_count * 0.5 * font_size;
-                    // Standard ascent/descent proportions relative to the em square.
                     let ascent = 0.8 * font_size;
                     let descent = -0.2 * font_size;
 
-                    // Compute axis-aligned bounding box by transforming all four corners
-                    // of the text rectangle through the text matrix (origin) then the CTM.
-                    // This correctly handles scaled, rotated, and sheared text matrices.
+                    // Transform all four corners of the text rectangle through the
+                    // text matrix then the CTM to get an axis-aligned bbox in page
+                    // space. This correctly handles rotated and sheared text matrices.
                     let corners: [(f64, f64); 4] = [
                         (0.0, descent),
                         (text_w, descent),
@@ -417,9 +489,8 @@ pub fn build_object_tree(doc: &Document, page_id: ObjectId) -> crate::Result<Obj
                 if op.operator == "TD" {
                     leading = -ty;
                 }
-                // Apply the offset in the current line matrix's coordinate system.
                 // PDF spec: Tlm = [1 0 0 1 tx ty] × Tlm
-                // Equivalent to: new translation = lm.transform_point(tx, ty)
+                // Equivalent to applying the offset in the current line matrix space.
                 let (new_e, new_f) = lm.transform_point(tx, ty);
                 lm = Matrix::from_values(lm.a, lm.b, lm.c, lm.d, new_e, new_f);
                 tm = lm;
@@ -457,11 +528,167 @@ pub fn build_object_tree(doc: &Document, page_id: ObjectId) -> crate::Result<Obj
                     }
                 }
             }
+
             _ => {}
         }
     }
+}
 
-    Ok(ObjectTree { objects })
+// ── Form XObject recursion ────────────────────────────────────────────────────
+
+/// Expand a Form XObject by parsing its content stream, collecting all inner
+/// painted objects into `objects` with geometry already in page space.
+///
+/// Two transforms are applied before recursing:
+///
+/// 1. The form's `/Matrix` entry maps the form's local coordinate space to the
+///    parent's user space. When absent the identity matrix is used (no change).
+/// 2. The parent's CTM is then concatenated, yielding the effective CTM for
+///    every object inside the form:
+///    `effective_ctm = parent_gs.ctm × form_matrix`
+///
+/// The form's object ID is used as the `resource_parent_id` for the inner
+/// [`parse_content`] call, because each Form XObject carries its own
+/// `/Resources` dictionary (a PDF spec requirement). Any `Do` operators inside
+/// the form will therefore look up XObject names in the form's own resources,
+/// not the page's.
+///
+/// `depth` is the recursion budget already decremented by the caller; it is
+/// passed through unchanged to [`parse_content`] so that further nesting is
+/// correctly accounted for.
+///
+/// Silently returns without modifying `objects` if the stream cannot be
+/// retrieved or decoded (the caller's object list is left intact).
+fn parse_form_xobject(
+    doc: &Document,
+    form_id: ObjectId,
+    parent_gs: &GraphicsState,
+    objects: &mut Vec<PageObject>,
+    depth: u8,
+) {
+    let Ok(form_obj) = doc.get_object(form_id) else { return };
+    let Object::Stream(stream) = form_obj else { return };
+
+    // A form's /Matrix maps its local space into the parent user space.
+    // The effective CTM for objects inside is parent_ctm × form_matrix.
+    let form_matrix = stream
+        .dict
+        .get(b"Matrix")
+        .ok()
+        .and_then(|m| m.as_array().ok())
+        .filter(|arr| arr.len() >= 6)
+        .map(|arr| ops_to_matrix(arr))
+        .unwrap_or_else(Matrix::identity);
+
+    let mut entry_gs = parent_gs.clone();
+    entry_gs.ctm = parent_gs.ctm.concat(&form_matrix);
+
+    // Decompress the stream content (FlateDecode for virtually all Form XObjects).
+    // Mirror the fallback used in lopdf's own get_page_content: if decompression
+    // fails, attempt to parse the raw bytes directly (handles uncompressed forms).
+    let bytes = match stream.decompressed_content() {
+        Ok(b) => b,
+        Err(_) => stream.content.clone(),
+    };
+    let Ok(content) = lopdf::content::Content::decode(&bytes) else { return };
+
+    // Use the form's own ID as the resource parent so that nested Do operators
+    // resolve XObject names from the form's /Resources, not the page's.
+    parse_content(doc, &content.operations, &entry_gs, form_id, objects, depth);
+}
+
+// ── XObject resolution helpers ────────────────────────────────────────────────
+
+/// Resolve a named XObject and return its document object ID and `/Subtype` bytes.
+///
+/// Navigates `resource_parent_id → /Resources → /XObject → name` to locate the
+/// XObject stream, then reads its `/Subtype`. Both pages (`Object::Dictionary`)
+/// and Form XObjects (`Object::Stream`) are supported as the resource parent,
+/// because the two differ in where their resource dictionary lives.
+///
+/// Returns `None` if the name cannot be resolved, the XObject entry is not an
+/// indirect reference, or the subtype cannot be read. The caller should skip the
+/// `Do` operator silently on `None`.
+fn resolve_xobject(
+    doc: &Document,
+    resource_parent_id: ObjectId,
+    name: &[u8],
+) -> Option<(ObjectId, Vec<u8>)> {
+    let xo_dict = xobject_dict_for(doc, resource_parent_id)?;
+
+    // XObject entries must be indirect references per the PDF spec.
+    let xobj_id = match xo_dict.get(name).ok()? {
+        Object::Reference(id) => *id,
+        _ => return None,
+    };
+
+    let xobj = doc.get_object(xobj_id).ok()?;
+    let stream = match xobj {
+        Object::Stream(s) => s,
+        _ => return None,
+    };
+    let subtype = match stream.dict.get(b"Subtype").ok()? {
+        Object::Name(n) => n.clone(),
+        _ => return None,
+    };
+    Some((xobj_id, subtype))
+}
+
+/// Retrieve an owned clone of the `/XObject` sub-dictionary reachable from
+/// `resource_parent_id`.
+///
+/// The resource parent may be either:
+/// - A **page object** (`Object::Dictionary`): resources live directly in its dict.
+/// - A **Form XObject** (`Object::Stream`): resources live in its stream dictionary.
+///
+/// An owned `Dictionary` is returned (rather than a reference) to avoid lifetime
+/// entanglement between the borrowed document object and the caller's borrow of
+/// `doc`. For the typical case of a few dozen XObject entries the clone is cheap.
+///
+/// Returns `None` if the resource chain cannot be navigated at any step.
+fn xobject_dict_for(doc: &Document, resource_parent_id: ObjectId) -> Option<Dictionary> {
+    let parent_obj = doc.get_object(resource_parent_id).ok()?;
+
+    // Pages store /Resources in their object dictionary.
+    // Form XObjects store /Resources in their stream dictionary.
+    // Both resolve to the same /Resources value structure from that point onward.
+    let resources_obj: &Object = match parent_obj {
+        Object::Dictionary(d) => deref(doc, d.get(b"Resources").ok()?),
+        Object::Stream(s) => deref(doc, s.dict.get(b"Resources").ok()?),
+        _ => return None,
+    };
+
+    let res_dict = resources_obj.as_dict().ok()?;
+    let xo_obj = deref(doc, res_dict.get(b"XObject").ok()?);
+    Some(xo_obj.as_dict().ok()?.clone())
+}
+
+/// Read the `/BBox` of a Form XObject directly from its stream dictionary,
+/// returning the result as a [`Rect`] in the form's local coordinate space.
+///
+/// Used as a depth-limit fallback: when the recursion budget is exhausted,
+/// the form's declared bounding box (transformed by the current CTM) is
+/// recorded as a [`ObjectKind::FormXObject`] placeholder so that the form's
+/// footprint is still represented in the object tree.
+///
+/// Returns `None` if the stream cannot be retrieved or `/BBox` is absent or
+/// malformed, in which case a unit-square fallback is appropriate.
+fn form_bbox_from_id(doc: &Document, form_id: ObjectId) -> Option<Rect> {
+    let form_obj = doc.get_object(form_id).ok()?;
+    let stream = match form_obj {
+        Object::Stream(s) => s,
+        _ => return None,
+    };
+    let bbox_arr = stream.dict.get(b"BBox").ok()?.as_array().ok()?;
+    if bbox_arr.len() < 4 {
+        return None;
+    }
+    Some(Rect::from_corners(
+        object_to_f64(&bbox_arr[0]),
+        object_to_f64(&bbox_arr[1]),
+        object_to_f64(&bbox_arr[2]),
+        object_to_f64(&bbox_arr[3]),
+    ))
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
@@ -481,7 +708,7 @@ fn ops_to_matrix(operands: &[Object]) -> Matrix {
 }
 
 /// Flush `current_sub` and all accumulated `subpaths` into `objects` as a single
-/// painted object, then clear both buffers. Does nothing if all buffers are emtpy.
+/// painted object, then clear both buffers. Does nothing if all buffers are empty.
 fn commit_paint(
     objects: &mut Vec<PageObject>,
     subpaths: &mut Vec<SubPath>,
@@ -513,10 +740,10 @@ fn commit_paint(
     });
 }
 
-/// Compute the axis-aligned bounding box of all subpaths points transformed by `ctm`.
+/// Compute the axis-aligned bounding box of all subpath points transformed by `ctm`.
 ///
-/// For cubic Bézier segments the control points are included in the bbox –
-/// this is conservative but avoids the cost of curve falttening.
+/// For cubic Bézier segments the control points are included in the bbox —
+/// this is conservative but avoids the cost of curve flattening.
 fn path_bbox(subpaths: &[SubPath], ctm: &Matrix) -> Rect {
     let mut xmin = f64::INFINITY;
     let mut xmax = f64::NEG_INFINITY;
@@ -550,61 +777,12 @@ fn path_bbox(subpaths: &[SubPath], ctm: &Matrix) -> Rect {
     if xmin.is_finite() {
         Rect::from_corners(xmin, ymin, xmax, ymax)
     } else {
-        Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 0.0,
-            height: 0.0,
-        }
+        Rect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 }
     }
 }
 
 fn loss_bytes(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
-}
-
-/// Classify a named XObject as [`ObjectKind::Image`] or [`ObjectKind::FormXObject`].
-///
-/// Navigates: page dict -> Resources -> XObject -> name -> stream Subtype.
-/// Falls back to [`ObjectKind::Image`] on any access failure.
-fn xobject_kind(doc: &Document, page_id: ObjectId, name_obj: &Object) -> ObjectKind {
-    let name = match name_obj {
-        Object::Name(n) => n.as_slice(),
-        _ => return ObjectKind::Image,
-    };
-
-    let subtype: Option<Vec<u8>> = (|| {
-        let page_obj = doc.get_object(page_id).ok()?;
-        let page_dict = page_obj.as_dict().ok()?;
-        let res_val = page_dict.get(b"Resources").ok()?;
-        let res_obj = deref(doc, res_val);
-        let res_dict = res_obj.as_dict().ok()?;
-        let xo_val = res_dict.get(b"XObject").ok()?;
-        let xo_obj = deref(doc, xo_val);
-        let xo_dict = xo_obj.as_dict().ok()?;
-        let xref = xo_dict.get(name).ok()?;
-        let xobj_id = if let Object::Reference(id) = xref {
-            *id
-        } else {
-            return None;
-        };
-        let xobj = doc.get_object(xobj_id).ok()?;
-        let stream = if let Object::Stream(s) = xobj {
-            s
-        } else {
-            return None;
-        };
-        match stream.dict.get(b"Subtype").ok()? {
-            Object::Name(n) => Some(n.clone()),
-            _ => None,
-        }
-    })();
-
-    match subtype.as_deref() {
-        Some(n) if n == b"Image" => ObjectKind::Image,
-        Some(n) if n == b"Form" => ObjectKind::FormXObject,
-        _ => ObjectKind::Image,
-    }
 }
 
 /// Dereference a single indirect object; return the object unchanged if it is not a reference.
@@ -621,43 +799,6 @@ pub fn ref_id(obj: &Object) -> Option<ObjectId> {
     } else {
         None
     }
-}
-
-fn read_form_bbox(doc: &Document, page_id: ObjectId, name_obj: &Object) -> Option<Rect> {
-    let name = match name_obj {
-        Object::Name(n) => n.as_slice(),
-        _ => return None,
-    };
-    let page_obj = doc.get_object(page_id).ok()?;
-    let page_dict = page_obj.as_dict().ok()?;
-    let res_val = page_dict.get(b"Resources").ok()?;
-    let res_obj = deref(doc, res_val);
-    let res_dict = res_obj.as_dict().ok()?;
-    let xo_val = res_dict.get(b"XObject").ok()?;
-    let xo_obj = deref(doc, xo_val);
-    let xo_dict = xo_obj.as_dict().ok()?;
-    let xref = xo_dict.get(name).ok()?;
-    let xobj_id = if let Object::Reference(id) = xref {
-        *id
-    } else {
-        return None;
-    };
-    let xobj = doc.get_object(xobj_id).ok()?;
-    let stream = if let Object::Stream(s) = xobj {
-        s
-    } else {
-        return None;
-    };
-    let bbox_arr = stream.dict.get(b"BBox").ok()?.as_array().ok()?;
-    if bbox_arr.len() < 4 {
-        return None;
-    }
-    Some(Rect::from_corners(
-        object_to_f64(&bbox_arr[0]),
-        object_to_f64(&bbox_arr[1]),
-        object_to_f64(&bbox_arr[2]),
-        object_to_f64(&bbox_arr[3]),
-    ))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -783,6 +924,62 @@ mod tests {
         assert!((y - 75.0).abs() < 1e-10);
     }
 
+    // ── parse_content depth guard ────────────────────────────────────────────
+    //
+    // These tests verify the depth-zero path without needing a real document.
+    // parse_content with depth=0 must not panic and must process all non-Do
+    // operators normally.
+
+    #[test]
+    fn parse_content_depth_zero_emits_no_objects_for_empty_ops() {
+        let mut objects: Vec<PageObject> = Vec::new();
+        // With no operations there is nothing to emit regardless of depth.
+        parse_content(
+            // We pass a dummy page_id; it is only consulted for Do operators,
+            // which are absent here.
+            &lopdf::Document::new(),
+            &[],
+            &GraphicsState::default(),
+            (0, 0),
+            &mut objects,
+            0,
+        );
+        assert!(objects.is_empty());
+    }
+
+    #[test]
+    fn parse_content_depth_zero_emits_fill_objects() {
+        use lopdf::content::Operation;
+
+        // Build a minimal sequence: re (rectangle) + f (fill).
+        let ops = vec![
+            Operation::new(
+                "re",
+                vec![
+                    Object::Real(0.0),
+                    Object::Real(0.0),
+                    Object::Real(100.0),
+                    Object::Real(100.0),
+                ],
+            ),
+            Operation::new("f", vec![]),
+        ];
+
+        let mut objects: Vec<PageObject> = Vec::new();
+        parse_content(
+            &lopdf::Document::new(),
+            &ops,
+            &GraphicsState::default(),
+            (0, 0),
+            &mut objects,
+            0, // depth=0 must not affect non-Do operators
+        );
+        assert_eq!(objects.len(), 1, "re+f must emit exactly one Fill object");
+        assert!(matches!(objects[0].kind, ObjectKind::Fill));
+        assert!((objects[0].bbox.width - 100.0).abs() < 0.1);
+        assert!((objects[0].bbox.height - 100.0).abs() < 0.1);
+    }
+
     // ── build_object_tree (integration, requires fixture) ─────────────────────
 
     fn fixture() -> Option<(lopdf::Document, lopdf::ObjectId)> {
@@ -855,5 +1052,25 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Any Form XObject in the fixture should be expanded rather than left as a
+    /// placeholder — meaning no `FormXObject` kind should appear in the tree
+    /// under normal conditions (depth limit of 8 is never reached in practice).
+    #[test]
+    fn build_object_tree_forms_are_expanded() {
+        let Some((doc, page_id)) = fixture() else {
+            return;
+        };
+        let tree = build_object_tree(&doc, page_id).unwrap();
+        let unexpanded = tree
+            .objects
+            .iter()
+            .filter(|o| matches!(o.kind, ObjectKind::FormXObject))
+            .count();
+        assert_eq!(
+            unexpanded, 0,
+            "all Form XObjects should be recursed into; found {unexpanded} placeholder(s)"
+        );
     }
 }

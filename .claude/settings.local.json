@@ -8,7 +8,10 @@
       "Bash(grep -an \"^BT$\\\\|^ET$\" \"rustybara/tests/fixtures/skia-testing/goals/goal_fixture_two.qdf\")",
       "Bash(grep -an \"^BT$\" \"rustybara/tests/fixtures/skia-testing/goals/goal_fixture_two.qdf\")",
       "Bash(awk 'NR>=9400 && NR<=11600 { *)",
-      "Bash(awk 'NR>=9400 && NR<=11580 { *)"
+      "Bash(awk 'NR>=9400 && NR<=11580 { *)",
+      "Bash(grep -n \"fn decode\\\\|pub fn decode\" \"C:/Users/mardo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lopdf-0.40.0/src/stream.rs\" | head -20)",
+      "Read(//c/Users/mardo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lopdf-0.40.0/src/**)",
+      "Bash(xargs grep -l \"fn decode\")"
     ]
   },
   "spinnerTipsEnabled": false
