@@ -6,9 +6,9 @@ use std::sync::Mutex;
 use commands::{
     add_trim_box, convert_color_space, exit_app, export_images, extract_pages, flatten_spots,
     list_custom_profiles, list_dirs, list_pdf_files, load_icc_profile, load_metadata,
-    load_persisted_profiles, minimize_window, open_file_dialog, open_in_viewer, remap_colors,
-    resize_to_bleed, split_pages, stitch_pages, toggle_maximize_window, trim_marks,
-    ProcessingLock, ProfileRegistry,
+    load_persisted_profiles, minimize_window, open_file_dialog, open_in_viewer,
+    open_in_viewer_persistent, remap_colors, resize_to_bleed, split_pages, stitch_pages,
+    toggle_maximize_window, trim_marks, ProcessingLock, ProfileRegistry, ViewerHandle,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -17,6 +17,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(ProcessingLock(Mutex::new(false)))
         .manage(ProfileRegistry(Mutex::new(HashMap::new())))
+        .manage(ViewerHandle(Mutex::new(None)))
         .setup(|app| {
             load_persisted_profiles(app);
             Ok(())
@@ -37,6 +38,7 @@ pub fn run() {
             load_metadata,
             open_file_dialog,
             open_in_viewer,
+            open_in_viewer_persistent,
             exit_app,
             list_dirs,
             list_pdf_files,

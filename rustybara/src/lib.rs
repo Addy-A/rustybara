@@ -58,6 +58,7 @@
 //! - [`raster`] — PDF rendering via PDFium
 //! - [`encode`] — Image encoding to various formats
 //! - [`geometry`] — 2D geometry primitives (Rect, Matrix)
+//! - [`objects`] — Page object tree: painted shapes, images, and text runs
 //! - `color` — ICC color management (feature-gated, requires `color` feature)
 
 #[cfg(feature = "color")]
@@ -66,11 +67,14 @@ pub mod color;
 pub mod encode;
 pub mod error;
 pub mod geometry;
+pub mod objects;
+#[cfg(feature = "outline")]
+pub mod outline;
 pub mod pages;
+pub mod pipeline;
 #[cfg(feature = "raster")]
 pub mod raster;
 pub mod stream;
-pub mod pipeline;
 
 pub use error::Error;
 pub use error::Result;

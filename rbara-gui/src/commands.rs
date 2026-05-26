@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::{Arc, Mutex};
 
 use rustybara::encode::OutputFormat;
@@ -19,6 +21,15 @@ pub(crate) struct CustomProfileEntry {
 
 pub struct ProfileRegistry(pub(crate) Mutex<HashMap<String, CustomProfileEntry>>);
 
+/// Owns the handle to a running `rbv --listen` process.
+pub struct RbvHandle {
+    child: Child,
+    stdin: BufWriter<ChildStdin>,
+}
+
+/// Tauri-managed state wrapping the single persistent rbv process.
+pub struct ViewerHandle(pub Mutex<Option<RbvHandle>>);
+
 #[derive(serde::Serialize, Clone)]
 pub struct CustomProfileDto {
     pub name: String,
@@ -35,37 +46,51 @@ fn profiles_dir<R: tauri::Runtime>(manager: &impl Manager<R>) -> Option<PathBuf>
 pub(crate) fn load_persisted_profiles(app: &tauri::App) {
     let Some(dir) = profiles_dir(app) else { return };
     let registry = app.state::<ProfileRegistry>();
-    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
 
     for entry in entries.flatten() {
         let path = entry.path();
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-        if ext != "icc" && ext != "icm" { continue; }
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if ext != "icc" && ext != "icm" {
+            continue;
+        }
 
-        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
         let name = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("Custom")
             .to_string();
 
-        let Ok(profile) = rustybara_icc::profiles::IccProfile::from_user_bytes(
-            name.clone(),
-            name,
-            bytes,
-        ) else { continue };
+        let Ok(profile) =
+            rustybara_icc::profiles::IccProfile::from_user_bytes(name.clone(), name, bytes)
+        else {
+            continue;
+        };
 
         let color_space = match profile.color_space {
             rustybara_icc::ColorSpaceKind::Cmyk => "CMYK",
-            rustybara_icc::ColorSpaceKind::Rgb  => "RGB",
+            rustybara_icc::ColorSpaceKind::Rgb => "RGB",
             rustybara_icc::ColorSpaceKind::Gray => "Gray",
-            _                                   => "Unknown",
+            _ => "Unknown",
         }
         .to_string();
 
         registry.0.lock().unwrap().insert(
             profile.name,
-            CustomProfileEntry { description: profile.description, color_space, bytes: profile.bytes },
+            CustomProfileEntry {
+                description: profile.description,
+                color_space,
+                bytes: profile.bytes,
+            },
         );
     }
 }
@@ -382,7 +407,11 @@ pub fn add_trim_box(
 
     Ok(ActionResult {
         ok: true,
-        message: format!("Added trim box to {} file(s) (bleed: {}″)", paths.len(), bleed_inches),
+        message: format!(
+            "Added trim box to {} file(s) (bleed: {}″)",
+            paths.len(),
+            bleed_inches
+        ),
         output_paths,
         timestamp: now_timestamp(),
     })
@@ -405,8 +434,11 @@ pub fn split_pages(
     for path_str in &paths {
         let path = PathBuf::from(path_str);
         let pipeline = PdfPipeline::open(&path).map_err(friendly_error)?;
-        let mut result = pipeline.split_pages(panel_width_pts).map_err(friendly_error)?;
-        let dir: &std::path::Path = output_dir.as_deref()
+        let mut result = pipeline
+            .split_pages(panel_width_pts)
+            .map_err(friendly_error)?;
+        let dir: &std::path::Path = output_dir
+            .as_deref()
             .or_else(|| path.parent().filter(|p| !p.as_os_str().is_empty()))
             .unwrap_or(std::path::Path::new("."));
         let stem = path.file_stem().unwrap_or_default().to_string_lossy();
@@ -454,7 +486,11 @@ pub fn extract_pages(
 
     Ok(ActionResult {
         ok: true,
-        message: format!("Extracted {} page(s) from {} file(s)", page_nums.len(), paths.len()),
+        message: format!(
+            "Extracted {} page(s) from {} file(s)",
+            page_nums.len(),
+            paths.len()
+        ),
         output_paths,
         timestamp: now_timestamp(),
     })
@@ -597,18 +633,15 @@ pub async fn load_icc_profile(
             .unwrap_or("Custom")
             .to_string();
 
-        let profile = rustybara_icc::profiles::IccProfile::from_user_bytes(
-            name.clone(),
-            name.clone(),
-            bytes,
-        )
-        .map_err(|e| format!("{e}"))?;
+        let profile =
+            rustybara_icc::profiles::IccProfile::from_user_bytes(name.clone(), name.clone(), bytes)
+                .map_err(|e| format!("{e}"))?;
 
         let color_space = match profile.color_space {
-            rustybara_icc::ColorSpaceKind::Cmyk    => "CMYK",
-            rustybara_icc::ColorSpaceKind::Rgb     => "RGB",
-            rustybara_icc::ColorSpaceKind::Gray    => "Gray",
-            _                                      => "Unknown",
+            rustybara_icc::ColorSpaceKind::Cmyk => "CMYK",
+            rustybara_icc::ColorSpaceKind::Rgb => "RGB",
+            rustybara_icc::ColorSpaceKind::Gray => "Gray",
+            _ => "Unknown",
         }
         .to_string();
 
@@ -625,7 +658,11 @@ pub async fn load_icc_profile(
 
         profiles.0.lock().unwrap().insert(
             profile.name,
-            CustomProfileEntry { description: profile.description, color_space, bytes: profile.bytes },
+            CustomProfileEntry {
+                description: profile.description,
+                color_space,
+                bytes: profile.bytes,
+            },
         );
 
         results.push(dto);
@@ -687,14 +724,20 @@ pub fn load_metadata(path: String) -> Result<PdfMetadataDto, String> {
     }
     .to_string();
 
-    let file_size_kb = std::fs::metadata(&path).map(|m| m.len() / 1024).unwrap_or(0);
+    let file_size_kb = std::fs::metadata(&path)
+        .map(|m| m.len() / 1024)
+        .unwrap_or(0);
 
     let (text_blocks, image_blocks) = pipeline.page_layout_hint(0);
 
     let raw_spots = rustybara_icc::pdf::find_spot_colorspaces(doc);
     let mut spot_colors: Vec<String> = {
         let mut seen = std::collections::HashSet::new();
-        raw_spots.into_iter().map(|(_, ink)| ink).filter(|ink| seen.insert(ink.clone())).collect()
+        raw_spots
+            .into_iter()
+            .map(|(_, ink)| ink)
+            .filter(|ink| seen.insert(ink.clone()))
+            .collect()
     };
     spot_colors.sort();
     let has_spots = !spot_colors.is_empty();
@@ -733,8 +776,11 @@ pub fn stitch_pages(
     for path_str in &paths {
         let path = PathBuf::from(path_str);
         let pipeline = PdfPipeline::open(&path).map_err(friendly_error)?;
-        let mut result = pipeline.stitch_pages(spread_width_pts).map_err(friendly_error)?;
-        let dir: &std::path::Path = output_dir.as_deref()
+        let mut result = pipeline
+            .stitch_pages(spread_width_pts)
+            .map_err(friendly_error)?;
+        let dir: &std::path::Path = output_dir
+            .as_deref()
             .or_else(|| path.parent().filter(|p| !p.as_os_str().is_empty()))
             .unwrap_or(std::path::Path::new("."));
         let stem = path.file_stem().unwrap_or_default().to_string_lossy();
@@ -752,7 +798,12 @@ pub fn stitch_pages(
 }
 
 #[tauri::command]
-pub fn open_in_viewer(app: tauri::AppHandle, path: String, page: u32, dpi: u32) -> Result<(), String> {
+pub fn open_in_viewer(
+    app: tauri::AppHandle,
+    path: String,
+    page: u32,
+    dpi: u32,
+) -> Result<(), String> {
     let rbv_name = if cfg!(windows) { "rbv.exe" } else { "rbv" };
     // resource_dir() returns the correct directory on all platforms:
     // Windows/Linux: same directory as the executable
@@ -768,6 +819,71 @@ pub fn open_in_viewer(app: tauri::AppHandle, path: String, page: u32, dpi: u32) 
         .args(["--dpi", &dpi.to_string()])
         .spawn()
         .map_err(|e| format!("Failed to launch rbv ({}): {e}", rbv.display()))?;
+    Ok(())
+}
+
+// Open a PDF in the persistent rbv viewer process.
+///
+/// If rbv is already running and alive, sends `OPEN` (and optionally `PAGE`)
+/// commands over its stdin pipe — no new process is spawned.
+/// If rbv has exited or was never started, a fresh process is spawned with
+/// `--listen` so subsequent calls can reuse it.
+#[tauri::command]
+pub fn open_in_viewer_persistent(
+    app: tauri::AppHandle,
+    handle: State<ViewerHandle>,
+    path: String,
+    page: u32,
+    dpi: u32,
+) -> Result<(), String> {
+    let mut guard = handle
+        .0
+        .lock()
+        .map_err(|_| "viewer handle mutex poisoned".to_string())?;
+
+    // Check whether the existing child process is still alive.
+    let alive = guard
+        .as_mut()
+        .map_or(false, |h| matches!(h.child.try_wait(), Ok(None)));
+
+    if alive {
+        // Reuse the existing process — send IPC commands.
+        let h = guard.as_mut().unwrap();
+        let cmd = format!("OPEN {path}\nPAGE {page}\n");
+        h.stdin
+            .write_all(cmd.as_bytes())
+            .and_then(|_| h.stdin.flush())
+            .map_err(|e| format!("IPC write failed (rbv may have closed): {e}"))?;
+        return Ok(());
+    }
+
+    // No alive process — spawn a fresh rbv with --listen.
+    let rbv_name = if cfg!(windows) { "rbv.exe" } else { "rbv" };
+    let rbv = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("Cannot locate resource directory: {e}"))?
+        .join(rbv_name);
+
+    let mut child = std::process::Command::new(&rbv)
+        .arg(&path)
+        .arg(page.to_string())
+        .args(["--dpi", &dpi.to_string()])
+        .arg("--listen")
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to launch rbv ({}): {e}", rbv.display()))?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "Failed to open rbv stdin pipe".to_string())?;
+
+    *guard = Some(RbvHandle {
+        child,
+        stdin: BufWriter::new(stdin),
+    });
+
     Ok(())
 }
 
@@ -845,11 +961,6 @@ pub async fn open_file_dialog(app: tauri::AppHandle) -> Result<Vec<String>, Stri
         .map_err(|e| format!("Dialog channel error: {e}"))?;
 
     Ok(files
-        .map(|paths| {
-            paths
-                .into_iter()
-                .map(|p| p.to_string())
-                .collect::<Vec<_>>()
-        })
+        .map(|paths| paths.into_iter().map(|p| p.to_string()).collect::<Vec<_>>())
         .unwrap_or_default())
 }
