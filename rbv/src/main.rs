@@ -34,6 +34,18 @@ mod tests {
     fn invalid_dpi_fails() {
         assert!(Args::try_parse_from(["rbv", "doc.pdf", "0", "--dpi", "notanumber"]).is_err());
     }
+
+    #[test]
+    fn listen_flag_defaults_false() {
+        let args = Args::parse_from(["rbv", "doc.pdf"]);
+        assert!(!args.listen);
+    }
+
+    #[test]
+    fn listen_flag_explicit() {
+        let args = Args::parse_from(["rbv", "doc.pdf", "--listen"]);
+        assert!(args.listen);
+    }
 }
 
 #[derive(clap::Parser)]
@@ -44,6 +56,8 @@ struct Args {
     page: u32,
     #[arg(long, default_value_t = 150)]
     dpi: u32,
+    #[arg(long, default_value_t = false)]
+    listen: bool,
 }
 
 fn main() {
@@ -53,5 +67,5 @@ fn main() {
         render_annotations: true,
         render_form_data: false,
     };
-    viewer::run(args.file, args.page, config);
+    viewer::run(args.file, args.page, config, args.listen);
 }

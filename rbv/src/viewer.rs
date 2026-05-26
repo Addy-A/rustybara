@@ -24,10 +24,20 @@ use winit::window::{Window, WindowId};
 // ── Max debug log capacity ────────────────────────────────────────────────────
 const DEBUG_LOG_CAP: usize = 24;
 
+/// A command received over stdin when rbv is run with `--listen`.
+pub enum IpcCmd {
+    /// Open a new PDF file at the given absolute path, resetting to page 0.
+    Open(PathBuf),
+    /// Jump to the given 0-based page number.
+    Page(u32),
+    Quit,
+}
+
 pub enum ViewerEvent {
     PreviewReady { page: u32, image: DynamicImage },
     PageReady { page: u32, image: DynamicImage },
     FileChanged,
+    IpcCommand(IpcCmd),
 }
 
 struct SkiaState {
@@ -79,7 +89,7 @@ struct Viewer {
     /// for the ICC CMYK pixel readout. Built lazily on first selection click and
     /// reused for all subsequent clicks.
     icc_transform: Option<ColorTransform>,
-    _watcher: RecommendedWatcher,
+    watcher: RecommendedWatcher,
     proxy: EventLoopProxy<ViewerEvent>,
     /// Accumulated digit characters for a `<N>g` page-jump prefix.
     /// Cleared on every navigation action or Escape.
@@ -929,7 +939,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: ViewerEvent) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: ViewerEvent) {
         match event {
             ViewerEvent::PreviewReady { page, image } if page == self.page => {
                 let skia_img = image_to_skia(&image);
@@ -980,6 +990,66 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 self.push_log("File reloaded — selection cleared");
                 self.spawn_render(self.page);
             }
+            ViewerEvent::IpcCommand(cmd) => match cmd {
+                IpcCmd::Open(new_file) => {
+                    match PdfPipeline::open(&new_file) {
+                        Err(e) => {
+                            self.push_log(format!("IPC OPEN failed: {e}"));
+                        }
+                        Ok(new_pipeline) => {
+                            // Reattach watcher to new file.
+                            self.watcher.unwatch(&self.file).ok();
+                            self.watcher
+                                .watch(&new_file, RecursiveMode::NonRecursive)
+                                .ok();
+
+                            // Swap pipeline and file path.
+                            self.file = new_file;
+                            self.pipeline = Arc::new(new_pipeline);
+                            self.page_count = self.pipeline.doc().get_pages().len() as u32;
+                            self.page = 0;
+
+                            // Rebuild page-0 metadata.
+                            let page_id = self.pipeline.doc().get_pages().values().next().copied();
+                            self.page_boxes = page_id
+                                .and_then(|id| PageBoxes::read(self.pipeline.doc(), id).ok());
+                            self.object_tree = page_id
+                                .and_then(|id| build_object_tree(self.pipeline.doc(), id).ok());
+                            self.glyph_outlines = page_id
+                                .and_then(|id| outline_page_text(self.pipeline.doc(), id).ok());
+
+                            // Clear stale display state.
+                            self.selected_object = None;
+                            self.color_info = None;
+                            self.sampling_pdf_pos = None;
+                            self.pending_image = None;
+                            self.current_image = None;
+                            if let Some(state) = self.state.as_mut() {
+                                state.page_image = None;
+                            }
+
+                            // Update window title and kick off render.
+                            let title = format!(
+                                "rbv \u{2014} {}",
+                                self.file.file_name().unwrap_or_default().to_string_lossy()
+                            );
+                            if let Some(state) = self.state.as_ref() {
+                                state.window.set_title(&title);
+                                state.window.request_redraw();
+                            }
+                            self.digit_buf.clear();
+                            self.push_log(format!("IPC OPEN: {}", self.file.display()));
+                            self.spawn_render(0);
+                        }
+                    }
+                }
+                IpcCmd::Page(p) => {
+                    self.navigate_to_page(p);
+                }
+                IpcCmd::Quit => {
+                    event_loop.exit();
+                }
+            },
             _ => {}
         }
     }
@@ -987,7 +1057,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-pub fn run(file: PathBuf, page: u32, config: RenderConfig) {
+pub fn run(file: PathBuf, page: u32, config: RenderConfig, listen: bool) {
     let pipeline = Arc::new(PdfPipeline::open(&file).expect("open PDF"));
 
     let page_count = pipeline.doc().get_pages().len() as u32;
@@ -1045,6 +1115,36 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig) {
         .watch(&file, RecursiveMode::NonRecursive)
         .expect("watch file");
 
+    // ── IPC stdin reader (only when launched with --listen) ───────────────────
+    if listen {
+        let proxy_ipc = proxy.clone();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            let stdin = std::io::stdin();
+            for line in stdin.lock().lines() {
+                let Ok(line) = line else { break };
+                let line = line.trim().to_owned();
+                let cmd = if let Some(path) = line.strip_prefix("OPEN ") {
+                    IpcCmd::Open(PathBuf::from(path))
+                } else if let Some(n) = line.strip_prefix("PAGE ") {
+                    if let Ok(p) = n.trim().parse::<u32>() {
+                        IpcCmd::Page(p)
+                    } else {
+                        continue;
+                    }
+                } else if line == "QUIT" {
+                    let _ = proxy_ipc.send_event(ViewerEvent::IpcCommand(IpcCmd::Quit));
+                    break;
+                } else {
+                    continue; // unknown command — skip silently
+                };
+                if proxy_ipc.send_event(ViewerEvent::IpcCommand(cmd)).is_err() {
+                    break; // event loop closed — stop reading
+                }
+            }
+        });
+    }
+
     let mut viewer = Viewer {
         file,
         pipeline,
@@ -1071,7 +1171,7 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig) {
         debug_mode: false,
         debug_log: VecDeque::with_capacity(DEBUG_LOG_CAP),
         icc_transform: None,
-        _watcher: watcher,
+        watcher,
         proxy,
         digit_buf: String::new(),
     };
