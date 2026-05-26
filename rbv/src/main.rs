@@ -1,5 +1,6 @@
 pub mod export;
 pub mod renderer;
+pub mod separation;
 pub mod ui_state;
 pub mod viewer;
 

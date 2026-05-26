@@ -2,6 +2,7 @@ use crate::export::export_wireframe;
 use crate::renderer::{
     image_to_skia, ColorPanel, DebugOverlay, OverlayData, PageWireframe, SkiaRenderer,
 };
+use crate::separation::{build_icc_transform as sep_build_icc_transform, PlateChannel};
 use crate::ui_state::{extract_spot_names, PlateMode};
 use image::{DynamicImage, GenericImageView};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -38,6 +39,13 @@ pub enum IpcCmd {
 pub enum ViewerEvent {
     PreviewReady { page: u32, image: DynamicImage },
     PageReady { page: u32, image: DynamicImage },
+    /// A plate separation render has finished.  The `plate` snapshot allows the
+    /// viewer to discard stale results when the user changes plates mid-render.
+    PlateReady {
+        page: u32,
+        plate: PlateMode,
+        image: DynamicImage,
+    },
     FileChanged,
     IpcCommand(IpcCmd),
 }
@@ -49,6 +57,9 @@ struct SkiaState {
     /// handles platform output (cursor changes, clipboard, IME).
     egui_winit: egui_winit::State,
     page_image: Option<skia_safe::Image>,
+    /// ICC plate separation result — replaces `page_image` when a non-All plate is active.
+    /// Cleared whenever the plate selection changes or a new page render starts.
+    plate_image: Option<skia_safe::Image>,
     width: u32,
     height: u32,
 }
@@ -108,6 +119,14 @@ struct Viewer {
     /// Whether the prepress tools panel is currently visible.
     /// Hidden by default; toggled by the floating ⚙ button.
     show_tools_panel: bool,
+    /// When `true`, plate images are rendered with ink-specific tint colors
+    /// (C=cyan, M=magenta, Y=yellow, K=near-black, spot=violet).
+    /// When `false`, all plates are shown as grayscale (white=no ink, black=full).
+    plate_tinted: bool,
+    /// The plate that the current `state.plate_image` was computed for.
+    /// Used to detect stale results: if `active_plate != plate_image_for`, the
+    /// plate_image is cleared and a new separation is triggered.
+    plate_image_for: PlateMode,
     /// True when the pointer was over any egui surface in the last rendered frame.
     ///
     /// Used to gate PDF pan / selection so clicks inside the egui panel or the
@@ -148,6 +167,84 @@ impl Viewer {
                 let _ = proxy.send_event(ViewerEvent::PageReady { page, image: img });
             }
         });
+    }
+
+    // ── Plate separation ──────────────────────────────────────────────────────
+
+    /// Spawn a background thread that renders the ICC plate image for `active_plate`.
+    ///
+    /// Does nothing when `active_plate` is [`PlateMode::All`].  On completion
+    /// the thread sends [`ViewerEvent::PlateReady`] so the main thread can swap
+    /// in the new image.
+    ///
+    /// A snapshot of the current plate mode and a clone of `current_image` are
+    /// captured at call time; the result is discarded on arrival if either the
+    /// page or the plate has changed since.
+    fn spawn_plate_separation(&self) {
+        let plate = self.active_plate.clone();
+        let page = self.page;
+        let tinted = self.plate_tinted;
+        let proxy = self.proxy.clone();
+
+        match &plate {
+            PlateMode::All => return, // nothing to do
+
+            PlateMode::Cmyk(ch) => {
+                let Some(src) = self.current_image.clone() else {
+                    return;
+                };
+                let ch = *ch;
+                std::thread::spawn(move || {
+                    let Some(transform) = sep_build_icc_transform() else {
+                        return;
+                    };
+                    let plate_ch = match ch {
+                        rustybara::objects::CmykChannel::Cyan => PlateChannel::Cyan,
+                        rustybara::objects::CmykChannel::Magenta => PlateChannel::Magenta,
+                        rustybara::objects::CmykChannel::Yellow => PlateChannel::Yellow,
+                        rustybara::objects::CmykChannel::Black => PlateChannel::Black,
+                    };
+                    let image =
+                        crate::separation::render_cmyk_plate(&src, plate_ch, tinted, &transform);
+                    let _ = proxy.send_event(ViewerEvent::PlateReady {
+                        page,
+                        plate: PlateMode::Cmyk(ch),
+                        image,
+                    });
+                });
+            }
+
+            PlateMode::Spot(name) => {
+                // Collect matching objects so we don't send the whole tree.
+                let Some(tree) = self.object_tree.as_ref() else {
+                    return;
+                };
+                let Some(media) = self.page_boxes.as_ref().map(|b| b.media_box.clone()) else {
+                    return;
+                };
+                let Some(src) = self.current_image.as_ref() else {
+                    return;
+                };
+                let (img_w, img_h) = src.dimensions();
+                let selector =
+                    rustybara::objects::InkSelector::Separation(name.clone());
+                let matched: Vec<PageObject> = filter_by_ink(tree, &selector)
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                let name = name.clone();
+                std::thread::spawn(move || {
+                    let image = crate::separation::render_spot_plate(
+                        &matched, &media, tinted, None, img_w, img_h,
+                    );
+                    let _ = proxy.send_event(ViewerEvent::PlateReady {
+                        page,
+                        plate: PlateMode::Spot(name),
+                        image,
+                    });
+                });
+            }
+        }
     }
 
     // ── Debug log ─────────────────────────────────────────────────────────────
@@ -399,7 +496,9 @@ impl Viewer {
         self.current_image = None;
         if let Some(state) = self.state.as_mut() {
             state.page_image = None;
+            state.plate_image = None;
         }
+        self.plate_image_for = PlateMode::All;
 
         // Update window title and log.
         let title = format!("rbv \u{2014} {}/{}", page + 1, self.page_count);
@@ -686,6 +785,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
             renderer,
             egui_winit,
             page_image,
+            plate_image: None,
             width,
             height,
         });
@@ -731,11 +831,14 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 // Clone is a cheap Arc bump; lets the closure borrow other fields
                 // of `self` without conflicting with the egui_ctx borrow.
                 let egui_ctx = self.egui_ctx.clone();
+                let plate_before = self.active_plate.clone();
+                let tinted_before = self.plate_tinted;
                 let mut egui_over = false;
                 let full_output = egui_ctx.run_ui(raw_egui_input, |ctx| {
                     egui_over = build_egui_ui(
                         ctx,
                         &mut self.active_plate,
+                        &mut self.plate_tinted,
                         &self.plate_spot_names,
                         self.object_tree.as_ref(),
                         self.selected_object.as_ref(),
@@ -745,6 +848,26 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 });
                 // Store for next-frame use in mouse-event gating.
                 self.egui_pointer_over_panel = egui_over;
+
+                // ── Plate change detection ────────────────────────────────────
+                // If the user changed the plate selection or the tint toggle,
+                // clear the stale plate image and kick off a new separation.
+                let plate_changed = self.active_plate != plate_before;
+                let tint_changed = self.plate_tinted != tinted_before;
+                if plate_changed || tint_changed {
+                    if let Some(state) = self.state.as_mut() {
+                        state.plate_image = None;
+                    }
+                    self.plate_image_for = PlateMode::All; // invalidate
+                    if self.active_plate != PlateMode::All {
+                        self.push_log(format!(
+                            "Separation: {:?} tint={}",
+                            self.active_plate.to_ink_selector(),
+                            self.plate_tinted
+                        ));
+                        self.spawn_plate_separation();
+                    }
+                }
 
                 let egui::FullOutput {
                     platform_output,
@@ -832,8 +955,16 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 // Texture uploads must precede the egui draw call.
                 state.renderer.update_egui_textures(&textures_delta);
 
+                // When a plate is active, prefer plate_image; fall back to
+                // page_image while the separation is still computing.
+                let display_image = if self.active_plate != PlateMode::All {
+                    state.plate_image.as_ref().or(state.page_image.as_ref())
+                } else {
+                    state.page_image.as_ref()
+                };
+
                 state.renderer.draw(
-                    state.page_image.as_ref(),
+                    display_image,
                     self.zoom,
                     self.pan,
                     overlays.as_ref(),
@@ -1078,6 +1209,9 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 let skia_img = image_to_skia(&image);
                 if let Some(state) = self.state.as_mut() {
                     state.page_image = Some(skia_img);
+                    // Plate image is stale — clear it so the preview shows immediately.
+                    state.plate_image = None;
+                    self.plate_image_for = PlateMode::All;
                     state.window.request_redraw();
                     self.current_image = Some(image);
                 } else {
@@ -1089,6 +1223,8 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 let skia_img = image_to_skia(&image);
                 if let Some(state) = self.state.as_mut() {
                     state.page_image = Some(skia_img);
+                    state.plate_image = None;
+                    self.plate_image_for = PlateMode::All;
                     state.window.request_redraw();
                     self.current_image = Some(image);
                 } else {
@@ -1096,6 +1232,22 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 }
                 let obj_count = self.object_tree.as_ref().map_or(0, |t| t.objects.len());
                 self.push_log(format!("Page ready: {obj_count} objects, page {page}"));
+                // Re-trigger separation if a plate is already active when the full
+                // render arrives (e.g. user selected a plate before the HQ render).
+                if self.active_plate != PlateMode::All {
+                    self.spawn_plate_separation();
+                }
+            }
+            ViewerEvent::PlateReady { page, plate, image }
+                if page == self.page && plate == self.active_plate =>
+            {
+                let skia_img = image_to_skia(&image);
+                self.plate_image_for = plate;
+                if let Some(state) = self.state.as_mut() {
+                    state.plate_image = Some(skia_img);
+                    state.window.request_redraw();
+                }
+                self.push_log("Plate separation ready".to_string());
             }
             ViewerEvent::FileChanged => {
                 if let Ok(new_pipeline) = PdfPipeline::open(&self.file) {
@@ -1121,10 +1273,14 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
 
                     self.pipeline = Arc::new(new_pipeline);
                 }
-                // Page content changed — clear stale selection data.
+                // Page content changed — clear stale selection and plate data.
                 self.selected_object = None;
                 self.color_info = None;
                 self.sampling_pdf_pos = None;
+                if let Some(state) = self.state.as_mut() {
+                    state.plate_image = None;
+                }
+                self.plate_image_for = PlateMode::All;
                 self.push_log("File reloaded — selection cleared");
                 self.spawn_render(self.page);
             }
@@ -1169,7 +1325,9 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                             self.current_image = None;
                             if let Some(state) = self.state.as_mut() {
                                 state.page_image = None;
+                                state.plate_image = None;
                             }
+                            self.plate_image_for = PlateMode::All;
 
                             // Update window title and kick off render.
                             let title = format!(
@@ -1322,6 +1480,8 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig, listen: bool) {
         active_plate: PlateMode::All,
         plate_spot_names,
         show_tools_panel: false,
+        plate_tinted: false,
+        plate_image_for: PlateMode::All,
         egui_pointer_over_panel: false,
     };
 
@@ -1340,6 +1500,7 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig, listen: bool) {
 fn build_egui_ui(
     ctx: &egui::Context,
     active_plate: &mut PlateMode,
+    plate_tinted: &mut bool,
     spot_names: &[String],
     object_tree: Option<&ObjectTree>,
     selected: Option<&PageObject>,
@@ -1379,6 +1540,13 @@ fn build_egui_ui(
         .default_size(220.0)
         .min_size(180.0)
         .show(ctx, |ui| {
+            // Wrap all panel content in a vertical scroll area so that
+            // expanding sections (e.g. Keyboard Shortcuts) never push
+            // content below the visible window.
+            egui::ScrollArea::vertical()
+                .id_salt("panel_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
             // ── Plate view ────────────────────────────────────────────────────
             ui.heading("Plate View");
             ui.separator();
@@ -1407,18 +1575,14 @@ fn build_egui_ui(
                         .color(egui::Color32::GRAY)
                         .size(11.0),
                 );
-                egui::ScrollArea::vertical()
-                    .max_height(120.0)
-                    .id_salt("spot_scroll")
-                    .show(ui, |ui| {
-                        for name in spot_names {
-                            ui.radio_value(
-                                active_plate,
-                                PlateMode::Spot(name.clone()),
-                                name.as_str(),
-                            );
-                        }
-                    });
+                // No inner scroll area — the outer panel scroll handles overflow.
+                for name in spot_names {
+                    ui.radio_value(
+                        active_plate,
+                        PlateMode::Spot(name.clone()),
+                        name.as_str(),
+                    );
+                }
             }
 
             // Object count for the active plate.
@@ -1433,6 +1597,66 @@ fn build_egui_ui(
                     );
                 }
             }
+
+            // ── Plate display options ─────────────────────────────────────────
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new("Display")
+                    .color(egui::Color32::GRAY)
+                    .size(11.0),
+            );
+            ui.checkbox(plate_tinted, "Ink-tinted view");
+            if *plate_tinted && *active_plate != PlateMode::All {
+                ui.label(
+                    egui::RichText::new("Preview uses ink approximation colors")
+                        .color(egui::Color32::from_rgb(180, 180, 100))
+                        .italics()
+                        .size(10.0),
+                );
+            }
+
+            // ── Keyboard shortcuts reference ──────────────────────────────────
+            ui.separator();
+            egui::CollapsingHeader::new(
+                egui::RichText::new("⌨ Keyboard Shortcuts").size(12.0),
+            )
+            .default_open(false)
+            .show(ui, |ui| {
+                egui::Grid::new("shortcuts_grid")
+                    .num_columns(2)
+                    .spacing([12.0, 3.0])
+                    .striped(true)
+                    .show(ui, |ui| {
+                        let key = |ui: &mut egui::Ui, k: &str| {
+                            ui.label(
+                                egui::RichText::new(k)
+                                    .monospace()
+                                    .color(egui::Color32::from_rgb(220, 180, 80)),
+                            );
+                        };
+                        let desc = |ui: &mut egui::Ui, d: &str| {
+                            ui.label(egui::RichText::new(d).size(11.0));
+                            ui.end_row();
+                        };
+
+                        key(ui, "W"); desc(ui, "Toggle wireframe overlay");
+                        key(ui, "O"); desc(ui, "Toggle trim/bleed box overlay");
+                        key(ui, "Esc"); desc(ui, "Quit");
+                        key(ui, "← / H / K / ↑"); desc(ui, "Previous page");
+                        key(ui, "→ / L / J / ↓"); desc(ui, "Next page");
+                        key(ui, "G"); desc(ui, "First page");
+                        key(ui, "Shift+G"); desc(ui, "Last page");
+                        key(ui, "<N>G"); desc(ui, "Jump to page N");
+                        key(ui, "Ctrl+Scroll"); desc(ui, "Zoom in/out");
+                        key(ui, "Ctrl + ="); desc(ui, "Zoom in");
+                        key(ui, "Ctrl + -"); desc(ui, "Zoom out");
+                        key(ui, "Ctrl + 0"); desc(ui, "Reset zoom");
+                        key(ui, "Ctrl+Shift+D"); desc(ui, "Toggle debug overlay");
+                        key(ui, "Ctrl+Shift+E"); desc(ui, "Export wireframe PDF");
+                        key(ui, "Click"); desc(ui, "Inspect object");
+                        key(ui, "Drag"); desc(ui, "Pan");
+                    });
+            });
 
             // ── Selection ─────────────────────────────────────────────────────
             ui.separator();
@@ -1503,6 +1727,8 @@ fn build_egui_ui(
                     ));
                 }
             }
+            // Close the outer ScrollArea
+            }); // end ScrollArea
         });
 
     // Return true if the pointer was inside the panel this frame.
