@@ -46,8 +46,8 @@ pub fn export_wireframe(
     let mut content = String::new();
 
     // Stroke color: black; line width: 0.5 pt.
-    content.push_str("0 G\n");    // set stroke color (DeviceGray 0 = black)
-    content.push_str("0.5 w\n");  // line width
+    content.push_str("0 G\n"); // set stroke color (DeviceGray 0 = black)
+    content.push_str("0.5 w\n"); // line width
 
     for obj in &tree.objects {
         match &obj.kind {
@@ -152,10 +152,7 @@ pub fn export_wireframe(
 
     // Object 4 — Content stream.
     let off4 = buf.len();
-    let stream_header = format!(
-        "4 0 obj\n<< /Length {} >>\nstream\n",
-        content_len
-    );
+    let stream_header = format!("4 0 obj\n<< /Length {} >>\nstream\n", content_len);
     buf.extend_from_slice(stream_header.as_bytes());
     buf.extend_from_slice(content_bytes);
     buf.extend_from_slice(b"\nendstream\nendobj\n");
@@ -202,7 +199,9 @@ fn append_rect(content: &mut String, r: &PdfRect) {
 mod tests {
     use super::export_wireframe;
     use rustybara::geometry::{Matrix, Rect as PdfRect};
-    use rustybara::objects::{ObjectKind, ObjectTree, PageObject, PathPoint, PdfColor, SubPath};
+    use rustybara::objects::{
+        ObjectKind, ObjectTree, OverprintState, PageObject, PathPoint, PdfColor, SubPath,
+    };
     use std::path::Path;
     use tempfile::NamedTempFile;
 
@@ -234,6 +233,7 @@ mod tests {
             fill_color: Some(PdfColor::DeviceCmyk(0.0, 0.0, 0.0, 1.0)),
             stroke_color: None,
             stroke_width: 1.0,
+            overprint: OverprintState::default(),
             subpaths: vec![SubPath {
                 points: vec![
                     PathPoint::MoveTo(x, y),
@@ -254,6 +254,7 @@ mod tests {
             fill_color: None,
             stroke_color: None,
             stroke_width: 1.0,
+            overprint: OverprintState::default(),
             subpaths: vec![],
         }
     }
@@ -330,7 +331,10 @@ mod tests {
         assert!(content.contains(" re\n"), "missing rect (re) operator");
         // Two diagonal lines (m ... l pairs)
         let m_count = content.matches(" m\n").count();
-        assert!(m_count >= 2, "expected at least 2 moveto for diagonals, got {m_count}");
+        assert!(
+            m_count >= 2,
+            "expected at least 2 moveto for diagonals, got {m_count}"
+        );
         assert!(content.contains("S\n"), "missing stroke");
     }
 
@@ -345,6 +349,7 @@ mod tests {
             fill_color: None,
             stroke_color: None,
             stroke_width: 1.0,
+            overprint: OverprintState::default(),
             subpaths: vec![SubPath {
                 points: vec![
                     PathPoint::MoveTo(0.0, 0.0),
@@ -357,7 +362,10 @@ mod tests {
         export_wireframe(&tree, &media(), tmp.path()).unwrap();
 
         let content = read_pdf_content(tmp.path());
-        assert!(content.contains(" c\n"), "missing bezier curve (c) operator");
+        assert!(
+            content.contains(" c\n"),
+            "missing bezier curve (c) operator"
+        );
     }
 
     /// CTM translation is applied to path points before writing.
@@ -380,9 +388,10 @@ mod tests {
             fill_color: None,
             stroke_color: Some(PdfColor::DeviceGray(0.0)),
             stroke_width: 1.0,
+            overprint: OverprintState::default(),
             subpaths: vec![SubPath {
                 points: vec![
-                    PathPoint::MoveTo(0.0, 0.0), // post-CTM: (100, 200)
+                    PathPoint::MoveTo(0.0, 0.0),  // post-CTM: (100, 200)
                     PathPoint::LineTo(50.0, 0.0), // post-CTM: (150, 200)
                 ],
             }],
@@ -410,6 +419,7 @@ mod tests {
             fill_color: Some(PdfColor::DeviceGray(0.5)),
             stroke_color: None,
             stroke_width: 1.0,
+            overprint: OverprintState::default(),
             subpaths: vec![], // no subpath data
         };
         let tree = make_tree(vec![obj]);
@@ -417,7 +427,10 @@ mod tests {
 
         let content = read_pdf_content(tmp.path());
         // Should emit a `re` rect for the bbox.
-        assert!(content.contains("5.0000 10.0000 200.0000 300.0000 re"), "missing bbox rect fallback");
+        assert!(
+            content.contains("5.0000 10.0000 200.0000 300.0000 re"),
+            "missing bbox rect fallback"
+        );
     }
 
     /// xref table offsets point to valid object positions.
@@ -439,7 +452,11 @@ mod tests {
         let xref_offset: usize = text[sxref_pos..sxref_end].trim().parse().unwrap();
 
         // The xref keyword must appear at that offset.
-        assert_eq!(&text[xref_offset..xref_offset + 4], "xref", "startxref points to wrong offset");
+        assert_eq!(
+            &text[xref_offset..xref_offset + 4],
+            "xref",
+            "startxref points to wrong offset"
+        );
 
         // Parse the four n-entries and verify each byte offset starts "N 0 obj".
         let xref_section = &text[xref_offset..];
@@ -458,7 +475,9 @@ mod tests {
             assert!(
                 slice.starts_with(&expected_marker),
                 "obj {} offset {} → {:?}",
-                obj_num, offset, slice
+                obj_num,
+                offset,
+                slice
             );
         }
     }

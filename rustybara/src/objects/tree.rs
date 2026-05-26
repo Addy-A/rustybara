@@ -52,6 +52,34 @@ enum ColorSpace {
     Other,
 }
 
+/// Overprint state captured from the graphics state at paint time.
+///
+/// Corresponds to the `OP`, `op`,and `OPM` entries in a PDF `/ExtGState`
+/// dictionary (PDF spec §8.4.5). These flags control whether ink painted on
+/// top of existing ink replaces it (knock-out) or lets it show through
+/// (overprint).
+///
+/// All fields default to `false` / `0`, matching the PDF spec default for
+/// documents that do not declare an `ExtGState`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OverprintState {
+    pub stroke_overprint: bool,
+    pub fill_overprint: bool,
+    pub overprint_mode: u8,
+}
+
+/// One of the four CMYK process ink channels.
+///
+/// Used by [`crate::objects::separation::InkSelector::CmykChannel`] to select
+/// which plate to filter on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CmykChannel {
+    Cyan,
+    Magenta,
+    Yellow,
+    Black,
+}
+
 /// A single path segment stored in local (pre-CTM) coordinates.
 #[derive(Clone, Copy, Debug)]
 pub enum PathPoint {
@@ -107,6 +135,9 @@ pub struct PageObject {
     pub stroke_color: Option<PdfColor>,
     /// Line width at paint time (in user units, before CTM scaling).
     pub stroke_width: f64,
+    /// Overprint flags when this object was painted.
+    /// Defaults to all-false / mode 0 when no `/ExtGState` has been applied.
+    pub overprint: OverprintState,
     /// Subpaths in local (pre-CTM) coordinates.
     /// Empty for [`ObjectKind::Text`], [`ObjectKind::Image`], and [`ObjectKind::FormXObject`].
     pub subpaths: Vec<SubPath>,
@@ -127,6 +158,7 @@ struct GraphicsState {
     stroke_width: f64,
     fill_cs: ColorSpace,
     stroke_cs: ColorSpace,
+    overprint: OverprintState,
 }
 
 impl Default for GraphicsState {
@@ -138,6 +170,7 @@ impl Default for GraphicsState {
             stroke_width: 1.0,
             fill_cs: ColorSpace::DeviceGray,
             stroke_cs: ColorSpace::DeviceGray,
+            overprint: OverprintState::default(),
         }
     }
 }
@@ -162,6 +195,8 @@ impl Default for GraphicsState {
 /// | `g` / `G`                                 | DeviceGray fill / stroke              |
 /// | `rg` / `RG`                               | DeviceRGB fill / stroke               |
 /// | `k` / `K`                                 | DeviceCMYK fill / stroke              |
+/// | `cs` / `CS`                               | Set fill / stroke colorspace          |
+/// | `sc` `scn` / `SC` `SCN`                   | Set fill / stroke color (inc. spots)  |
 /// | `m` `l` `c` `v` `y` `h` `re`             | Path construction                     |
 /// | `S` `s` `f` `f*` `F` `B` `B*` `b` `b*` `n` | Path painting                     |
 /// | `Do` (Image)                              | Unit-square bbox placeholder          |
@@ -276,6 +311,15 @@ fn parse_content(
                     object_to_f64(&op.operands[2]),
                     object_to_f64(&op.operands[3]),
                 );
+            }
+
+            // ── Graphics state parameter dictionary ──────────────────────────────────────────────
+            "gs" if !op.operands.is_empty() => {
+                if let Object::Name(name) = &op.operands[0] {
+                    if let Some(op_state) = read_ext_gstate(doc, resource_parent_id, name) {
+                        gs.overprint = op_state;
+                    }
+                }
             }
 
             // ── Extended colorspace operators ──────────────────────────────────────────────
@@ -440,6 +484,7 @@ fn parse_content(
                                     fill_color: None,
                                     stroke_color: None,
                                     stroke_width: 0.0,
+                                    overprint: gs.overprint,
                                     subpaths: vec![],
                                 });
                             } else {
@@ -464,6 +509,7 @@ fn parse_content(
                                 fill_color: None,
                                 stroke_color: None,
                                 stroke_width: 0.0,
+                                overprint: gs.overprint,
                                 subpaths: vec![],
                             });
                         }
@@ -531,6 +577,7 @@ fn parse_content(
                         fill_color: Some(gs.fill_color.clone()),
                         stroke_color: None,
                         stroke_width: 0.0,
+                        overprint: gs.overprint,
                         subpaths: vec![],
                     });
                 }
@@ -829,6 +876,66 @@ fn resolve_colorspace(doc: &Document, resource_parent_id: ObjectId, name: &[u8])
     ColorSpace::Other
 }
 
+/// Read `OP`, `op`, and `OPM` from a named `/ExtGState` entry and return an
+/// [`OverprintState`] if the entry exists.
+///
+/// Navigates `resource_parent_id → /Resources/ExtGState → name` to find the
+/// graphics-state parameter dictionary, then reads:
+///
+/// - `OP` (boolean) → [`OverprintState::stroke_overprint`]
+/// - `op` (boolean) → [`OverprintState::fill_overprint`]
+/// - `OPM` (integer 0 or 1) → [`OverprintState::overprint_mode`]
+///
+/// Missing keys leave the corresponding field at its default (`false` / `0`).
+/// Returns `None` if the named ExtGState entry cannot be found, so the caller
+/// can leave the current graphics-state overprint unchanged.
+fn read_ext_gstate(
+    doc: &Document,
+    resource_parent_id: ObjectId,
+    name: &[u8],
+) -> Option<OverprintState> {
+    let gs_dict = ext_gstate_dict_for(doc, resource_parent_id)?;
+
+    let entry = match gs_dict.get(name).ok()? {
+        Object::Reference(id) => doc.get_object(*id).ok()?,
+        other => other,
+    };
+    let entry_dict = entry.as_dict().ok()?;
+
+    let bool_flag =
+        |key: &[u8]| -> bool { matches!(entry_dict.get(key), Ok(Object::Boolean(true))) };
+    let int_flag = |key: &[u8]| -> u8 {
+        match entry_dict.get(key) {
+            Ok(Object::Integer(n)) => (*n).clamp(0, 1) as u8,
+            _ => 0,
+        }
+    };
+
+    Some(OverprintState {
+        stroke_overprint: bool_flag(b"OP"),
+        fill_overprint: bool_flag(b"op"),
+        overprint_mode: int_flag(b"OPM"),
+    })
+}
+
+/// Retrieve an owned clone of the `/ExtGState` sub-dictionary reachable from
+/// `resource_parent_id`, or `None` if the chain cannot be navigated.
+///
+/// Handles both page objects (`Object::Dictionary`) and Form XObject streams
+/// (`Object::Stream`) as the resource parent, mirroring [`xobject_dict_for`]
+/// and [`colorspace_dict_for`].
+fn ext_gstate_dict_for(doc: &Document, resource_parent_id: ObjectId) -> Option<Dictionary> {
+    let parent_obj = doc.get_object(resource_parent_id).ok()?;
+    let resources_obj: &Object = match parent_obj {
+        Object::Dictionary(d) => deref(doc, d.get(b"Resources").ok()?),
+        Object::Stream(s) => deref(doc, s.dict.get(b"Resources").ok()?),
+        _ => return None,
+    };
+    let res_dict = resources_obj.as_dict().ok()?;
+    let gs_obj = deref(doc, res_dict.get(b"ExtGState").ok()?);
+    Some(gs_obj.as_dict().ok()?.clone())
+}
+
 /// Retrieve an owned clone of the `/ColorSpace` sub-dictionary reachable from
 /// `resource_parent_id`, or `None` if the chain cannot be navigated.
 ///
@@ -889,6 +996,7 @@ fn commit_paint(
         fill_color,
         stroke_color,
         stroke_width: gs.stroke_width,
+        overprint: gs.overprint,
         subpaths: std::mem::take(subpaths),
     });
 }
@@ -1011,6 +1119,37 @@ mod tests {
                 tint: 0.5
             },
         );
+    }
+
+    // ── overprint_state ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn overprint_state_default_is_all_off() {
+        let op = OverprintState::default();
+        assert!(!op.stroke_overprint);
+        assert!(!op.fill_overprint);
+        assert_eq!(op.overprint_mode, 0);
+    }
+
+    #[test]
+    fn overprint_state_equality() {
+        let a = OverprintState {
+            stroke_overprint: true,
+            fill_overprint: false,
+            overprint_mode: 1,
+        };
+        let b = OverprintState {
+            stroke_overprint: true,
+            fill_overprint: false,
+            overprint_mode: 1,
+        };
+        assert_eq!(a, b);
+        let c = OverprintState {
+            stroke_overprint: false,
+            fill_overprint: false,
+            overprint_mode: 0,
+        };
+        assert_ne!(a, c);
     }
 
     // ── path_bbox ─────────────────────────────────────────────────────────────

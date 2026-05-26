@@ -93,7 +93,9 @@ fn cross2d(x0: f64, y0: f64, x1: f64, y1: f64, qx: f64, qy: f64) -> f64 {
 mod tests {
     use super::*;
     use crate::geometry::{Matrix, Rect};
-    use crate::objects::tree::{ObjectKind, ObjectTree, PageObject, PathPoint, PdfColor, SubPath};
+    use crate::objects::tree::{
+        ObjectKind, ObjectTree, OverprintState, PageObject, PathPoint, PdfColor, SubPath,
+    };
 
     fn rect_fill_object(x: f64, y: f64, w: f64, h: f64) -> PageObject {
         let mut sub = SubPath::default();
@@ -114,6 +116,7 @@ mod tests {
             fill_color: Some(PdfColor::DeviceGray(0.0)),
             stroke_color: None,
             stroke_width: 0.0,
+            overprint: OverprintState::default(),
             subpaths: vec![sub],
         }
     }
@@ -292,6 +295,7 @@ mod tests {
             fill_color: None,
             stroke_color: Some(PdfColor::DeviceGray(0.0)),
             stroke_width: 2.0,
+            overprint: OverprintState::default(),
             subpaths: vec![],
         };
         let tree = ObjectTree { objects: vec![obj] };
@@ -312,6 +316,7 @@ mod tests {
             fill_color: None,
             stroke_color: None,
             stroke_width: 0.0,
+            overprint: OverprintState::default(),
             subpaths: vec![],
         };
         let tree = ObjectTree { objects: vec![obj] };
