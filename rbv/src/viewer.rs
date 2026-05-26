@@ -42,6 +42,8 @@ struct Viewer {
     file: PathBuf,
     pipeline: Arc<PdfPipeline>,
     page: u32,
+    /// Total number of pages in the document. Used to clamp navigation.
+    page_count: u32,
     config: RenderConfig,
     state: Option<SkiaState>,
     pending_image: Option<DynamicImage>,
@@ -79,6 +81,9 @@ struct Viewer {
     icc_transform: Option<ColorTransform>,
     _watcher: RecommendedWatcher,
     proxy: EventLoopProxy<ViewerEvent>,
+    /// Accumulated digit characters for a `<N>g` page-jump prefix.
+    /// Cleared on every navigation action or Escape.
+    digit_buf: String,
 }
 
 impl Viewer {
@@ -323,6 +328,60 @@ impl Viewer {
         }
     }
 
+    // ── Page navigation ───────────────────────────────────────────────────────
+
+    /// Navigate to `page` (0-indexed), reloading all page metadata and
+    /// triggering a background render. Values outside `[0, page_count)` are
+    /// clamped. Does nothing when the requested page equals the current page.
+    fn navigate_to_page(&mut self, page: u32) {
+        let page = page.min(self.page_count.saturating_sub(1));
+        if page == self.page {
+            return;
+        }
+        self.page = page;
+
+        // Reload page-level metadata synchronously (lopdf access, no rasterisation).
+        let page_id = self
+            .pipeline
+            .doc()
+            .get_pages()
+            .values()
+            .nth(page as usize)
+            .copied();
+        self.page_boxes = page_id.and_then(|id| PageBoxes::read(self.pipeline.doc(), id).ok());
+        self.object_tree =
+            page_id.and_then(|id| build_object_tree(self.pipeline.doc(), id).ok());
+        self.glyph_outlines =
+            page_id.and_then(|id| outline_page_text(self.pipeline.doc(), id).ok());
+
+        // Clear stale selection and images from the previous page.
+        self.selected_object = None;
+        self.color_info = None;
+        self.sampling_pdf_pos = None;
+        self.pending_image = None;
+        self.current_image = None;
+        if let Some(state) = self.state.as_mut() {
+            state.page_image = None;
+        }
+
+        // Update window title and log.
+        let title = format!("rbv \u{2014} {}/{}", page + 1, self.page_count);
+        if let Some(state) = self.state.as_ref() {
+            state.window.set_title(&title);
+            state.window.request_redraw();
+        }
+        self.push_log(format!("Page {}/{}", page + 1, self.page_count));
+        self.spawn_render(page);
+    }
+
+    /// Consume `digit_buf` as a step count and return it (minimum 0).
+    /// Clears the buffer regardless of whether parsing succeeded.
+    fn take_digit_step(&mut self) -> u32 {
+        let n = self.digit_buf.parse::<u32>().unwrap_or(0);
+        self.digit_buf.clear();
+        n
+    }
+
     // ── Debug overlay lines ───────────────────────────────────────────────────
 
     /// Build the list of text lines for the debug overlay.
@@ -355,7 +414,15 @@ impl Viewer {
 
         // Page info
         let obj_count = self.object_tree.as_ref().map_or(0, |t| t.objects.len());
-        lines.push(format!("Page  #{}   Objects: {}", self.page, obj_count));
+        lines.push(format!(
+            "Page  {}/{}   Objects: {}",
+            self.page + 1,
+            self.page_count,
+            obj_count
+        ));
+        if !self.digit_buf.is_empty() {
+            lines.push(format!("Jump prefix: {}▋", self.digit_buf));
+        }
 
         // Mode flags
         lines.push(format!(
@@ -496,9 +563,10 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
         use glutin_winit::GlWindow;
         use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+        let title = format!("rbv \u{2014} {}/{}", self.page + 1, self.page_count);
         let window = Arc::new(
             event_loop
-                .create_window(Window::default_attributes().with_title("rbv"))
+                .create_window(Window::default_attributes().with_title(&title))
                 .expect("create window"),
         );
         let size = window.inner_size();
@@ -711,8 +779,86 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                         self.export_wireframe_pdf();
                     }
                     KeyCode::Escape => {
-                        std::process::exit(0);
+                        // Cancel an in-progress digit prefix first; exit on bare Escape.
+                        if !self.digit_buf.is_empty() {
+                            self.digit_buf.clear();
+                            self.push_log("Jump cancelled".to_string());
+                        } else {
+                            std::process::exit(0);
+                        }
                     }
+
+                    // ── Page navigation ───────────────────────────────────────
+
+                    // Previous page — ArrowLeft / h / k / ArrowUp
+                    KeyCode::ArrowLeft | KeyCode::KeyH | KeyCode::KeyK | KeyCode::ArrowUp
+                        if !self.ctrl_held && !self.shift_held =>
+                    {
+                        let step = self.take_digit_step().max(1);
+                        let target = self.page.saturating_sub(step);
+                        self.navigate_to_page(target);
+                    }
+
+                    // Next page — ArrowRight / l / j / ArrowDown
+                    KeyCode::ArrowRight | KeyCode::KeyL | KeyCode::KeyJ | KeyCode::ArrowDown
+                        if !self.ctrl_held && !self.shift_held =>
+                    {
+                        let step = self.take_digit_step().max(1);
+                        let target = self.page.saturating_add(step);
+                        self.navigate_to_page(target);
+                    }
+
+                    // g — go to first page, or jump to a digit-prefixed page (1-indexed)
+                    // G (Shift+G) — go to last page
+                    KeyCode::KeyG if !self.ctrl_held => {
+                        if self.shift_held {
+                            self.digit_buf.clear();
+                            self.navigate_to_page(self.page_count.saturating_sub(1));
+                        } else if !self.digit_buf.is_empty() {
+                            // `5g` → page 5 (1-indexed → 0-indexed)
+                            let n = self.digit_buf.parse::<u32>().unwrap_or(1);
+                            self.digit_buf.clear();
+                            self.navigate_to_page(n.saturating_sub(1));
+                        } else {
+                            // bare `g` → first page
+                            self.navigate_to_page(0);
+                        }
+                    }
+
+                    // ── Digit prefix accumulation ─────────────────────────────
+                    // Digits (no modifier) accumulate in digit_buf for <N>g jumps
+                    // and <N>l/<N>h multi-step moves.
+                    // Digit0 without ctrl is safe here because the ctrl+0 zoom-reset
+                    // arm above already consumed the ctrl case.
+                    code @ (KeyCode::Digit0
+                    | KeyCode::Digit1
+                    | KeyCode::Digit2
+                    | KeyCode::Digit3
+                    | KeyCode::Digit4
+                    | KeyCode::Digit5
+                    | KeyCode::Digit6
+                    | KeyCode::Digit7
+                    | KeyCode::Digit8
+                    | KeyCode::Digit9)
+                        if !self.ctrl_held && !self.shift_held =>
+                    {
+                        let d = match code {
+                            KeyCode::Digit0 => '0',
+                            KeyCode::Digit1 => '1',
+                            KeyCode::Digit2 => '2',
+                            KeyCode::Digit3 => '3',
+                            KeyCode::Digit4 => '4',
+                            KeyCode::Digit5 => '5',
+                            KeyCode::Digit6 => '6',
+                            KeyCode::Digit7 => '7',
+                            KeyCode::Digit8 => '8',
+                            KeyCode::Digit9 => '9',
+                            _ => unreachable!(),
+                        };
+                        self.digit_buf.push(d);
+                        self.push_log(format!("Jump: {}▋", self.digit_buf));
+                    }
+
                     _ => {}
                 }
                 self.state.as_ref().unwrap().window.request_redraw();
@@ -840,6 +986,10 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
 pub fn run(file: PathBuf, page: u32, config: RenderConfig) {
     let pipeline = Arc::new(PdfPipeline::open(&file).expect("open PDF"));
 
+    let page_count = pipeline.doc().get_pages().len() as u32;
+    // Clamp page to valid range in case the caller passed an out-of-bounds index.
+    let page = page.min(page_count.saturating_sub(1));
+
     // Compute the page object ID once; reuse for both page_boxes and object_tree.
     let page_id = pipeline
         .doc()
@@ -895,6 +1045,7 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig) {
         file,
         pipeline,
         page,
+        page_count,
         config,
         state: None,
         pending_image: None,
@@ -918,6 +1069,7 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig) {
         icc_transform: None,
         _watcher: watcher,
         proxy,
+        digit_buf: String::new(),
     };
 
     event_loop.run_app(&mut viewer).expect("run app");
@@ -928,6 +1080,140 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig) {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+
+    // ── Navigation helpers (mirrors Viewer::navigate_to_page / take_digit_step) ─
+
+    struct NavState {
+        page: u32,
+        page_count: u32,
+        digit_buf: String,
+    }
+
+    impl NavState {
+        fn new(page: u32, page_count: u32) -> Self {
+            Self { page, page_count, digit_buf: String::new() }
+        }
+        fn navigate(&mut self, target: u32) {
+            let clamped = target.min(self.page_count.saturating_sub(1));
+            self.page = clamped;
+        }
+        fn take_digit_step(&mut self) -> u32 {
+            let n = self.digit_buf.parse::<u32>().unwrap_or(0);
+            self.digit_buf.clear();
+            n
+        }
+        fn push_digit(&mut self, d: char) {
+            self.digit_buf.push(d);
+        }
+    }
+
+    #[test]
+    fn navigate_next_page() {
+        let mut s = NavState::new(0, 5);
+        s.navigate(1);
+        assert_eq!(s.page, 1);
+    }
+
+    #[test]
+    fn navigate_clamps_to_last_page() {
+        let mut s = NavState::new(4, 5);
+        s.navigate(99);
+        assert_eq!(s.page, 4, "should clamp to page_count - 1");
+    }
+
+    #[test]
+    fn navigate_clamps_at_zero() {
+        let mut s = NavState::new(0, 5);
+        // simulate ArrowLeft with saturating_sub
+        let target = s.page.saturating_sub(1);
+        s.navigate(target);
+        assert_eq!(s.page, 0, "should stay at 0");
+    }
+
+    #[test]
+    fn navigate_single_page_document() {
+        let mut s = NavState::new(0, 1);
+        s.navigate(0);
+        assert_eq!(s.page, 0);
+        // Any forward request still clamps to 0
+        let target = s.page.saturating_add(1);
+        s.navigate(target);
+        assert_eq!(s.page, 0);
+    }
+
+    #[test]
+    fn digit_buf_step_parsed_correctly() {
+        let mut s = NavState::new(0, 100);
+        s.push_digit('5');
+        s.push_digit('3');
+        let step = s.take_digit_step().max(1);
+        assert_eq!(step, 53);
+        assert!(s.digit_buf.is_empty(), "buf should be cleared after take");
+    }
+
+    #[test]
+    fn digit_buf_empty_returns_zero() {
+        let mut s = NavState::new(0, 10);
+        assert_eq!(s.take_digit_step(), 0);
+    }
+
+    #[test]
+    fn numbered_page_jump_is_one_indexed() {
+        // User types "3g" → page index 2 (0-indexed)
+        let mut s = NavState::new(0, 10);
+        s.push_digit('3');
+        let n = s.digit_buf.parse::<u32>().unwrap_or(1);
+        s.digit_buf.clear();
+        s.navigate(n.saturating_sub(1));
+        assert_eq!(s.page, 2);
+    }
+
+    #[test]
+    fn g_without_prefix_goes_to_first_page() {
+        let mut s = NavState::new(4, 10);
+        // bare `g` → first page
+        s.navigate(0);
+        assert_eq!(s.page, 0);
+    }
+
+    #[test]
+    fn shift_g_goes_to_last_page() {
+        let mut s = NavState::new(0, 10);
+        s.navigate(s.page_count.saturating_sub(1));
+        assert_eq!(s.page, 9);
+    }
+
+    #[test]
+    fn multi_step_forward_with_digit_prefix() {
+        // `3l` → move 3 pages forward from page 2 → page 5
+        let mut s = NavState::new(2, 10);
+        s.push_digit('3');
+        let step = s.take_digit_step().max(1);
+        s.navigate(s.page.saturating_add(step));
+        assert_eq!(s.page, 5);
+    }
+
+    #[test]
+    fn multi_step_backward_clamps_at_zero() {
+        // `9h` from page 2 → saturates at 0
+        let mut s = NavState::new(2, 10);
+        s.push_digit('9');
+        let step = s.take_digit_step().max(1);
+        s.navigate(s.page.saturating_sub(step));
+        assert_eq!(s.page, 0);
+    }
+
+    #[test]
+    fn escape_clears_digit_buf() {
+        let mut s = NavState::new(0, 10);
+        s.push_digit('7');
+        assert!(!s.digit_buf.is_empty());
+        // simulate Escape cancelling the prefix
+        s.digit_buf.clear();
+        assert!(s.digit_buf.is_empty());
+        // page unchanged
+        assert_eq!(s.page, 0);
+    }
 
     // ── ZoomState (mirrors Viewer::apply_zoom) ────────────────────────────────
 
