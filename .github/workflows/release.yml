@@ -494,6 +494,9 @@ jobs:
           cp "$SRC" "$DEST"
           test -f "$DEST" || { echo "ERROR: $DEST is not a regular file after copy"; ls -la rbara-gui/resources; exit 1; }
 
+      - name: Install create-dmg
+        run: brew install create-dmg
+
       - name: Build rbv
         run: cargo build --release -p rbv --target ${{ matrix.target }}
 
