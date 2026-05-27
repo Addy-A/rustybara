@@ -158,6 +158,12 @@ export async function openInViewer(path, page = 0, dpi = 150) {
   return await invoke('open_in_viewer', { path, page, dpi })
 }
 
+// Notify a running rbv process of a new file path. No-ops silently if rbv is
+// not open — safe to fire-and-forget without awaiting.
+export async function notifyViewer(path) {
+  return await invoke('notify_viewer', { path })
+}
+
 // Parses a 1-indexed page string like "1, 3-5, 7" into 0-indexed numbers for the backend.
 export function parsePageNums(input) {
   return [

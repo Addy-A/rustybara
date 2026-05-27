@@ -553,7 +553,15 @@
         'stitchpages',
       ])
       if (SWAP_ACTIONS.has(activeAction) && result.output_paths.length > 0) {
+        // Capture whether the active file was scoped before the swap so we know
+        // if its path will change after replaceProcessedFiles updates the buffer.
+        const activeWasScoped = activeFile !== null && files[activeFile]?.scoped
         await replaceProcessedFiles(result.output_paths)
+        // If rbv is open and the active file was processed, push the new path.
+        if (activeWasScoped && activeFile !== null) {
+          const updatedPath = files[activeFile]?.path
+          if (updatedPath) api.notifyViewer(updatedPath).catch(() => {})
+        }
       }
     } catch (e) {
       actionLog = [

@@ -829,6 +829,33 @@ pub fn stitch_pages(
     })
 }
 
+/// Notify the persistent rbv process of a new file path, but **only if rbv is
+/// already running**.  Unlike [`open_in_viewer_persistent`] this never spawns a
+/// new process — it is intended for auto-update after a processing action.
+#[tauri::command]
+pub fn notify_viewer(path: String, handle: State<'_, ViewerHandle>) -> Result<(), String> {
+    use std::io::Write;
+    let mut guard = handle
+        .0
+        .lock()
+        .map_err(|_| "viewer handle mutex poisoned".to_string())?;
+
+    let alive = guard
+        .as_mut()
+        .map_or(false, |h| matches!(h.child.try_wait(), Ok(None)));
+
+    if alive {
+        let h = guard.as_mut().unwrap();
+        let cmd = format!("OPEN {path}\n");
+        h.stdin
+            .write_all(cmd.as_bytes())
+            .and_then(|_| h.stdin.flush())
+            .map_err(|e| format!("IPC notify failed (rbv may have closed): {e}"))?;
+    }
+    // rbv not running — silently succeed; caller fire-and-forgets this.
+    Ok(())
+}
+
 #[tauri::command]
 pub fn open_in_viewer(
     app: tauri::AppHandle,

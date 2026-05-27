@@ -649,8 +649,20 @@ impl SkiaRenderer {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
+        use std::num::NonZeroU32;
         self.width = width.max(1);
         self.height = height.max(1);
+        // Explicitly resize the GL drawable before rebuilding the Skia surface.
+        // On macOS (CGL) and Linux (EGL/GLX) the surface does not automatically
+        // track the window size — without this call the OS compositor stretches
+        // the stale framebuffer to fill the new window, distorting the image.
+        // WGL (Windows) auto-tracks the HWND, so this is effectively a no-op there.
+        if let (Some(w), Some(h)) = (
+            NonZeroU32::new(self.width),
+            NonZeroU32::new(self.height),
+        ) {
+            self.gl_surface.resize(&self.gl_context, w, h);
+        }
         self.skia_surface = make_skia_surface(&mut self.gr_context, self.width, self.height)
     }
 
