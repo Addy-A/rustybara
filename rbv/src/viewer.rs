@@ -37,8 +37,14 @@ pub enum IpcCmd {
 }
 
 pub enum ViewerEvent {
-    PreviewReady { page: u32, image: DynamicImage },
-    PageReady { page: u32, image: DynamicImage },
+    PreviewReady {
+        page: u32,
+        image: DynamicImage,
+    },
+    PageReady {
+        page: u32,
+        image: DynamicImage,
+    },
     /// A plate separation render has finished.  The `plate` snapshot allows the
     /// viewer to discard stale results when the user changes plates mid-render.
     PlateReady {
@@ -186,26 +192,53 @@ impl Viewer {
         let tinted = self.plate_tinted;
         let proxy = self.proxy.clone();
 
-        match &plate {
-            PlateMode::All => return, // nothing to do
+        match plate {
+            PlateMode::All => (), // nothing to do
 
             PlateMode::Cmyk(ch) => {
-                let Some(src) = self.current_image.clone() else {
+                let Some(tree) = self.object_tree.as_ref() else {
                     return;
                 };
-                let ch = *ch;
+                let Some(media) = self.page_boxes.as_ref().map(|b| b.media_box) else {
+                    return;
+                };
+                let Some(src) = self.current_image.as_ref() else {
+                    return;
+                };
+                let (img_w, img_h) = src.dimensions();
+                let objects: Vec<PageObject> = tree.objects.clone();
+                // Clone the rasterized page so the thread can sub-sample image
+                // object regions through ICC without borrowing self.
+                let page_image = src.clone();
+                // Clone glyph outlines so the thread can render actual text paths.
+                let glyph_outlines: Vec<PositionedGlyph> = self
+                    .glyph_outlines
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .to_vec();
+                let tinted = self.plate_tinted;
+                let proxy = self.proxy.clone();
+                let page = self.page;
+
                 std::thread::spawn(move || {
-                    let Some(transform) = sep_build_icc_transform() else {
-                        return;
-                    };
+                    let transform = sep_build_icc_transform();
                     let plate_ch = match ch {
-                        rustybara::objects::CmykChannel::Cyan => PlateChannel::Cyan,
-                        rustybara::objects::CmykChannel::Magenta => PlateChannel::Magenta,
-                        rustybara::objects::CmykChannel::Yellow => PlateChannel::Yellow,
-                        rustybara::objects::CmykChannel::Black => PlateChannel::Black,
+                        CmykChannel::Cyan => PlateChannel::Cyan,
+                        CmykChannel::Magenta => PlateChannel::Magenta,
+                        CmykChannel::Yellow => PlateChannel::Yellow,
+                        CmykChannel::Black => PlateChannel::Black,
                     };
-                    let image =
-                        crate::separation::render_cmyk_plate(&src, plate_ch, tinted, &transform);
+                    let image = crate::separation::render_cmyk_plate(
+                        &objects,
+                        &media,
+                        plate_ch,
+                        tinted,
+                        transform.as_ref(),
+                        Some(&page_image),
+                        &glyph_outlines,
+                        img_w,
+                        img_h,
+                    );
                     let _ = proxy.send_event(ViewerEvent::PlateReady {
                         page,
                         plate: PlateMode::Cmyk(ch),
@@ -226,16 +259,21 @@ impl Viewer {
                     return;
                 };
                 let (img_w, img_h) = src.dimensions();
-                let selector =
-                    rustybara::objects::InkSelector::Separation(name.clone());
+                let selector = rustybara::objects::InkSelector::Separation(name.clone());
                 let matched: Vec<PageObject> = filter_by_ink(tree, &selector)
                     .into_iter()
                     .cloned()
                     .collect();
+                // Clone glyph outlines for spot plate text rendering.
+                let glyph_outlines: Vec<PositionedGlyph> = self
+                    .glyph_outlines
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .to_vec();
                 let name = name.clone();
                 std::thread::spawn(move || {
                     let image = crate::separation::render_spot_plate(
-                        &matched, &media, tinted, None, img_w, img_h,
+                        &matched, &media, tinted, None, &glyph_outlines, img_w, img_h,
                     );
                     let _ = proxy.send_event(ViewerEvent::PlateReady {
                         page,
@@ -840,7 +878,6 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                         &mut self.active_plate,
                         &mut self.plate_tinted,
                         &self.plate_spot_names,
-                        self.object_tree.as_ref(),
                         self.selected_object.as_ref(),
                         self.color_info.as_ref(),
                         &mut self.show_tools_panel,
@@ -886,8 +923,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 }
 
                 // ── Phase 4: tessellate ───────────────────────────────────────
-                let egui_primitives =
-                    self.egui_ctx.tessellate(shapes, pixels_per_point);
+                let egui_primitives = self.egui_ctx.tessellate(shapes, pixels_per_point);
 
                 // ── Phase 5: build debug overlay (immutable borrows) ──────────
                 let debug_lines: Option<Vec<String>> = if self.debug_mode {
@@ -923,13 +959,11 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 // Plate filter — pre-compute before the wireframe block so the owned
                 // Vec<PageObject> outlives the PageWireframe borrow below.
                 // Only allocated when a non-All plate is active AND the tree is loaded.
-                let filtered_for_plate: Option<Vec<PageObject>> = self
-                    .active_plate
-                    .to_ink_selector()
-                    .and_then(|sel| {
-                        self.object_tree.as_ref().map(|tree| {
-                            filter_by_ink(tree, &sel).into_iter().cloned().collect()
-                        })
+                let filtered_for_plate: Option<Vec<PageObject>> =
+                    self.active_plate.to_ink_selector().and_then(|sel| {
+                        self.object_tree
+                            .as_ref()
+                            .map(|tree| filter_by_ink(tree, &sel).into_iter().cloned().collect())
                     });
 
                 // Wireframe: Acrobat-style full-page mode (W key).
@@ -941,9 +975,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                         .as_ref()
                         .zip(self.page_boxes.as_ref())
                         .map(|(tree, boxes)| PageWireframe {
-                            objects: filtered_for_plate
-                                .as_deref()
-                                .unwrap_or(&tree.objects),
+                            objects: filtered_for_plate.as_deref().unwrap_or(&tree.objects),
                             media_box: &boxes.media_box,
                             selected: self.selected_object.as_ref(),
                             glyph_outlines: self.glyph_outlines.as_deref().unwrap_or(&[]),
@@ -970,7 +1002,6 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                     overlays.as_ref(),
                     wireframe.as_ref(),
                     sample_screen_pos,
-                    self.color_info.as_ref(),
                     debug_overlay.as_ref(),
                 );
 
@@ -1376,7 +1407,10 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig, listen: bool) {
     let page_boxes = page_id.and_then(|id| PageBoxes::read(pipeline.doc(), id).ok());
     let object_tree = page_id.and_then(|id| build_object_tree(pipeline.doc(), id).ok());
     let glyph_outlines = page_id.and_then(|id| outline_page_text(pipeline.doc(), id).ok());
-    let plate_spot_names = object_tree.as_ref().map(extract_spot_names).unwrap_or_default();
+    let plate_spot_names = object_tree
+        .as_ref()
+        .map(extract_spot_names)
+        .unwrap_or_default();
 
     let event_loop = EventLoop::<ViewerEvent>::with_user_event()
         .build()
@@ -1502,7 +1536,6 @@ fn build_egui_ui(
     active_plate: &mut PlateMode,
     plate_tinted: &mut bool,
     spot_names: &[String],
-    object_tree: Option<&ObjectTree>,
     selected: Option<&PageObject>,
     color_info: Option<&ColorPanel>,
     show_panel: &mut bool,
@@ -1516,9 +1549,11 @@ fn build_egui_ui(
     let btn_resp = egui::Area::new(egui::Id::new("tools_toggle"))
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 8.0))
         .show(ctx, |ui| {
-            let label = if *show_panel { "✕" } else { "⚙" };
+            // Use egui's own ▶/◀ geometric shapes (same block as CollapsingHeader arrows —
+            // guaranteed to render in egui's bundled NotoSans font).
+            let label = if *show_panel { "◀" } else { "▶" };
             if ui
-                .button(egui::RichText::new(label).size(16.0))
+                .button(egui::RichText::new(label).size(14.0))
                 .on_hover_text(if *show_panel {
                     "Close Prepress Tools"
                 } else {
@@ -1547,188 +1582,191 @@ fn build_egui_ui(
                 .id_salt("panel_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-            // ── Plate view ────────────────────────────────────────────────────
-            ui.heading("Plate View");
-            ui.separator();
+                    // ── Plate view ────────────────────────────────────────────────────
+                    ui.heading("Plate View");
+                    ui.separator();
 
-            ui.radio_value(active_plate, PlateMode::All, "All");
+                    ui.radio_value(active_plate, PlateMode::All, "All");
 
-            ui.add_space(4.0);
-            ui.label(
-                egui::RichText::new("Process")
-                    .color(egui::Color32::GRAY)
-                    .size(11.0),
-            );
-            for (label, ch) in [
-                ("Cyan", CmykChannel::Cyan),
-                ("Magenta", CmykChannel::Magenta),
-                ("Yellow", CmykChannel::Yellow),
-                ("Black", CmykChannel::Black),
-            ] {
-                ui.radio_value(active_plate, PlateMode::Cmyk(ch), label);
-            }
-
-            if !spot_names.is_empty() {
-                ui.add_space(4.0);
-                ui.label(
-                    egui::RichText::new("Spot Colors")
-                        .color(egui::Color32::GRAY)
-                        .size(11.0),
-                );
-                // No inner scroll area — the outer panel scroll handles overflow.
-                for name in spot_names {
-                    ui.radio_value(
-                        active_plate,
-                        PlateMode::Spot(name.clone()),
-                        name.as_str(),
-                    );
-                }
-            }
-
-            // Object count for the active plate.
-            if let Some(selector) = active_plate.to_ink_selector() {
-                if let Some(tree) = object_tree {
-                    let count = filter_by_ink(tree, &selector).len();
                     ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new(format!("↳ {count} object(s) on plate"))
-                            .italics()
+                        egui::RichText::new("Process")
+                            .color(egui::Color32::GRAY)
                             .size(11.0),
                     );
-                }
-            }
+                    for (label, ch) in [
+                        ("Cyan", CmykChannel::Cyan),
+                        ("Magenta", CmykChannel::Magenta),
+                        ("Yellow", CmykChannel::Yellow),
+                        ("Black", CmykChannel::Black),
+                    ] {
+                        ui.radio_value(active_plate, PlateMode::Cmyk(ch), label);
+                    }
 
-            // ── Plate display options ─────────────────────────────────────────
-            ui.add_space(6.0);
-            ui.label(
-                egui::RichText::new("Display")
-                    .color(egui::Color32::GRAY)
-                    .size(11.0),
-            );
-            ui.checkbox(plate_tinted, "Ink-tinted view");
-            if *plate_tinted && *active_plate != PlateMode::All {
-                ui.label(
-                    egui::RichText::new("Preview uses ink approximation colors")
-                        .color(egui::Color32::from_rgb(180, 180, 100))
-                        .italics()
-                        .size(10.0),
-                );
-            }
-
-            // ── Keyboard shortcuts reference ──────────────────────────────────
-            ui.separator();
-            egui::CollapsingHeader::new(
-                egui::RichText::new("⌨ Keyboard Shortcuts").size(12.0),
-            )
-            .default_open(false)
-            .show(ui, |ui| {
-                egui::Grid::new("shortcuts_grid")
-                    .num_columns(2)
-                    .spacing([12.0, 3.0])
-                    .striped(true)
-                    .show(ui, |ui| {
-                        let key = |ui: &mut egui::Ui, k: &str| {
-                            ui.label(
-                                egui::RichText::new(k)
-                                    .monospace()
-                                    .color(egui::Color32::from_rgb(220, 180, 80)),
+                    if !spot_names.is_empty() {
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new("Spot Colors")
+                                .color(egui::Color32::GRAY)
+                                .size(11.0),
+                        );
+                        // No inner scroll area — the outer panel scroll handles overflow.
+                        for name in spot_names {
+                            ui.radio_value(
+                                active_plate,
+                                PlateMode::Spot(name.clone()),
+                                name.as_str(),
                             );
-                        };
-                        let desc = |ui: &mut egui::Ui, d: &str| {
-                            ui.label(egui::RichText::new(d).size(11.0));
-                            ui.end_row();
-                        };
+                        }
+                    }
 
-                        key(ui, "W"); desc(ui, "Toggle wireframe overlay");
-                        key(ui, "O"); desc(ui, "Toggle trim/bleed box overlay");
-                        key(ui, "Esc"); desc(ui, "Quit");
-                        key(ui, "← / H / K / ↑"); desc(ui, "Previous page");
-                        key(ui, "→ / L / J / ↓"); desc(ui, "Next page");
-                        key(ui, "G"); desc(ui, "First page");
-                        key(ui, "Shift+G"); desc(ui, "Last page");
-                        key(ui, "<N>G"); desc(ui, "Jump to page N");
-                        key(ui, "Ctrl+Scroll"); desc(ui, "Zoom in/out");
-                        key(ui, "Ctrl + ="); desc(ui, "Zoom in");
-                        key(ui, "Ctrl + -"); desc(ui, "Zoom out");
-                        key(ui, "Ctrl + 0"); desc(ui, "Reset zoom");
-                        key(ui, "Ctrl+Shift+D"); desc(ui, "Toggle debug overlay");
-                        key(ui, "Ctrl+Shift+E"); desc(ui, "Export wireframe PDF");
-                        key(ui, "Click"); desc(ui, "Inspect object");
-                        key(ui, "Drag"); desc(ui, "Pan");
+                    // ── Plate display options ─────────────────────────────────────────
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new("Display")
+                            .color(egui::Color32::GRAY)
+                            .size(11.0),
+                    );
+                    ui.checkbox(plate_tinted, "Ink-tinted view");
+                    if *plate_tinted && *active_plate != PlateMode::All {
+                        ui.label(
+                            egui::RichText::new("Preview uses ink approximation colors")
+                                .color(egui::Color32::from_rgb(180, 180, 100))
+                                .italics()
+                                .size(10.0),
+                        );
+                    }
+
+                    // ── Keyboard shortcuts reference ──────────────────────────────────
+                    ui.separator();
+                    egui::CollapsingHeader::new(
+                        egui::RichText::new("Keyboard Shortcuts").size(12.0),
+                    )
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        egui::Grid::new("shortcuts_grid")
+                            .num_columns(2)
+                            .spacing([12.0, 3.0])
+                            .striped(true)
+                            .show(ui, |ui| {
+                                let key = |ui: &mut egui::Ui, k: &str| {
+                                    ui.label(
+                                        egui::RichText::new(k)
+                                            .monospace()
+                                            .color(egui::Color32::from_rgb(220, 180, 80)),
+                                    );
+                                };
+                                let desc = |ui: &mut egui::Ui, d: &str| {
+                                    ui.label(egui::RichText::new(d).size(11.0));
+                                    ui.end_row();
+                                };
+
+                                key(ui, "W");
+                                desc(ui, "Toggle wireframe overlay");
+                                key(ui, "O");
+                                desc(ui, "Toggle trim/bleed box overlay");
+                                key(ui, "Esc");
+                                desc(ui, "Quit");
+                                key(ui, "← / H / K / ↑");
+                                desc(ui, "Previous page");
+                                key(ui, "→ / L / J / ↓");
+                                desc(ui, "Next page");
+                                key(ui, "G");
+                                desc(ui, "First page");
+                                key(ui, "Shift+G");
+                                desc(ui, "Last page");
+                                key(ui, "<N>G");
+                                desc(ui, "Jump to page N");
+                                key(ui, "Ctrl+Scroll");
+                                desc(ui, "Zoom in/out");
+                                key(ui, "Ctrl + =");
+                                desc(ui, "Zoom in");
+                                key(ui, "Ctrl + -");
+                                desc(ui, "Zoom out");
+                                key(ui, "Ctrl + 0");
+                                desc(ui, "Reset zoom");
+                                key(ui, "Ctrl+Shift+D");
+                                desc(ui, "Toggle debug overlay");
+                                key(ui, "Ctrl+Shift+E");
+                                desc(ui, "Export wireframe PDF");
+                                key(ui, "Click");
+                                desc(ui, "Inspect object");
+                                key(ui, "Drag");
+                                desc(ui, "Pan");
+                            });
                     });
-            });
 
-            // ── Selection ─────────────────────────────────────────────────────
-            ui.separator();
-            ui.heading("Selection");
+                    // ── Selection ─────────────────────────────────────────────────────
+                    ui.separator();
+                    ui.heading("Selection");
 
-            let Some(obj) = selected else {
-                ui.label(
-                    egui::RichText::new("Click an object to inspect it")
-                        .color(egui::Color32::GRAY)
-                        .italics(),
-                );
-                return;
-            };
+                    let Some(obj) = selected else {
+                        ui.label(
+                            egui::RichText::new("Click an object to inspect it")
+                                .color(egui::Color32::GRAY)
+                                .italics(),
+                        );
+                        return;
+                    };
 
-            ui.label(format!("Kind: {:?}", obj.kind));
+                    ui.label(format!("Kind: {:?}", obj.kind));
 
-            // Overprint state.
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new("Overprint").size(12.0).strong());
-            egui::Grid::new("overprint_grid")
-                .num_columns(2)
-                .spacing([8.0, 2.0])
-                .show(ui, |ui| {
-                    ui.label("Fill:");
-                    ui.label(format!("{}", obj.overprint.fill_overprint));
-                    ui.end_row();
-                    ui.label("Stroke:");
-                    ui.label(format!("{}", obj.overprint.stroke_overprint));
-                    ui.end_row();
-                    ui.label("Mode:");
-                    ui.label(format!("{}", obj.overprint.overprint_mode));
-                    ui.end_row();
-                });
+                    // Overprint state.
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new("Overprint").size(12.0).strong());
+                    egui::Grid::new("overprint_grid")
+                        .num_columns(2)
+                        .spacing([8.0, 2.0])
+                        .show(ui, |ui| {
+                            ui.label("Fill:");
+                            ui.label(format!("{}", obj.overprint.fill_overprint));
+                            ui.end_row();
+                            ui.label("Stroke:");
+                            ui.label(format!("{}", obj.overprint.stroke_overprint));
+                            ui.end_row();
+                            ui.label("Mode:");
+                            ui.label(format!("{}", obj.overprint.overprint_mode));
+                            ui.end_row();
+                        });
 
-            // PDF color values.
-            if let Some(fill) = &obj.fill_color {
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new("Fill Color").size(12.0).strong());
-                show_pdf_color(ui, fill);
-            }
-            if let Some(stroke) = &obj.stroke_color {
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new("Stroke Color").size(12.0).strong());
-                show_pdf_color(ui, stroke);
-            }
+                    // PDF color values.
+                    if let Some(fill) = &obj.fill_color {
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new("Fill Color").size(12.0).strong());
+                        show_pdf_color(ui, fill);
+                    }
+                    if let Some(stroke) = &obj.stroke_color {
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new("Stroke Color").size(12.0).strong());
+                        show_pdf_color(ui, stroke);
+                    }
 
-            // ICC-sampled pixel readout.
-            if let Some(panel) = color_info {
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new("Sampled Pixel").size(12.0).strong());
-                let [r, g, b, a] = panel.pixel_rgba;
-                ui.horizontal(|ui| {
-                    // Use a painted rect — "██" (U+2588) is absent from egui's
-                    // bundled font and shows as a missing-glyph box.
-                    let swatch_color = egui::Color32::from_rgba_premultiplied(r, g, b, a);
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(16.0, 12.0), egui::Sense::hover());
-                    ui.painter().rect_filled(rect, 2.0, swatch_color);
-                    ui.label(format!("#{r:02X}{g:02X}{b:02X}"));
-                });
-                if let Some([c, m, y, k]) = panel.pixel_cmyk {
-                    ui.label(format!(
-                        "CMYK  {:.0}%  {:.0}%  {:.0}%  {:.0}%",
-                        c * 100.0,
-                        m * 100.0,
-                        y * 100.0,
-                        k * 100.0
-                    ));
-                }
-            }
-            // Close the outer ScrollArea
-            }); // end ScrollArea
+                    // ICC-sampled pixel readout.
+                    if let Some(panel) = color_info {
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new("Sampled Pixel").size(12.0).strong());
+                        let [r, g, b, a] = panel.pixel_rgba;
+                        ui.horizontal(|ui| {
+                            // Use a painted rect — "██" (U+2588) is absent from egui's
+                            // bundled font and shows as a missing-glyph box.
+                            let swatch_color = egui::Color32::from_rgba_premultiplied(r, g, b, a);
+                            let (rect, _) = ui
+                                .allocate_exact_size(egui::vec2(16.0, 12.0), egui::Sense::hover());
+                            ui.painter().rect_filled(rect, 2.0, swatch_color);
+                            ui.label(format!("#{r:02X}{g:02X}{b:02X}"));
+                        });
+                        if let Some([c, m, y, k]) = panel.pixel_cmyk {
+                            ui.label(format!(
+                                "CMYK  {:.0}%  {:.0}%  {:.0}%  {:.0}%",
+                                c * 100.0,
+                                m * 100.0,
+                                y * 100.0,
+                                k * 100.0
+                            ));
+                        }
+                    }
+                    // Close the outer ScrollArea
+                }); // end ScrollArea
         });
 
     // Return true if the pointer was inside the panel this frame.

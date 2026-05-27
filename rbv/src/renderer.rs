@@ -434,78 +434,6 @@ fn draw_sample_marker(canvas: &skia_safe::Canvas, screen_pos: [f32; 2]) {
     canvas.draw_line((cx + INNER, cy), (cx + OUTER, cy), &accent);
 }
 
-/// Draw the diagnostic color panel in the bottom-left corner.
-///
-/// Three rows (top-to-bottom):
-///   1. Sampled pixel RGBA
-///   2. PDF object fill/stroke color from the content stream
-///   3. ICC-converted CMYK estimate (sRGB or AdobeRGB → US Web Coated SWOP)
-fn draw_color_panel(canvas: &skia_safe::Canvas, panel: &ColorPanel, _win_w: f32, win_h: f32) {
-    let panel_w = 300.0_f32;
-    let panel_h = 82.0_f32;
-    let margin = 10.0_f32;
-    let x = margin;
-    let y = win_h - panel_h - margin;
-
-    // Semi-transparent dark background
-    let mut bg = skia_safe::Paint::default();
-    bg.set_color(skia_safe::Color::from_argb(210, 15, 15, 15));
-    bg.set_anti_alias(true);
-    canvas.draw_rect(skia_safe::Rect::from_xywh(x, y, panel_w, panel_h), &bg);
-
-    // Thin border
-    let mut border = skia_safe::Paint::default();
-    border.set_style(skia_safe::paint::Style::Stroke);
-    border.set_stroke_width(1.0);
-    border.set_color(skia_safe::Color::from_argb(180, 200, 200, 200));
-    canvas.draw_rect(skia_safe::Rect::from_xywh(x, y, panel_w, panel_h), &border);
-
-    let font = make_ui_font(11.0_f32);
-    let mut txt = skia_safe::Paint::default();
-    txt.set_color(skia_safe::Color::from_argb(255, 210, 210, 210));
-    txt.set_anti_alias(true);
-
-    // Row 1 — sampled pixel RGBA
-    let [r, g, b, a] = panel.pixel_rgba;
-    let pixel_str = format!("Pixel   R:{r}  G:{g}  B:{b}  A:{a}");
-    if let Some(blob) = skia_safe::TextBlob::from_str(&pixel_str, &font) {
-        canvas.draw_text_blob(&blob, (x + 8.0, y + 18.0), &txt);
-    }
-
-    // Row 2 — PDF object color from the content stream
-    let color_str = match &panel.pdf_color {
-        Some(PdfColor::DeviceGray(v)) => format!("PdfColor  Gray: {v:.3}"),
-        Some(PdfColor::DeviceRgb(r, g, b)) => {
-            format!("PdfColor  RGB: {r:.3}  {g:.3}  {b:.3}")
-        }
-        Some(PdfColor::DeviceCmyk(c, m, yv, k)) => {
-            format!("PdfColor  CMYK: {c:.2}  {m:.2}  {yv:.2}  {k:.2}")
-        }
-        Some(PdfColor::Separation { name, tint }) => {
-            format!("PdfColor Spot: {name} @{tint:.3}")
-        }
-        None => "PdfColor  n/a".to_string(),
-    };
-    if let Some(blob) = skia_safe::TextBlob::from_str(&color_str, &font) {
-        canvas.draw_text_blob(&blob, (x + 8.0, y + 40.0), &txt);
-    }
-
-    // Row 3 — ICC pixel estimate (sRGB|AdobeRGB → US Web Coated SWOP), percent format
-    let cmyk_str = match panel.pixel_cmyk {
-        Some([c, m, yv, k]) => format!(
-            "ICC CMYK  C:{:.0}%  M:{:.0}%  Y:{:.0}%  K:{:.0}%",
-            c * 100.0,
-            m * 100.0,
-            yv * 100.0,
-            k * 100.0,
-        ),
-        None => "ICC CMYK  —".to_string(),
-    };
-    if let Some(blob) = skia_safe::TextBlob::from_str(&cmyk_str, &font) {
-        canvas.draw_text_blob(&blob, (x + 8.0, y + 62.0), &txt);
-    }
-}
-
 /// Draw the debug diagnostic overlay in the top-right corner of the window.
 ///
 /// Renders each line of `lines` in a semi-transparent dark panel using a
@@ -656,7 +584,6 @@ impl SkiaRenderer {
         overlays: Option<&OverlayData<'_>>,
         wireframe: Option<&PageWireframe<'_>>,
         sample_marker: Option<[f32; 2]>,
-        color_panel: Option<&ColorPanel>,
         debug: Option<&DebugOverlay<'_>>,
     ) {
         let canvas = self.skia_surface.canvas();
@@ -703,13 +630,9 @@ impl SkiaRenderer {
             }
         }
 
-        // Sampling crosshair — drawn before the text panel so the panel sits on top.
+        // Sampling crosshair.
         if let Some(pos) = sample_marker {
             draw_sample_marker(canvas, pos);
-        }
-
-        if let Some(panel) = color_panel {
-            draw_color_panel(canvas, panel, win_w, win_h);
         }
 
         // Debug overlay renders on top of everything, including the loading state.
