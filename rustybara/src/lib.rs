@@ -75,6 +75,7 @@ pub mod pipeline;
 #[cfg(feature = "raster")]
 pub mod raster;
 pub mod stream;
+pub mod xmp;
 
 pub use error::Error;
 pub use error::Result;

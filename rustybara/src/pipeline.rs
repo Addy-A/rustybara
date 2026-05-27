@@ -232,6 +232,103 @@ impl PdfPipeline {
         Ok(Self { doc })
     }
 
+    /// Embeds rustybara processing metadata into the document's XMP stream.
+    ///
+    /// Call this after all processing operations and before [`Self::save_pdf`].
+    /// If the document already has na XMP stream, the existing `rbara:` block is
+    /// replaced in-place; all other XMP namespaces (`dc:`, `pdf:`, etc.) are
+    /// preserved. If the input was previously proessed by rustybara, its
+    /// `rbara:uuid` is promoted to `rbara:parentId`, forming a lineage chain.
+    ///
+    /// # Arguments
+    ///
+    /// * `source_hash` – `"sha256:<hex>"` computed by [`crate::xmp::hash_file`]
+    /// on the original input bytes **before** any mutations.
+    /// * `timestamp` – ISO 8601 string (supplied by the caller; chrono is not a
+    /// rustybara dependency).
+    /// * `ops` – ordered `(name, params)` pairs, e.g.
+    ///   `&[("resize", "bleed_in=0.125"), ("trim", "")]`. Empty params are omitted.
+    ///
+    ///   Silently skips embedding if the PDF catalog cannot be located (malformed input)
+    ///   rather than propagating an error through the action pipeline.
+    pub fn embed_metadata(
+        &mut self,
+        source_hash: &str,
+        timestamp: &str,
+        ops: &[(&str, &str)],
+    ) -> crate::Result<&mut Self> {
+        use crate::xmp::{self, RbaraXmpBlock};
+        use lopdf::{Dictionary, Object, Stream};
+
+        let catalog_id = match self
+            .doc
+            .trailer
+            .get(b"Root")
+            .ok()
+            .and_then(|o| o.as_reference().ok())
+        {
+            Some(id) => id,
+            None => return Ok(self),
+        };
+
+        let (existing_bytes, meta_ref) = {
+            let cat = match self.doc.get_object(catalog_id) {
+                Ok(Object::Dictionary(d)) => d.clone(),
+                _ => return Ok(self),
+            };
+            let meta_ref = cat.get(b"Metadata").ok().and_then(|o| o.as_reference().ok());
+            let bytes = match meta_ref.and_then(|id| self.doc.get_object(id).ok()) {
+                Some(Object::Stream(s)) => s
+                    .decompressed_content()
+                    .unwrap_or_else(|_| s.content.clone()),
+                _ => Vec::new(),
+            };
+            (bytes, meta_ref)
+        };
+
+        let block = RbaraXmpBlock {
+            uuid: xmp::generate_uuid(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            timestamp: timestamp.to_string(),
+            source_hash: source_hash.to_string(),
+            parent_id: xmp::read_parent_id(&existing_bytes),
+            ops: ops
+                .iter()
+                .map(|(name, params)| {
+                    if params.is_empty() {
+                        name.to_string()
+                    } else {
+                        format!("{name}({params})")
+                    }
+                })
+                .collect(),
+        };
+
+        let xmp_bytes = if existing_bytes.is_empty() {
+            xmp::create_xmp(&block)
+        } else {
+            xmp::inject_into_xmp(&String::from_utf8_lossy(&existing_bytes), &block)
+        }
+        .into_bytes();
+
+        if let Some(meta_id) = meta_ref {
+            if let Ok(Object::Stream(s)) = self.doc.get_object_mut(meta_id) {
+                s.set_plain_content(xmp_bytes);
+            }
+        } else {
+            let mut dict = Dictionary::new();
+            dict.set("Type", Object::Name(b"Metadata".to_vec()));
+            dict.set("Subtype", Object::Name(b"XML".to_vec()));
+            let stream = Stream::new(dict, xmp_bytes);
+            let meta_id = self.doc.add_object(Object::Stream(stream));
+            if let Ok(Object::Dictionary(cat)) = self.doc.get_object_mut(catalog_id) {
+                cat.set("Metadata", Object::Reference(meta_id));
+            }
+        }
+
+        Ok(self)
+    }
+
     /// Converts all text on every page to outlined vector paths.
     ///
     /// Each character is replaced with its glyph outline as PDF path operators (`m`/`l`/`c`/`h`/`f`).
@@ -274,7 +371,10 @@ impl PdfPipeline {
                 })
                 .collect();
 
-            let mut combined = Content { operations: filtered }.encode()?;
+            let mut combined = Content {
+                operations: filtered,
+            }
+            .encode()?;
 
             if !glyphs.is_empty() {
                 let mut glyph_stream = glyphs_to_content_stream(&glyphs);
@@ -426,7 +526,11 @@ impl PdfPipeline {
     pub fn flatten_spots(&mut self) -> crate::Result<u32> {
         use rustybara_icc::pdf::flatten_spot_colors;
         use rustybara_icc::RenderingIntent;
-        Ok(flatten_spot_colors(&mut self.doc, None, RenderingIntent::RelativeColorimetric)?)
+        Ok(flatten_spot_colors(
+            &mut self.doc,
+            None,
+            RenderingIntent::RelativeColorimetric,
+        )?)
     }
 
     /// Flattens spot colors using the supplied ICC destination profile bytes.
@@ -437,7 +541,11 @@ impl PdfPipeline {
     pub fn flatten_spots_with_icc(&mut self, dst_icc: Option<&[u8]>) -> crate::Result<u32> {
         use rustybara_icc::pdf::flatten_spot_colors;
         use rustybara_icc::RenderingIntent;
-        Ok(flatten_spot_colors(&mut self.doc, dst_icc, RenderingIntent::RelativeColorimetric)?)
+        Ok(flatten_spot_colors(
+            &mut self.doc,
+            dst_icc,
+            RenderingIntent::RelativeColorimetric,
+        )?)
     }
 
     /// Applies an ICC color space conversion to every page in the document.

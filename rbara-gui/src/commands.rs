@@ -37,6 +37,11 @@ pub struct CustomProfileDto {
     pub color_space: String,
 }
 
+/// ISO 8601 timestamp for XMP embedding.
+fn xmp_timestamp() -> String {
+    chrono::Local::now().to_rfc3339()
+}
+
 fn profiles_dir<R: tauri::Runtime>(manager: &impl Manager<R>) -> Option<PathBuf> {
     let dir = manager.path().app_data_dir().ok()?.join("profiles");
     std::fs::create_dir_all(&dir).ok()?;
@@ -203,13 +208,16 @@ pub fn trim_marks(
     let _guard = LockGuard::acquire(&state.0)?;
     let output_dir = output_dir.map(PathBuf::from);
     let mut output_paths = Vec::new();
+    let ts = xmp_timestamp();
 
     for path_str in &paths {
         let path = PathBuf::from(path_str);
+        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
         let out = output_path(&path, &output_dir, None, overwrite);
         PdfPipeline::open(&path)
             .and_then(|mut p| {
                 p.trim()?;
+                p.embed_metadata(&hash, &ts, &[("trim", "")])?;
                 p.save_pdf(&out)?;
                 Ok(())
             })
@@ -237,13 +245,17 @@ pub fn resize_to_bleed(
     let output_dir = output_dir.map(PathBuf::from);
     let bleed_pts = bleed_inches * 72.0;
     let mut output_paths = Vec::new();
+    let params = format!("bleed_in={bleed_inches}");
+    let ts = xmp_timestamp();
 
     for path_str in &paths {
         let path = PathBuf::from(path_str);
+        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
         let out = output_path(&path, &output_dir, None, overwrite);
         PdfPipeline::open(&path)
             .and_then(|mut p| {
                 p.resize(bleed_pts)?;
+                p.embed_metadata(&hash, &ts, &[("resize", &params)])?;
                 p.save_pdf(&out)?;
                 Ok(())
             })
@@ -357,13 +369,17 @@ pub fn remap_colors(
     let _guard = LockGuard::acquire(&state.0)?;
     let output_dir = output_dir.map(PathBuf::from);
     let mut output_paths = Vec::new();
+    let ts = xmp_timestamp();
+    let params = format!("from={from:?},to={to:?},tol={tolerance}");
 
     for path_str in &paths {
         let path = PathBuf::from(path_str);
+        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
         let out = output_path(&path, &output_dir, None, overwrite);
         PdfPipeline::open(&path)
             .and_then(|mut p| {
                 p.remap_color(from, to, tolerance)?;
+                p.embed_metadata(&hash, &ts, &[("remap_color", &params)])?;
                 p.save_pdf(&out)?;
                 Ok(())
             })
@@ -391,13 +407,17 @@ pub fn add_trim_box(
     let output_dir = output_dir.map(PathBuf::from);
     let bleed_pts = bleed_inches * 72.0;
     let mut output_paths = Vec::new();
+    let params = format!("bleed_in={bleed_inches}");
+    let ts = xmp_timestamp();
 
     for path_str in &paths {
         let path = PathBuf::from(path_str);
+        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
         let out = output_path(&path, &output_dir, None, overwrite);
         PdfPipeline::open(&path)
             .and_then(|mut p| {
                 p.add_trim_box(bleed_pts)?;
+                p.embed_metadata(&hash, &ts, &[("add_trim_box", &params)])?;
                 p.save_pdf(&out)?;
                 Ok(())
             })
@@ -430,9 +450,12 @@ pub fn split_pages(
     let output_dir = output_dir.map(PathBuf::from);
     let mut output_paths = Vec::new();
     let mut total_pages = 0u32;
+    let ts = xmp_timestamp();
+    let params = format!("panel_width_pts={panel_width_pts}");
 
     for path_str in &paths {
         let path = PathBuf::from(path_str);
+        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
         let pipeline = PdfPipeline::open(&path).map_err(friendly_error)?;
         let mut result = pipeline
             .split_pages(panel_width_pts)
@@ -446,6 +469,7 @@ pub fn split_pages(
         // is replaced. The source file is never touched regardless of overwrite state.
         let out = dir.join(format!("{}_split.pdf", stem));
         let page_count = result.page_count() as u32;
+        result.embed_metadata(&hash, &ts, &[("split_pages", &params)]).map_err(friendly_error)?;
         result.save_pdf(&out).map_err(friendly_error)?;
         output_paths.push(out.to_string_lossy().into_owned());
         total_pages += page_count;
@@ -470,13 +494,17 @@ pub fn extract_pages(
     let _guard = LockGuard::acquire(&state.0)?;
     let output_dir = output_dir.map(PathBuf::from);
     let mut output_paths = Vec::new();
+    let ts = xmp_timestamp();
+    let params = format!("pages={page_nums:?}");
 
     for path_str in &paths {
         let path = PathBuf::from(path_str);
+        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
         let out = output_path(&path, &output_dir, None, overwrite);
         PdfPipeline::open(&path)
             .and_then(|p| {
                 let mut extracted = p.extract_pages(&page_nums)?;
+                extracted.embed_metadata(&hash, &ts, &[("extract_pages", &params)])?;
                 extracted.save_pdf(&out)?;
                 Ok(())
             })
@@ -509,6 +537,8 @@ pub fn flatten_spots(
     let output_dir = output_dir.map(PathBuf::from);
     let mut output_paths = Vec::new();
     let mut total_spots = 0u32;
+    let ts = xmp_timestamp();
+    let params = icc_profile.as_deref().map(|n| format!("icc={n}")).unwrap_or_default();
 
     let dst_bytes: Option<Arc<[u8]>> = match &icc_profile {
         Some(name) => Some(resolve_profile_bytes(name, &profiles)?),
@@ -517,10 +547,12 @@ pub fn flatten_spots(
 
     for path_str in &paths {
         let path = PathBuf::from(path_str);
+        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
         let out = output_path(&path, &output_dir, None, overwrite);
         let spots = PdfPipeline::open(&path)
             .and_then(|mut p| {
                 let n = p.flatten_spots_with_icc(dst_bytes.as_deref())?;
+                p.embed_metadata(&hash, &ts, &[("flatten_spots", &params)])?;
                 p.save_pdf(&out)?;
                 Ok(n)
             })
@@ -575,13 +607,17 @@ pub fn convert_color_space(
     let to_bytes = resolve_profile_bytes(&to_profile, &profiles)?;
     let output_dir = output_dir.map(PathBuf::from);
     let mut output_paths = Vec::new();
+    let ts = xmp_timestamp();
+    let params = format!("from={from_profile},to={to_profile},intent={intent}");
 
     for path_str in &paths {
         let path = PathBuf::from(path_str);
+        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
         let out = output_path(&path, &output_dir, None, overwrite);
         PdfPipeline::open(&path)
             .and_then(|mut p| {
                 p.convert_color_space_raw(&from_bytes, &to_bytes, &intent)?;
+                p.embed_metadata(&hash, &ts, &[("convert_color_space", &params)])?;
                 p.save_pdf(&out)?;
                 Ok(())
             })
@@ -770,13 +806,16 @@ pub fn outline_text(
     let _guard = LockGuard::acquire(&state.0)?;
     let output_dir = output_dir.map(PathBuf::from);
     let mut output_paths = Vec::new();
+    let ts = xmp_timestamp();
 
     for path_str in &paths {
         let path = PathBuf::from(path_str);
+        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
         let out = output_path(&path, &output_dir, None, overwrite);
         PdfPipeline::open(&path)
             .and_then(|mut p| {
                 p.outline_text()?;
+                p.embed_metadata(&hash, &ts, &[("outline_text", "")])?;
                 p.save_pdf(&out)?;
                 Ok(())
             })
@@ -804,9 +843,12 @@ pub fn stitch_pages(
     let _ = overwrite; // path is always _stitch; overwrite controls replacement, not source
     let output_dir = output_dir.map(PathBuf::from);
     let mut output_paths = Vec::new();
+    let ts = xmp_timestamp();
+    let params = format!("spread_width_pts={spread_width_pts}");
 
     for path_str in &paths {
         let path = PathBuf::from(path_str);
+        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
         let pipeline = PdfPipeline::open(&path).map_err(friendly_error)?;
         let mut result = pipeline
             .stitch_pages(spread_width_pts)
@@ -817,6 +859,7 @@ pub fn stitch_pages(
             .unwrap_or(std::path::Path::new("."));
         let stem = path.file_stem().unwrap_or_default().to_string_lossy();
         let out = dir.join(format!("{}_stitch.pdf", stem));
+        result.embed_metadata(&hash, &ts, &[("stitch_pages", &params)]).map_err(friendly_error)?;
         result.save_pdf(&out).map_err(friendly_error)?;
         output_paths.push(out.to_string_lossy().into_owned());
     }
