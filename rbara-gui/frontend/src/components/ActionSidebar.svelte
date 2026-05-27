@@ -9,8 +9,9 @@
   ]
 
   const mainActions = [
-    { id: 'resize', icon: '⊡', label: 'Resize to Bleed', key: 'r' },
-    { id: 'export', icon: '⇲', label: 'Export Images', key: 'x' },
+    { id: 'resize',       icon: '⊡', label: 'Resize to Bleed', key: 'r'  },
+    { id: 'export',       icon: '⇲', label: 'Export Images',   key: 'x'  },
+    { id: 'outlinetext',  icon: '⊤', label: 'Outline Text',    key: '⇧t' },
   ]
 
   const pagesActions = [

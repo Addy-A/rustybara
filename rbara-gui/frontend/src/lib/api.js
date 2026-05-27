@@ -81,6 +81,10 @@ export async function flattenSpots(
   })
 }
 
+export async function outlineText(paths, outputDir, overwrite) {
+  return await invoke('outline_text', { paths, outputDir, overwrite })
+}
+
 export async function addTrimBox(paths, bleedInches, outputDir, overwrite) {
   return await invoke('add_trim_box', {
     paths,

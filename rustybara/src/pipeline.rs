@@ -232,6 +232,79 @@ impl PdfPipeline {
         Ok(Self { doc })
     }
 
+    /// Converts all text on every page to outlined vector paths.
+    ///
+    /// Each character is replaced with its glyph outline as PDF path operators (`m`/`l`/`c`/`h`/`f`).
+    /// The original BT...ET text blocks are stripped from the content stream and the glyph paths
+    /// are appended, filled in CMYK black (0 0 0 1).
+    ///
+    /// After outlining, fonts are no longer required to render the PDF correctly.
+    /// Note: colored text color preservation is not yet implemented — all glyphs are filled
+    /// with CMYK black regardless of their original color.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any page's content stream cannot be decoded or re-encoded.
+    #[cfg(feature = "outline")]
+    pub fn outline_text(&mut self) -> crate::Result<&mut Self> {
+        use crate::outline::paths::outline_page_text;
+        use crate::outline::writer::glyphs_to_content_stream;
+        use lopdf::content::Content;
+        use lopdf::Object;
+
+        let page_ids: Vec<lopdf::ObjectId> = self.doc.get_pages().values().copied().collect();
+        for page_id in page_ids {
+            let glyphs = outline_page_text(&self.doc, page_id)?;
+            let content = self.doc.get_and_decode_page_content(page_id)?;
+
+            let mut in_bt = false;
+            let filtered: Vec<lopdf::content::Operation> = content
+                .operations
+                .into_iter()
+                .filter(|op| match op.operator.as_str() {
+                    "BT" => {
+                        in_bt = true;
+                        false
+                    }
+                    "ET" => {
+                        in_bt = false;
+                        false
+                    }
+                    _ => !in_bt,
+                })
+                .collect();
+
+            let mut combined = Content { operations: filtered }.encode()?;
+
+            if !glyphs.is_empty() {
+                let mut glyph_stream = glyphs_to_content_stream(&glyphs);
+                // Insert CMYK black fill operator after the opening "q\n" (2 bytes).
+                glyph_stream.insert_str(2, "0 0 0 1 k\n");
+                combined.extend_from_slice(glyph_stream.as_bytes());
+            }
+
+            let stream_ids = self.doc.get_page_contents(page_id);
+            if let Some(&stream_id) = stream_ids.first() {
+                if let Ok(Object::Stream(stream)) = self.doc.get_object_mut(stream_id) {
+                    stream.set_plain_content(combined);
+                }
+                for &extra_id in stream_ids.get(1..).unwrap_or(&[]) {
+                    if let Ok(Object::Stream(s)) = self.doc.get_object_mut(extra_id) {
+                        s.set_plain_content(Vec::new());
+                    }
+                }
+                if stream_ids.len() > 1 {
+                    if let Ok(page_obj) = self.doc.get_object_mut(page_id) {
+                        if let Ok(dict) = page_obj.as_dict_mut() {
+                            dict.set("Contents", Object::Reference(stream_id));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(self)
+    }
+
     /// Returns approximate text and image bounding boxes for a page, as `[x, y, w, h]` in pts.
     ///
     /// `page_idx` is zero-based. Returns empty vecs if the page does not exist or has no

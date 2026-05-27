@@ -11,6 +11,7 @@
   import StitchPagesPanel from './StitchPagesPanel.svelte'
   import ExtractPagesPanel from './ExtractPagesPanel.svelte'
   import OutputPanel from './OutputPanel.svelte'
+  import OutlineTextPanel from './OutlineTextPanel.svelte'
   const app = useAppState()
 </script>
 
@@ -35,6 +36,8 @@
     <StitchPagesPanel />
   {:else if app.activeAction === 'extractpages'}
     <ExtractPagesPanel />
+  {:else if app.activeAction === 'outlinetext'}
+    <OutlineTextPanel />
   {:else if app.activeAction === 'output'}
     <OutputPanel />
   {/if}

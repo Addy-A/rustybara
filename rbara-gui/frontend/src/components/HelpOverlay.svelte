@@ -13,6 +13,7 @@
     ['c', 'Convert Color Space'],
     ['s', 'Flatten Spot Colors'],
     ['b', 'Add Trim Box'],
+    ['Shift + T', 'Outline Text'],
     ['p', 'Split Pages'],
     ['g', 'Stitch Pages (exp)'],
     ['e', 'Extract Pages'],

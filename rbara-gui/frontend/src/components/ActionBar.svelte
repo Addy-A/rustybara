@@ -3,8 +3,9 @@
   const app = useAppState();
 
   const trimActions = [
-    { id: 'trim',       icon: '✂', label: 'Trim Marks',  key: 't' },
-    { id: 'addtrimbox', icon: '⊞', label: 'Add Trim Box', key: 'b' },
+    { id: 'trim',        icon: '✂', label: 'Trim Marks',   key: 't' },
+    { id: 'addtrimbox',  icon: '⊞', label: 'Add Trim Box', key: 'b' },
+    { id: 'outlinetext', icon: '⊤', label: 'Outline Text', key: '⇧t' },
   ];
 
   const mainActions = [
@@ -23,7 +24,7 @@
     { id: 'spots',      icon: '✦', label: 'Spots',    key: 's' },
   ];
 
-  const trimIds  = new Set(['trim', 'addtrimbox']);
+  const trimIds  = new Set(['trim', 'addtrimbox', 'outlinetext']);
   const pagesIds = new Set(['splitpages', 'extractpages']);
   const colorIds = new Set(['remap', 'colorspace', 'spots']);
 

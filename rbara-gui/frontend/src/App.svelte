@@ -389,7 +389,7 @@
   }
 
   // ---------- sidebar category expand state ----------
-  const TRIM_IDS = new Set(['trim', 'addtrimbox'])
+  const TRIM_IDS = new Set(['trim', 'addtrimbox', 'outlinetext'])
   const PAGES_IDS = new Set(['splitpages', 'stitchpages', 'extractpages'])
   const COLOR_IDS = new Set(['remap', 'colorspace', 'spots'])
 
@@ -530,6 +530,10 @@
           result = await api.extractPages(paths, pageNums, outputDir, overwrite)
           break
         }
+        case 'outlinetext':
+          actionLabel = 'OutlineText'
+          result = await api.outlineText(paths, outputDir, overwrite)
+          break
         default:
           processing = false
           return
@@ -543,6 +547,7 @@
         'colorspace',
         'spots',
         'addtrimbox',
+        'outlinetext',
         'extractpages',
         'splitpages',
         'stitchpages',
@@ -800,6 +805,9 @@
         break
       case 'b':
         activeAction = 'addtrimbox'
+        break
+      case 'T':
+        activeAction = 'outlinetext'
         break
       case 'p':
         activeAction = 'splitpages'

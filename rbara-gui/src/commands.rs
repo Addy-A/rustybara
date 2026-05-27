@@ -761,6 +761,38 @@ pub fn load_metadata(path: String) -> Result<PdfMetadataDto, String> {
 }
 
 #[tauri::command]
+pub fn outline_text(
+    paths: Vec<String>,
+    output_dir: Option<String>,
+    overwrite: bool,
+    state: State<'_, ProcessingLock>,
+) -> Result<ActionResult, String> {
+    let _guard = LockGuard::acquire(&state.0)?;
+    let output_dir = output_dir.map(PathBuf::from);
+    let mut output_paths = Vec::new();
+
+    for path_str in &paths {
+        let path = PathBuf::from(path_str);
+        let out = output_path(&path, &output_dir, None, overwrite);
+        PdfPipeline::open(&path)
+            .and_then(|mut p| {
+                p.outline_text()?;
+                p.save_pdf(&out)?;
+                Ok(())
+            })
+            .map_err(friendly_error)?;
+        output_paths.push(out.to_string_lossy().into_owned());
+    }
+
+    Ok(ActionResult {
+        ok: true,
+        message: format!("Outlined text in {} file(s)", paths.len()),
+        output_paths,
+        timestamp: now_timestamp(),
+    })
+}
+
+#[tauri::command]
 pub fn stitch_pages(
     paths: Vec<String>,
     spread_width_pts: f64,
