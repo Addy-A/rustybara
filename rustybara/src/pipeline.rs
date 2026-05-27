@@ -323,13 +323,15 @@ impl PdfPipeline {
             None => (String::new(), Vec::new()),
         };
 
-        // Append the new ops to the inherited history.
+        // Append the new ops. Each entry carries its own timestamp suffix so the
+        // frontend can display per-op times in the history panel.
         for (name, params) in ops {
-            if params.is_empty() {
-                combined_ops.push(name.to_string());
+            let entry = if params.is_empty() {
+                format!("{name}@{timestamp}")
             } else {
-                combined_ops.push(format!("{name}({params})"));
-            }
+                format!("{name}({params})@{timestamp}")
+            };
+            combined_ops.push(entry);
         }
 
         // Inherit the root sourceHash from the lineage so it always identifies the

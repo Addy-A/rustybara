@@ -1,8 +1,36 @@
 <script>
   import { useAppState } from '../lib/context.js'
   import { openInViewer } from '../lib/api.js'
-  import XmpInfoPanel from './XmpInfoPanel.svelte'
   const app = useAppState()
+
+  const MIN_W = 150
+  const MAX_W = 320
+  const STORE_KEY = 'rbara-sidebar-left-width'
+
+  let width = $state(Math.max(MIN_W, Math.min(MAX_W,
+    parseInt(localStorage.getItem(STORE_KEY) ?? '210', 10)
+  )))
+
+  let dragging = false
+  let startX = 0
+  let startWidth = 0
+
+  function onHandleDown(e) {
+    dragging = true
+    startX = e.clientX
+    startWidth = width
+    e.preventDefault()
+  }
+
+  function onMouseMove(e) {
+    if (!dragging) return
+    width = Math.max(MIN_W, Math.min(MAX_W, startWidth + (e.clientX - startX)))
+    localStorage.setItem(STORE_KEY, width)
+  }
+
+  function onMouseUp() {
+    dragging = false
+  }
 
   const trimActions = [
     { id: 'trim', icon: '✂', label: 'Trim Marks', key: 't' },
@@ -36,7 +64,15 @@
   let isColorActive = $derived(colorIds.has(app.activeAction))
 </script>
 
-<div class="actions-pane">
+<svelte:window onmousemove={onMouseMove} onmouseup={onMouseUp} />
+
+<div class="actions-pane" style="width: {width}px">
+  <div
+    class="resize-handle"
+    onmousedown={onHandleDown}
+    role="separator"
+    aria-orientation="vertical"
+  ></div>
   <div class="pane-label">Actions</div>
 
   <div
@@ -137,8 +173,6 @@
     {/each}
   {/if}
 
-  <XmpInfoPanel />
-
   <div class="actions-footer">
     <div
       class="action-item view-btn"
@@ -168,13 +202,26 @@
 
 <style>
   .actions-pane {
-    width: 210px;
     flex-shrink: 0;
     background: var(--surface);
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    position: relative;
+  }
+  .resize-handle {
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    cursor: ew-resize;
+    z-index: 10;
+    transition: background 0.15s;
+  }
+  .resize-handle:hover {
+    background: color-mix(in srgb, var(--orange) 40%, transparent);
   }
   .action-item {
     display: flex;
