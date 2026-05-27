@@ -1551,7 +1551,7 @@ fn build_egui_ui(
         .show(ctx, |ui| {
             // Use egui's own ▶/◀ geometric shapes (same block as CollapsingHeader arrows —
             // guaranteed to render in egui's bundled NotoSans font).
-            let label = if *show_panel { "◀" } else { "▶" };
+            let label = if *show_panel { "▶" } else { "◀" }; // Not a bug, actually works this way.
             if ui
                 .button(egui::RichText::new(label).size(14.0))
                 .on_hover_text(if *show_panel {
@@ -1709,7 +1709,34 @@ fn build_egui_ui(
                         return;
                     };
 
-                    ui.label(format!("Kind: {:?}", obj.kind));
+                    // Build a human-readable kind label.
+                    // ObjectKind::Text stores raw PDF-decoded bytes as a Rust String;
+                    // control characters (unit/group separators, etc.) are common PDF
+                    // encoding artifacts and must be stripped before display so the UI
+                    // doesn't show "\u{1f}\u{1d}" style escapes.
+                    let kind_label = match &obj.kind {
+                        ObjectKind::Fill => "Fill".to_string(),
+                        ObjectKind::Stroke => "Stroke".to_string(),
+                        ObjectKind::FillStroke => "FillStroke".to_string(),
+                        ObjectKind::Image => "Image".to_string(),
+                        ObjectKind::FormXObject => "FormXObject".to_string(),
+                        ObjectKind::Text(s) => {
+                            // Replace control characters with spaces; collapse runs; trim.
+                            let clean: String = s
+                                .chars()
+                                .map(|c| if c.is_control() { ' ' } else { c })
+                                .collect::<String>()
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            if clean.is_empty() {
+                                "Text".to_string()
+                            } else {
+                                format!("Text: \"{clean}\"")
+                            }
+                        }
+                    };
+                    ui.label(format!("Kind: {kind_label}"));
 
                     // Overprint state.
                     ui.add_space(4.0);
