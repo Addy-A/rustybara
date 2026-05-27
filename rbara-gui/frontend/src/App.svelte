@@ -43,6 +43,38 @@
     localStorage.setItem('rbara-theme', theme)
   })
 
+  let fileXmp = $state(null) // rbara XMP block for the active file, or null
+
+  // Map action IDs to XMP op name prefixes for guard + panel highlighting
+  const ACTION_TO_OP = {
+    trim: 'trim',
+    resize: 'resize',
+    addtrimbox: 'add_trim_box',
+    remap: 'remap_color',
+    colorspace: 'convert_color_space',
+    spots: 'flatten_spots',
+    outlinetext: 'outline_text',
+    splitpages: 'split_pages',
+    stitchpages: 'stitch_pages',
+    extractpages: 'extract_pages',
+  }
+
+  // Reactively re-fetch XMP whenever the active file's path changes.
+  $effect(() => {
+    const path = activeFile !== null ? files[activeFile]?.path : null
+    if (!path) {
+      fileXmp = null
+      return
+    }
+    let cancelled = false
+    api.readXmpMetadata(path).then((xmp) => {
+      if (!cancelled) fileXmp = xmp
+    }).catch(() => {
+      if (!cancelled) fileXmp = null
+    })
+    return () => { cancelled = true }
+  })
+
   let customProfiles = $state([]) // [{name, description, color_space}]
 
   let params = $state({
@@ -438,6 +470,16 @@
 
     const paths = files.filter((f) => f.scoped).map((f) => f.path)
     if (paths.length === 0) return
+
+    // Double-processing guard: warn if the active file already has this op applied.
+    const opName = ACTION_TO_OP[activeAction]
+    if (opName && fileXmp?.ops?.some((op) => op === opName || op.startsWith(opName + '('))) {
+      const label = opName.replace(/_/g, ' ')
+      if (!window.confirm(`"${label}" has already been applied to this file. Run again?`)) {
+        return
+      }
+    }
+
     processing = true
 
     try {
@@ -1023,6 +1065,12 @@
     scopeAll,
     scopeNone,
     invertScope,
+    get fileXmp() {
+      return fileXmp
+    },
+    get actionToOp() {
+      return ACTION_TO_OP
+    },
     get trimExpanded() {
       return trimExpanded
     },

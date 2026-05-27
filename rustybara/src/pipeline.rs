@@ -232,6 +232,37 @@ impl PdfPipeline {
         Ok(Self { doc })
     }
 
+    /// Reads the `rbara:` XMP block embedded by a previous rustybara run, if any.
+    ///
+    /// Returns `None` for files that have never been processed by rustybara.
+    /// Use this to display provenance info, check for already-applied ops, or detect
+    /// stale outputs before re-processing.
+    pub fn read_xmp_block(&self) -> Option<crate::xmp::RbaraXmpBlock> {
+        use crate::xmp;
+        use lopdf::Object;
+
+        let catalog_id = self
+            .doc
+            .trailer
+            .get(b"Root")
+            .ok()
+            .and_then(|o| o.as_reference().ok())?;
+
+        let cat = match self.doc.get_object(catalog_id) {
+            Ok(Object::Dictionary(d)) => d.clone(),
+            _ => return None,
+        };
+
+        let meta_id = cat.get(b"Metadata").ok().and_then(|o| o.as_reference().ok())?;
+
+        let xmp_bytes = match self.doc.get_object(meta_id) {
+            Ok(Object::Stream(s)) => s.decompressed_content().unwrap_or_else(|_| s.content.clone()),
+            _ => return None,
+        };
+
+        xmp::parse_rbara_block(&xmp_bytes)
+    }
+
     /// Embeds rustybara processing metadata into the document's XMP stream.
     ///
     /// Call this after all processing operations and before [`Self::save_pdf`].
@@ -286,22 +317,36 @@ impl PdfPipeline {
             (bytes, meta_ref)
         };
 
+        // Destructure the existing block into owned values so we can use both independently.
+        let (prior_source_hash, mut combined_ops) = match xmp::parse_rbara_block(&existing_bytes) {
+            Some(b) => (b.source_hash, b.ops),
+            None => (String::new(), Vec::new()),
+        };
+
+        // Append the new ops to the inherited history.
+        for (name, params) in ops {
+            if params.is_empty() {
+                combined_ops.push(name.to_string());
+            } else {
+                combined_ops.push(format!("{name}({params})"));
+            }
+        }
+
+        // Inherit the root sourceHash from the lineage so it always identifies the
+        // original unprocessed file, not the immediate input on each re-processing run.
+        let effective_source_hash = if prior_source_hash.is_empty() {
+            source_hash
+        } else {
+            &prior_source_hash
+        };
+
         let block = RbaraXmpBlock {
             uuid: xmp::generate_uuid(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             timestamp: timestamp.to_string(),
-            source_hash: source_hash.to_string(),
+            source_hash: effective_source_hash.to_string(),
             parent_id: xmp::read_parent_id(&existing_bytes),
-            ops: ops
-                .iter()
-                .map(|(name, params)| {
-                    if params.is_empty() {
-                        name.to_string()
-                    } else {
-                        format!("{name}({params})")
-                    }
-                })
-                .collect(),
+            ops: combined_ops,
         };
 
         let xmp_bytes = if existing_bytes.is_empty() {

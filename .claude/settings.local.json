@@ -11,7 +11,11 @@
       "Bash(awk 'NR>=9400 && NR<=11580 { *)",
       "Bash(grep -n \"fn decode\\\\|pub fn decode\" \"C:/Users/mardo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lopdf-0.40.0/src/stream.rs\" | head -20)",
       "Read(//c/Users/mardo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lopdf-0.40.0/src/**)",
-      "Bash(xargs grep -l \"fn decode\")"
+      "Bash(xargs grep -l \"fn decode\")",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\mardo\\\\OneDrive\\\\Desktop\\\\rustybara\" -Recurse -Filter \"Cargo.toml\")",
+      "Bash(Select-Object FullName)",
+      "Bash(ls ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pdfium-render-0.9.0/src/)",
+      "Read(//c/Users/mardo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pdfium-render-0.9.0/src/**)"
     ]
   },
   "spinnerTipsEnabled": false

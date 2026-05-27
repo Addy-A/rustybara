@@ -164,6 +164,12 @@ export async function notifyViewer(path) {
   return await invoke('notify_viewer', { path })
 }
 
+// Read the rbara: XMP block from a PDF processed by rustybara.
+// Returns null for unprocessed files or files that can't be opened.
+export async function readXmpMetadata(path) {
+  return await invoke('read_xmp_metadata', { path })
+}
+
 // Parses a 1-indexed page string like "1, 3-5, 7" into 0-indexed numbers for the backend.
 export function parsePageNums(input) {
   return [

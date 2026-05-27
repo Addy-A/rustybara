@@ -1,6 +1,7 @@
 <script>
   import { useAppState } from '../lib/context.js'
   import { openInViewer } from '../lib/api.js'
+  import XmpInfoPanel from './XmpInfoPanel.svelte'
   const app = useAppState()
 
   const trimActions = [
@@ -135,6 +136,8 @@
       </div>
     {/each}
   {/if}
+
+  <XmpInfoPanel />
 
   <div class="actions-footer">
     <div

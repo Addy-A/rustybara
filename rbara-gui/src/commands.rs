@@ -109,6 +109,19 @@ pub struct ActionResult {
 }
 
 #[derive(serde::Serialize)]
+pub struct XmpInfoDto {
+    pub uuid: String,
+    pub version: String,
+    pub timestamp: String,
+    pub source_hash: String,
+    pub parent_id: String,
+    pub ops: Vec<String>,
+    /// `true` if the source file was found and its hash differs from the recorded one,
+    /// `false` if they match, `null` if the source file could not be located.
+    pub source_stale: Option<bool>,
+}
+
+#[derive(serde::Serialize)]
 pub struct PdfMetadataDto {
     pub trimbox: Option<[f32; 4]>,
     pub mediabox: [f32; 4],
@@ -869,6 +882,43 @@ pub fn stitch_pages(
         message: format!("Stitched {} file(s) into spreads", paths.len()),
         output_paths,
         timestamp: now_timestamp(),
+    })
+}
+
+fn try_detect_stale(processed_path: &Path, source_hash: &str) -> Option<bool> {
+    let stem = processed_path.file_stem()?.to_str()?;
+    let ext = processed_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("pdf");
+    let source_stem = stem.strip_suffix("_processed")?;
+    let source_path = processed_path.with_file_name(format!("{source_stem}.{ext}"));
+    if !source_path.exists() {
+        return None;
+    }
+    let current_hash = rustybara::xmp::hash_file(&source_path).ok()?;
+    Some(current_hash != source_hash)
+}
+
+/// Read the `rbara:` XMP block embedded in a PDF by a previous rustybara run.
+///
+/// Returns `null` for files that have never been processed by rustybara, or if the
+/// file cannot be opened. Includes a `source_stale` flag when the original source
+/// file is still present alongside the processed output.
+#[tauri::command]
+pub fn read_xmp_metadata(path: String) -> Option<XmpInfoDto> {
+    let path = PathBuf::from(&path);
+    let pipeline = PdfPipeline::open(&path).ok()?;
+    let block = pipeline.read_xmp_block()?;
+    let source_stale = try_detect_stale(&path, &block.source_hash);
+    Some(XmpInfoDto {
+        source_stale,
+        uuid: block.uuid,
+        version: block.version,
+        timestamp: block.timestamp,
+        source_hash: block.source_hash,
+        parent_id: block.parent_id,
+        ops: block.ops,
     })
 }
 

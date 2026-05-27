@@ -10,6 +10,7 @@ use std::path::Path;
 pub const RBARA_NS: &str = "https://rustybara.io/ns/1.0/";
 
 /// Data carried in the `rbara` XMP description block.
+#[derive(Clone)]
 pub struct RbaraXmpBlock {
     pub uuid: String,
     pub version: String,
@@ -50,6 +51,65 @@ pub fn read_parent_id(xmp_bytes: &[u8]) -> String {
         }
     }
     String::new()
+}
+
+/// Parse a `rbara:` block from raw XMP bytes.
+///
+/// Returns `None` if the file has no `<!-- rbara:start -->` sentinel — i.e., it
+/// was not processed by rustybara. All fields fall back to empty strings when a
+/// tag is present but unparseable.
+pub fn parse_rbara_block(xmp_bytes: &[u8]) -> Option<RbaraXmpBlock> {
+    let text = std::str::from_utf8(xmp_bytes).ok()?;
+
+    const START: &str = "<!-- rbara:start -->";
+    const END: &str = "<!-- rbara:end -->";
+    let start_pos = text.find(START)?;
+    let end_pos = text.find(END)?;
+    let block = &text[start_pos..end_pos + END.len()];
+
+    fn extract(block: &str, tag: &str) -> String {
+        let open = format!("<rbara:{tag}>");
+        let close = format!("</rbara:{tag}>");
+        block
+            .find(open.as_str())
+            .and_then(|s| {
+                let after = &block[s + open.len()..];
+                after
+                    .find(close.as_str())
+                    .map(|e| after[..e].trim().to_string())
+            })
+            .unwrap_or_default()
+    }
+
+    let ops = {
+        let mut ops = Vec::new();
+        let li_open = "<rdf:li>";
+        let li_close = "</rdf:li>";
+        let mut rest = block;
+        while let Some(s) = rest.find(li_open) {
+            let after = &rest[s + li_open.len()..];
+            match after.find(li_close) {
+                Some(e) => {
+                    let op = after[..e].trim().to_string();
+                    if !op.is_empty() {
+                        ops.push(op);
+                    }
+                    rest = &after[e + li_close.len()..];
+                }
+                None => break,
+            }
+        }
+        ops
+    };
+
+    Some(RbaraXmpBlock {
+        uuid: extract(block, "uuid"),
+        version: extract(block, "version"),
+        timestamp: extract(block, "timestamp"),
+        source_hash: extract(block, "sourceHash"),
+        parent_id: extract(block, "parentId"),
+        ops,
+    })
 }
 
 /// Render the `rbara:` RDF Description block.
