@@ -137,6 +137,9 @@ struct Viewer {
     /// Whether the prepress tools panel is currently visible.
     /// Hidden by default; toggled by the floating ⚙ button.
     show_tools_panel: bool,
+    /// Whether the zoom HUD shows the bucket/DPI detail row (expanded) or just
+    /// the zoom number (collapsed). Starts expanded.
+    zoom_hud_expanded: bool,
     /// When `true`, plate images are rendered with ink-specific tint colors
     /// (C=cyan, M=magenta, Y=yellow, K=near-black, spot=violet).
     /// When `false`, all plates are shown as grayscale (white=no ink, black=full).
@@ -1093,6 +1096,8 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                         self.selected_object.as_ref(),
                         self.color_info.as_ref(),
                         &mut self.show_tools_panel,
+                        self.zoom,
+                        &mut self.zoom_hud_expanded,
                     );
                 });
                 // Store for next-frame use in mouse-event gating.
@@ -1836,6 +1841,7 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig, listen: bool) {
         active_plate: PlateMode::All,
         plate_spot_names,
         show_tools_panel: false,
+        zoom_hud_expanded: true,
         plate_tinted: false,
         plate_image_for: PlateMode::All,
         egui_pointer_over_panel: false,
@@ -1865,19 +1871,81 @@ fn build_egui_ui(
     selected: Option<&PageObject>,
     color_info: Option<&ColorPanel>,
     show_panel: &mut bool,
+    zoom: f32,
+    zoom_hud_expanded: &mut bool,
 ) -> bool {
     // Capture current pointer position in egui's logical-pixel coordinate space.
     // Used to test whether the pointer is over any egui surface this frame so
     // the caller can gate PDF pan/selection next frame.
     let ptr = ctx.pointer_hover_pos();
 
+    // ── Zoom HUD — always visible at bottom-left ──────────────────────────────
+    let hud_resp = egui::Area::new(egui::Id::new("zoom_hud"))
+        .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(8.0, -8.0))
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            egui::Frame::default()
+                .fill(egui::Color32::from_rgba_premultiplied(15, 15, 22, 210))
+                .corner_radius(egui::CornerRadius::same(5))
+                .stroke(egui::Stroke::new(
+                    1.0,
+                    egui::Color32::from_rgba_premultiplied(70, 70, 100, 180),
+                ))
+                .inner_margin(egui::Margin::symmetric(8_i8, 4_i8))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.label(
+                            egui::RichText::new(format!("{:.1}\u{00d7}", zoom))
+                                .color(egui::Color32::WHITE)
+                                .size(13.0)
+                                .monospace(),
+                        );
+                        if *zoom_hud_expanded {
+                            let (bucket, dpi) = crate::tiles::zoom_bucket(zoom);
+                            let info = if bucket == 0 {
+                                "base".to_string()
+                            } else {
+                                format!("B{} \u{00b7} {}dpi", bucket, dpi as u32)
+                            };
+                            ui.label(
+                                egui::RichText::new(info)
+                                    .color(egui::Color32::from_rgb(150, 150, 175))
+                                    .size(11.0)
+                                    .monospace(),
+                            );
+                            if ui
+                                .add(egui::Button::new(
+                                    egui::RichText::new("-")
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(120, 120, 155)),
+                                ).frame(false))
+                                .on_hover_text("Collapse")
+                                .clicked()
+                            {
+                                *zoom_hud_expanded = false;
+                            }
+                        } else if ui
+                            .add(egui::Button::new(
+                                egui::RichText::new("+")
+                                    .size(9.0)
+                                    .color(egui::Color32::from_rgb(120, 120, 155)),
+                            ).frame(false))
+                            .on_hover_text("Expand")
+                            .clicked()
+                        {
+                            *zoom_hud_expanded = true;
+                        }
+                    });
+                });
+        });
+    let over_hud = ptr.map_or(false, |p| hud_resp.response.rect.contains(p));
+
     // ── Floating toggle button — always visible, does not affect PDF layout ───
     let btn_resp = egui::Area::new(egui::Id::new("tools_toggle"))
         .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-8.0, 8.0))
         .show(ctx, |ui| {
-            // Use egui's own ▶/◀ geometric shapes (same block as CollapsingHeader arrows —
-            // guaranteed to render in egui's bundled NotoSans font).
-            let label = if *show_panel { "▶" } else { "◀" }; // Not a bug, actually works this way.
+            let label = if *show_panel { "▶" } else { "◀" };
             if ui
                 .button(egui::RichText::new(label).size(14.0))
                 .on_hover_text(if *show_panel {
@@ -1894,7 +1962,7 @@ fn build_egui_ui(
 
     // ── Side panel — only when the toggle is active ───────────────────────────
     if !*show_panel {
-        return over_btn;
+        return over_btn || over_hud;
     }
 
     let panel_resp = egui::Panel::right("prepress_tools")

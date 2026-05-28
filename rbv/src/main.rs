@@ -17,7 +17,7 @@ mod tests {
     fn defaults() {
         let args = Args::parse_from(["rbv", "doc.pdf"]);
         assert_eq!(args.page, 0);
-        assert_eq!(args.dpi, 150);
+        assert_eq!(args.dpi, 300);
         assert_eq!(args.file.to_str().unwrap(), "doc.pdf");
     }
 
@@ -57,7 +57,7 @@ struct Args {
     file: std::path::PathBuf,
     #[arg(default_value_t = 0)]
     page: u32,
-    #[arg(long, default_value_t = 150)]
+    #[arg(long, default_value_t = 300)]
     dpi: u32,
     #[arg(long, default_value_t = false)]
     listen: bool,

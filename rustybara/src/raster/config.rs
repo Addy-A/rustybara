@@ -23,7 +23,7 @@ pub struct RenderConfig {
 impl Default for RenderConfig {
     fn default() -> Self {
         Self {
-            dpi: 150,
+            dpi: 300,
             render_annotations: true,
             render_form_data: true,
         }
