@@ -22,6 +22,83 @@ export class PipelineHandle {
         wasm.__wbg_pipelinehandle_free(ptr, 0);
     }
     /**
+     * Set a TrimBox on every page by insetting the MediaBox by `bleed_pts` on all sides.
+     * Use this when a PDF has no TrimBox but the bleed extent is known (typically 9 pts / ⅛ in).
+     * Consumes the handle and returns a new one.
+     * @param {number} bleed_pts
+     * @returns {PipelineHandle}
+     */
+    add_trim_box(bleed_pts) {
+        const ptr = this.__destroy_into_raw();
+        const ret = wasm.pipelinehandle_add_trim_box(ptr, bleed_pts);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return PipelineHandle.__wrap(ret[0]);
+    }
+    /**
+     * Classify color usage across all pages.
+     * Returns one of `"CMYK"`, `"RGB"`, `"Mixed"`, or `"Unknown"`.
+     * @returns {string}
+     */
+    detect_color_space() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.pipelinehandle_detect_color_space(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * Embed rustybara processing metadata into the document's XMP stream.
+     *
+     * `source_hash` should be the result of calling `hash_bytes()` on the original
+     * unmodified PDF bytes. `timestamp` is an ISO 8601 string from the caller.
+     * `op_names` and `op_params` are parallel arrays of operation names and their
+     * parameter strings (use an empty string for ops with no parameters).
+     * Consumes the handle and returns a new one.
+     * @param {string} source_hash
+     * @param {string} timestamp
+     * @param {string[]} op_names
+     * @param {string[]} op_params
+     * @returns {PipelineHandle}
+     */
+    embed_metadata(source_hash, timestamp, op_names, op_params) {
+        const ptr = this.__destroy_into_raw();
+        const ptr0 = passStringToWasm0(source_hash, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(timestamp, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passArrayJsValueToWasm0(op_names, wasm.__wbindgen_malloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passArrayJsValueToWasm0(op_params, wasm.__wbindgen_malloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ret = wasm.pipelinehandle_embed_metadata(ptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return PipelineHandle.__wrap(ret[0]);
+    }
+    /**
+     * Extract a subset of pages into a new handle. Page indices are zero-based.
+     * Out-of-range indices are silently ignored. Does not consume this handle.
+     * @param {Uint32Array} page_nums
+     * @returns {PipelineHandle}
+     */
+    extract_pages(page_nums) {
+        const ptr0 = passArray32ToWasm0(page_nums, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.pipelinehandle_extract_pages(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return PipelineHandle.__wrap(ret[0]);
+    }
+    /**
      * Construct from raw PDF bytes.
      * @param {Uint8Array} bytes
      */
@@ -37,12 +114,48 @@ export class PipelineHandle {
         return this;
     }
     /**
+     * Convert all text to outlined vector paths, removing the dependency on embedded fonts.
+     * Consumes the handle and returns a new one.
+     * @returns {PipelineHandle}
+     */
+    outline_text() {
+        const ptr = this.__destroy_into_raw();
+        const ret = wasm.pipelinehandle_outline_text(ptr);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return PipelineHandle.__wrap(ret[0]);
+    }
+    /**
      * Return the number of pages in the document (does not consume the handle).
      * @returns {number}
      */
     page_count() {
         const ret = wasm.pipelinehandle_page_count(this.__wbg_ptr);
         return ret >>> 0;
+    }
+    /**
+     * Return approximate text and image bounding boxes for a page as
+     * `{ text: [[x,y,w,h], …], images: [[x,y,w,h], …] }` (pts, origin bottom-left).
+     * `page_idx` is zero-based. Returns an object with empty arrays when the page
+     * does not exist or has no parseable content.
+     * @param {number} page_idx
+     * @returns {any}
+     */
+    page_layout_hint(page_idx) {
+        const ret = wasm.pipelinehandle_page_layout_hint(this.__wbg_ptr, page_idx);
+        return ret;
+    }
+    /**
+     * Read the `rbara:` XMP block embedded by a previous rustybara run.
+     * Returns `null` for files that have never been processed by rustybara,
+     * otherwise an object with `uuid`, `version`, `timestamp`, `source_hash`,
+     * `parent_id`, and `ops` (string array) fields.
+     * @returns {any}
+     */
+    read_xmp_block() {
+        const ret = wasm.pipelinehandle_read_xmp_block(this.__wbg_ptr);
+        return ret;
     }
     /**
      * Substitute a CMYK color throughout content streams.
@@ -80,6 +193,32 @@ export class PipelineHandle {
         return PipelineHandle.__wrap(ret[0]);
     }
     /**
+     * Split each wide page at `panel_width_pts` into left/right halves.
+     * Does not consume this handle; returns a new one containing the split pages.
+     * @param {number} panel_width_pts
+     * @returns {PipelineHandle}
+     */
+    split_pages(panel_width_pts) {
+        const ret = wasm.pipelinehandle_split_pages(this.__wbg_ptr, panel_width_pts);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return PipelineHandle.__wrap(ret[0]);
+    }
+    /**
+     * Stitch adjacent page pairs into spreads of `spread_width_pts`.
+     * Does not consume this handle; returns a new one containing the stitched spreads.
+     * @param {number} spread_width_pts
+     * @returns {PipelineHandle}
+     */
+    stitch_pages(spread_width_pts) {
+        const ret = wasm.pipelinehandle_stitch_pages(this.__wbg_ptr, spread_width_pts);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return PipelineHandle.__wrap(ret[0]);
+    }
+    /**
      * Serialize the result to PDF bytes for download. Consumes the handle.
      * @returns {Uint8Array}
      */
@@ -108,12 +247,41 @@ export class PipelineHandle {
 }
 if (Symbol.dispose) PipelineHandle.prototype[Symbol.dispose] = PipelineHandle.prototype.free;
 
+/**
+ * Compute `"sha256:<hex>"` of raw bytes. Call this on the original PDF bytes
+ * *before* constructing a `PipelineHandle` so the hash reflects unmodified data.
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+export function hash_bytes(bytes) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passArray8ToWasm0(bytes, wasm.__wbindgen_malloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.hash_bytes(ptr0, len0);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
 export function init() {
     wasm.init();
 }
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
+        __wbg___wbindgen_string_get_7ed5322991caaec5: function(arg0, arg1) {
+            const obj = arg1;
+            const ret = typeof(obj) === 'string' ? obj : undefined;
+            var ptr1 = isLikeNone(ret) ? 0 : passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            var len1 = WASM_VECTOR_LEN;
+            getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
+            getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+        },
         __wbg___wbindgen_throw_6b64449b9b9ed33c: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
@@ -131,6 +299,9 @@ function __wbg_get_imports() {
         __wbg_getRandomValues_76dfc69825c9c552: function() { return handleError(function (arg0, arg1) {
             globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
         }, arguments); },
+        __wbg_getRandomValues_ef12552bf5acd2fe: function() { return handleError(function (arg0, arg1) {
+            globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
+        }, arguments); },
         __wbg_new_227d7c05414eb861: function() {
             const ret = new Error();
             return ret;
@@ -139,12 +310,36 @@ function __wbg_get_imports() {
             const ret = new Error(getStringFromWasm0(arg0, arg1));
             return ret;
         },
+        __wbg_new_682678e2f47e32bc: function() {
+            const ret = new Array();
+            return ret;
+        },
+        __wbg_new_aa8d0fa9762c29bd: function() {
+            const ret = new Object();
+            return ret;
+        },
+        __wbg_set_3bf1de9fab0cd644: function(arg0, arg1, arg2) {
+            arg0[arg1 >>> 0] = arg2;
+        },
+        __wbg_set_6be42768c690e380: function(arg0, arg1, arg2) {
+            arg0[arg1] = arg2;
+        },
         __wbg_stack_3b0d974bbf31e44f: function(arg0, arg1) {
             const ret = arg1.stack;
             const ptr1 = passStringToWasm0(ret, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
             getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
             getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
+        },
+        __wbindgen_cast_0000000000000001: function(arg0) {
+            // Cast intrinsic for `F64 -> Externref`.
+            const ret = arg0;
+            return ret;
+        },
+        __wbindgen_cast_0000000000000002: function(arg0, arg1) {
+            // Cast intrinsic for `Ref(String) -> Externref`.
+            const ret = getStringFromWasm0(arg0, arg1);
+            return ret;
         },
         __wbindgen_init_externref_table: function() {
             const table = wasm.__wbindgen_externrefs;
@@ -190,6 +385,14 @@ function getStringFromWasm0(ptr, len) {
     return decodeText(ptr, len);
 }
 
+let cachedUint32ArrayMemory0 = null;
+function getUint32ArrayMemory0() {
+    if (cachedUint32ArrayMemory0 === null || cachedUint32ArrayMemory0.byteLength === 0) {
+        cachedUint32ArrayMemory0 = new Uint32Array(wasm.memory.buffer);
+    }
+    return cachedUint32ArrayMemory0;
+}
+
 let cachedUint8ArrayMemory0 = null;
 function getUint8ArrayMemory0() {
     if (cachedUint8ArrayMemory0 === null || cachedUint8ArrayMemory0.byteLength === 0) {
@@ -207,10 +410,31 @@ function handleError(f, args) {
     }
 }
 
+function isLikeNone(x) {
+    return x === undefined || x === null;
+}
+
+function passArray32ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 4, 4) >>> 0;
+    getUint32ArrayMemory0().set(arg, ptr / 4);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
 function passArray8ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 1, 1) >>> 0;
     getUint8ArrayMemory0().set(arg, ptr / 1);
     WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+
+function passArrayJsValueToWasm0(array, malloc) {
+    const ptr = malloc(array.length * 4, 4) >>> 0;
+    for (let i = 0; i < array.length; i++) {
+        const add = addToExternrefTable0(array[i]);
+        getDataViewMemory0().setUint32(ptr + 4 * i, add, true);
+    }
+    WASM_VECTOR_LEN = array.length;
     return ptr;
 }
 
@@ -291,6 +515,7 @@ function __wbg_finalize_init(instance, module) {
     wasm = instance.exports;
     wasmModule = module;
     cachedDataViewMemory0 = null;
+    cachedUint32ArrayMemory0 = null;
     cachedUint8ArrayMemory0 = null;
     wasm.__wbindgen_start();
     return wasm;
