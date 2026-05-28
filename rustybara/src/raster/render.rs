@@ -120,3 +120,48 @@ impl PageRenderer for CpuRenderer {
 pub fn render_page(page: &PdfPage, config: &RenderConfig) -> crate::Result<DynamicImage> {
     CpuRenderer.render(page, config)
 }
+
+/// Render a single tile of a PDF page by rendering the full page at `dpi` and
+/// cropping to the `tile_size × tile_size` region at grid position `(col, row)`.
+///
+/// Edge tiles that fall partially outside the page are cropped to the actual
+/// content area; they will be smaller than `tile_size` on one or both axes.
+///
+/// Callers that render many tiles for the same page should cache the full-page
+/// image themselves (e.g. via `render_page`) and crop with `crop_imm` to avoid
+/// re-rendering the whole page for each tile.
+pub fn render_tile(
+    page: &PdfPage,
+    dpi: f32,
+    col: u32,
+    row: u32,
+    tile_size: u32,
+) -> crate::Result<DynamicImage> {
+    use pdfium_render::prelude::*;
+
+    let scale = dpi / 72.0;
+    let full_w = (page.width().value * scale) as i32;
+    let full_h = (page.height().value * scale) as i32;
+
+    let render_cfg = PdfRenderConfig::new()
+        .set_target_size(full_w, full_h)
+        .render_annotations(true);
+
+    let full_img = page
+        .render_with_config(&render_cfg)
+        .and_then(|bm| bm.as_image())?;
+
+    let x = col * tile_size;
+    let y = row * tile_size;
+    let crop_w = tile_size.min(full_img.width().saturating_sub(x));
+    let crop_h = tile_size.min(full_img.height().saturating_sub(y));
+
+    if crop_w == 0 || crop_h == 0 {
+        return Err(crate::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "tile coordinates out of page bounds",
+        )));
+    }
+
+    Ok(full_img.crop_imm(x, y, crop_w, crop_h))
+}

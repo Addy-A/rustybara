@@ -62,6 +62,14 @@ pub struct DebugOverlay<'a> {
     pub lines: &'a [String],
 }
 
+/// Tile performance telemetry overlay — shown when telemetry mode is active (Ctrl+Shift+T).
+///
+/// Displays tile render times, cache stats, and page grid information in a panel
+/// at the top-left of the window, separate from the debug overlay.
+pub struct TelemetryOverlay<'a> {
+    pub lines: &'a [String],
+}
+
 // ── egui texture cache ────────────────────────────────────────────────────────
 
 /// CPU-side backing for a single egui texture plus a cached Skia image.
@@ -496,6 +504,58 @@ fn draw_debug_overlay(canvas: &skia_safe::Canvas, lines: &[String], win_w: f32, 
     }
 }
 
+/// Draw the tile performance telemetry panel in the top-left corner of the window.
+fn draw_telemetry_panel(canvas: &skia_safe::Canvas, lines: &[String], win_w: f32, win_h: f32) {
+    if lines.is_empty() {
+        return;
+    }
+
+    let font_size = 11.0_f32;
+    let line_h = 15.0_f32;
+    let pad_x = 10.0_f32;
+    let pad_y = 8.0_f32;
+    let panel_w = 340.0_f32;
+    let panel_h = (pad_y + lines.len() as f32 * line_h + pad_y).min(win_h - 20.0);
+    let x = 10.0_f32;
+    let y = 10.0_f32;
+
+    let _ = win_w; // panel anchored to top-left, win_w unused
+
+    let mut bg = skia_safe::Paint::default();
+    bg.set_color(skia_safe::Color::from_argb(225, 12, 8, 32));
+    bg.set_anti_alias(true);
+    canvas.draw_rect(skia_safe::Rect::from_xywh(x, y, panel_w, panel_h), &bg);
+
+    let mut border = skia_safe::Paint::default();
+    border.set_style(skia_safe::paint::Style::Stroke);
+    border.set_stroke_width(1.0);
+    border.set_color(skia_safe::Color::from_argb(200, 120, 80, 255));
+    canvas.draw_rect(skia_safe::Rect::from_xywh(x, y, panel_w, panel_h), &border);
+
+    let font = make_ui_font(font_size);
+
+    let mut bright = skia_safe::Paint::default();
+    bright.set_color(skia_safe::Color::from_argb(255, 180, 150, 255));
+    bright.set_anti_alias(true);
+
+    let mut dim = skia_safe::Paint::default();
+    dim.set_color(skia_safe::Color::from_argb(255, 140, 118, 200));
+    dim.set_anti_alias(true);
+
+    let max_lines = ((panel_h - pad_y * 2.0) / line_h) as usize;
+    for (i, line) in lines.iter().take(max_lines).enumerate() {
+        let ty = y + pad_y + (i as f32 + 1.0) * line_h;
+        let paint = if i == 0 || line.starts_with('\u{2500}') {
+            &bright
+        } else {
+            &dim
+        };
+        if let Some(blob) = skia_safe::TextBlob::from_str(line.as_str(), &font) {
+            canvas.draw_text_blob(&blob, (x + pad_x, ty), paint);
+        }
+    }
+}
+
 // ── egui image helper ─────────────────────────────────────────────────────────
 
 /// Build a Skia raster image from a flat RGBA u8 buffer.
@@ -565,17 +625,16 @@ impl SkiaRenderer {
         }
     }
 
-    /// Draw the page and optional overlays onto the Skia surface.
+    /// Draw the page and prepress overlays onto the Skia surface.
     ///
     /// Rendering order (back to front):
     /// 1. Background clear (dark grey)
     /// 2a. **Normal mode** – raster page image
     /// 2b. **Wireframe mode** – white page rect + all object outlines + selection highlight
     /// 3. Prepress box overlays (`overlays`) — shown in both modes
-    /// 4. Sampling crosshair marker (`sample_marker`) — screen-space coords pre-projected
-    ///    by the caller from PDF coordinates using the current zoom/pan
-    /// 5. Color diagnostics panel (`color_panel`)
-    /// 6. Debug overlay (`debug`) — always on top, even before a page has loaded
+    ///
+    /// Call [`Self::draw_top_layer`] after [`Self::draw_tiles`] to ensure the
+    /// sample crosshair and debug overlay always render above tile images.
     pub fn draw(
         &mut self,
         page_image: Option<&skia_safe::Image>,
@@ -583,19 +642,13 @@ impl SkiaRenderer {
         pan: [f32; 2],
         overlays: Option<&OverlayData<'_>>,
         wireframe: Option<&PageWireframe<'_>>,
-        sample_marker: Option<[f32; 2]>,
-        debug: Option<&DebugOverlay<'_>>,
     ) {
         let canvas = self.skia_surface.canvas();
         canvas.clear(skia_safe::Color::from_argb(255, 30, 30, 30));
 
-        // win_w / win_h must be known before the page-image check so the debug
-        // overlay can be drawn even while a page is still loading.
         let win_w = self.width as f32;
         let win_h = self.height as f32;
 
-        // The page position is always derived from the raster image dimensions.
-        // Wireframe mode uses the same dst rect so pan/zoom stay consistent.
         if let Some(img) = page_image {
             let img_w = img.width() as f32;
             let img_h = img.height() as f32;
@@ -612,10 +665,8 @@ impl SkiaRenderer {
             let dst = skia_safe::Rect::from_xywh(x, y, draw_w, draw_h);
 
             if let Some(wf) = wireframe {
-                // Wireframe mode: white page background + object outlines.
                 draw_page_wireframe(canvas, wf, dst);
             } else {
-                // Normal mode: render the rasterized page image.
                 canvas.draw_image_rect(
                     img,
                     Some((&src, skia_safe::canvas::SrcRectConstraint::Strict)),
@@ -624,20 +675,55 @@ impl SkiaRenderer {
                 );
             }
 
-            // Prepress box overlays render in both modes.
             if let Some(ov) = overlays {
                 draw_overlays(canvas, ov, dst);
             }
         }
+    }
 
-        // Sampling crosshair.
+    /// Draw the sample crosshair, debug overlay, and telemetry panel on top of everything
+    /// except egui. Must be called after [`Self::draw_tiles`]. Call [`Self::draw_egui`] after.
+    pub fn draw_top_layer(
+        &mut self,
+        sample_marker: Option<[f32; 2]>,
+        debug: Option<&DebugOverlay<'_>>,
+        telemetry: Option<&TelemetryOverlay<'_>>,
+    ) {
+        let canvas = self.skia_surface.canvas();
+        let win_w = self.width as f32;
+        let win_h = self.height as f32;
+
         if let Some(pos) = sample_marker {
             draw_sample_marker(canvas, pos);
         }
 
-        // Debug overlay renders on top of everything, including the loading state.
         if let Some(dbg) = debug {
             draw_debug_overlay(canvas, dbg.lines, win_w, win_h);
+        }
+
+        if let Some(tel) = telemetry {
+            draw_telemetry_panel(canvas, tel.lines, win_w, win_h);
+        }
+    }
+
+    /// Draw a set of tiles on top of the current frame.
+    ///
+    /// Each entry is `(screen_rect, tile_image)`. Tiles are drawn with a full-image
+    /// source rect and no additional paint effects. Call this after `draw()` and
+    /// before `draw_egui()` so tiles overlay the full-page fallback image.
+    pub fn draw_tiles(&mut self, tiles: &[(skia_safe::Rect, skia_safe::Image)]) {
+        if tiles.is_empty() {
+            return;
+        }
+        let canvas = self.skia_surface.canvas();
+        for (dst, img) in tiles {
+            let src = skia_safe::Rect::from_wh(img.width() as f32, img.height() as f32);
+            canvas.draw_image_rect(
+                img,
+                Some((&src, skia_safe::canvas::SrcRectConstraint::Strict)),
+                dst,
+                &skia_safe::Paint::default(),
+            );
         }
     }
 

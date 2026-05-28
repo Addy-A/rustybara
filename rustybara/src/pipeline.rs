@@ -808,6 +808,18 @@ impl PdfPipeline {
         crate::raster::render_page(&page, config)
     }
 
+    /// Serialize the document to bytes for use by background render workers.
+    ///
+    /// Unlike `render_page`, this takes `&self` so it can be called through an
+    /// `Arc<PdfPipeline>` without requiring exclusive access.
+    #[cfg(feature = "raster")]
+    pub fn pdf_bytes(&self) -> crate::Result<Vec<u8>> {
+        let mut clone = self.doc.clone();
+        let mut buf = Vec::new();
+        clone.save_to(&mut buf).map_err(crate::Error::Io)?;
+        Ok(buf)
+    }
+
     /// Saves a rendered page as an image file.
     ///
     /// This method renders a specific page from the document and saves it to the specified

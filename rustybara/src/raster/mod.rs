@@ -23,5 +23,5 @@
 mod render;
 mod config;
 
-pub use render::{PageRenderer, CpuRenderer, render_page};
+pub use render::{PageRenderer, CpuRenderer, render_page, render_tile};
 pub use config::RenderConfig;

@@ -1,6 +1,7 @@
 use crate::export::export_wireframe;
 use crate::renderer::{
     image_to_skia, ColorPanel, DebugOverlay, OverlayData, PageWireframe, SkiaRenderer,
+    TelemetryOverlay,
 };
 use crate::separation::{build_icc_transform as sep_build_icc_transform, PlateChannel};
 use crate::ui_state::{extract_spot_names, PlateMode};
@@ -52,6 +53,15 @@ pub enum ViewerEvent {
         plate: PlateMode,
         image: DynamicImage,
     },
+    /// A single tile has finished rendering in the background worker.
+    TileReady {
+        key: crate::tiles::TileKey,
+        image: DynamicImage,
+    },
+    /// A debug/status message from the tile worker thread.
+    TileLog(String),
+    /// Performance metrics from the worker after a full-page render at a given DPI.
+    TileMetrics { dpi: f32, render_ms: u64, img_w: u32, img_h: u32 },
     FileChanged,
     IpcCommand(IpcCmd),
 }
@@ -66,6 +76,8 @@ struct SkiaState {
     /// ICC plate separation result — replaces `page_image` when a non-All plate is active.
     /// Cleared whenever the plate selection changes or a new page render starts.
     plate_image: Option<skia_safe::Image>,
+    /// Rendered tiles for the current page, keyed by TileKey.
+    tile_images: std::collections::HashMap<crate::tiles::TileKey, skia_safe::Image>,
     width: u32,
     height: u32,
 }
@@ -140,9 +152,114 @@ struct Viewer {
     /// One-frame delay is acceptable — the pointer must have been hovering there
     /// before a press can register.
     egui_pointer_over_panel: bool,
+    /// Tile system: tracks which tiles have been enqueued to the worker.
+    tile_cache: crate::tiles::TileCache,
+    /// Channel to the background tile render worker. `None` before the first
+    /// `PageReady` event. Dropping this sender closes the channel and causes the
+    /// worker thread to exit cleanly.
+    tile_sender: Option<std::sync::mpsc::Sender<crate::tiles::RenderRequest>>,
+    /// When `true`, the tile performance telemetry panel is visible (Ctrl+Shift+T).
+    telemetry_mode: bool,
+    /// Latest full-page render timing per DPI level, keyed by `dpi as u32`.
+    /// Updated each time the worker completes a new full-page render.
+    tile_perf: std::collections::HashMap<u32, (u64, u32, u32)>,
 }
 
 impl Viewer {
+    // ── Tile rendering ────────────────────────────────────────────────────────
+
+    /// Serialize the current PDF once and start the background tile worker.
+    /// Replaces any previously running worker (old sender is dropped → old thread exits).
+    fn spawn_tile_worker(&mut self) {
+        let bytes = match self.pipeline.pdf_bytes() {
+            Ok(b) => std::sync::Arc::new(b),
+            Err(e) => {
+                self.push_log(format!("Tile worker: pdf_bytes failed — {e}"));
+                return;
+            }
+        };
+        self.push_log(format!("Tile worker spawned ({} bytes)", bytes.len()));
+        let proxy = self.proxy.clone();
+        let log_proxy = self.proxy.clone();
+        let metrics_proxy = self.proxy.clone();
+        let sender = crate::tiles::RenderWorker::spawn(
+            std::sync::Arc::clone(&bytes),
+            move |key, image| {
+                let _ = proxy.send_event(ViewerEvent::TileReady { key, image });
+            },
+            move |msg| {
+                let _ = log_proxy.send_event(ViewerEvent::TileLog(msg));
+            },
+            move |dpi, render_ms, img_w, img_h| {
+                let _ = metrics_proxy.send_event(ViewerEvent::TileMetrics {
+                    dpi,
+                    render_ms,
+                    img_w,
+                    img_h,
+                });
+            },
+        );
+        self.tile_sender = Some(sender);
+        self.tile_cache.clear();
+        if let Some(state) = self.state.as_mut() {
+            state.tile_images.clear();
+        }
+    }
+
+    /// Compute which tiles are currently visible and send missing ones to the worker.
+    /// Also evicts tiles for stale zoom buckets from `state.tile_images`.
+    fn enqueue_visible_tiles(&mut self) {
+        let (bucket, dpi) = crate::tiles::zoom_bucket(self.zoom);
+        if bucket == 0 {
+            return;
+        }
+        let Some(page_rect) = self.compute_page_rect() else {
+            return;
+        };
+        let Some(media) = self.page_boxes.as_ref().map(|b| &b.media_box) else {
+            return;
+        };
+        let page_pts = (media.width as f32, media.height as f32);
+        let viewport = match self.state.as_ref() {
+            Some(s) => skia_safe::Rect::from_xywh(0.0, 0.0, s.width as f32, s.height as f32),
+            None => return,
+        };
+
+        let page = self.page;
+
+        // Evict tiles for other zoom buckets to free GPU memory.
+        if let Some(state) = self.state.as_mut() {
+            state
+                .tile_images
+                .retain(|k, _| k.page == page && k.zoom_bucket == bucket);
+        }
+        self.tile_cache.evict_other_buckets(page, bucket);
+
+        let keys =
+            crate::tiles::compute_visible_tiles(page_rect, page_pts, viewport, self.zoom, page);
+
+        let Some(sender) = self.tile_sender.as_ref() else {
+            self.push_log("Tile enqueue: no worker (sender is None)".to_string());
+            return;
+        };
+        let mut new_count = 0u32;
+        for key in &keys {
+            let already_rendered = self
+                .state
+                .as_ref()
+                .map_or(false, |s| s.tile_images.contains_key(key));
+            if !self.tile_cache.is_queued(key) && !already_rendered {
+                self.tile_cache.mark_queued(*key);
+                let _ = sender.send(crate::tiles::RenderRequest { key: *key, dpi });
+                new_count += 1;
+            }
+        }
+        self.push_log(format!(
+            "Tiles: bucket={} dpi={} visible={} queued={}",
+            bucket, dpi as u32, keys.len(), new_count
+        ));
+    }
+
     // ── Zoom ─────────────────────────────────────────────────────────────────
 
     fn apply_zoom(&mut self, factor: f32, focal: Option<[f32; 2]>, win_w: f32, win_h: f32) {
@@ -532,9 +649,12 @@ impl Viewer {
         self.sampling_pdf_pos = None;
         self.pending_image = None;
         self.current_image = None;
+        self.tile_sender = None; // drop → worker channel closes → worker exits
+        self.tile_cache.clear();
         if let Some(state) = self.state.as_mut() {
             state.page_image = None;
             state.plate_image = None;
+            state.tile_images.clear();
         }
         self.plate_image_for = PlateMode::All;
 
@@ -557,6 +677,97 @@ impl Viewer {
     }
 
     // ── Debug overlay lines ───────────────────────────────────────────────────
+
+    /// Build the list of text lines for the tile performance telemetry panel.
+    ///
+    /// Called once per frame when telemetry mode is active. Reads `self` immutably.
+    fn build_telemetry_lines(&self) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+        lines.push("── TELEMETRY  (Ctrl+Shift+T to close) ──────────".to_string());
+
+        let (bucket, dpi) = crate::tiles::zoom_bucket(self.zoom);
+        lines.push(format!("Zoom  {:.3}×   Bucket {}   {:.0} DPI", self.zoom, bucket, dpi));
+
+        lines.push("\u{2500}\u{2500}\u{2500} Full-page Render Times \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}".to_string());
+
+        if self.tile_perf.is_empty() {
+            lines.push("  No renders yet  (zoom past 1.5\u{00d7} to activate)".to_string());
+        } else {
+            let mut sorted: Vec<(u32, (u64, u32, u32))> =
+                self.tile_perf.iter().map(|(k, v)| (*k, *v)).collect();
+            sorted.sort_by_key(|(d, _)| *d);
+            for (rdpi, (rms, rw, rh)) in &sorted {
+                let bytes = *rw as u64 * *rh as u64 * 4;
+                let mem_str = if bytes >= 1024 * 1024 {
+                    format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+                } else {
+                    format!("{} KB", bytes / 1024)
+                };
+                lines.push(format!(
+                    "  {:>4}dpi  {:>5}ms   {}×{}  {}",
+                    rdpi, rms, rw, rh, mem_str
+                ));
+            }
+        }
+
+        lines.push("\u{2500}\u{2500}\u{2500} Tile Cache \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}".to_string());
+
+        let mut per_bucket: std::collections::HashMap<u8, usize> =
+            std::collections::HashMap::new();
+        if let Some(state) = self.state.as_ref() {
+            for k in state.tile_images.keys() {
+                *per_bucket.entry(k.zoom_bucket).or_insert(0) += 1;
+            }
+        }
+
+        const BUCKET_INFO: &[(u8, f32)] = &[
+            (1, 300.0), (2, 450.0), (3, 500.0), (4, 600.0),
+            (5, 800.0), (6, 1000.0), (7, 1200.0),
+        ];
+        for (b, bdpi) in BUCKET_INFO {
+            let count = per_bucket.get(b).copied().unwrap_or(0);
+            if count > 0 {
+                let kb = count as u64
+                    * crate::tiles::TILE_SIZE as u64
+                    * crate::tiles::TILE_SIZE as u64
+                    * 4
+                    / 1024;
+                lines.push(format!(
+                    "  Bucket {} ({:>3}dpi)  {:>3} tiles  ~{} KB",
+                    b, *bdpi as u32, count, kb
+                ));
+            } else {
+                lines.push(format!("  Bucket {} ({:>3}dpi)  —", b, *bdpi as u32));
+            }
+        }
+
+        lines.push("\u{2500}\u{2500}\u{2500} Page Grid \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}".to_string());
+        if bucket > 0 {
+            let page_pts = self
+                .page_boxes
+                .as_ref()
+                .map(|b| (b.media_box.width as f32, b.media_box.height as f32))
+                .unwrap_or((612.0, 792.0));
+            let tile_page_w = page_pts.0 * dpi / 72.0;
+            let tile_page_h = page_pts.1 * dpi / 72.0;
+            let cols =
+                (tile_page_w / crate::tiles::TILE_SIZE as f32).ceil() as u32;
+            let rows =
+                (tile_page_h / crate::tiles::TILE_SIZE as f32).ceil() as u32;
+            let cached = per_bucket.get(&bucket).copied().unwrap_or(0);
+            lines.push(format!(
+                "  {}×{} = {} tiles total   {} cached",
+                cols,
+                rows,
+                cols * rows,
+                cached
+            ));
+        } else {
+            lines.push("  Tiling inactive below 1.5\u{00d7} zoom".to_string());
+        }
+
+        lines
+    }
 
     /// Build the list of text lines for the debug overlay.
     ///
@@ -824,6 +1035,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
             egui_winit,
             page_image,
             plate_image: None,
+            tile_images: std::collections::HashMap::new(),
             width,
             height,
         });
@@ -925,13 +1137,21 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 // ── Phase 4: tessellate ───────────────────────────────────────
                 let egui_primitives = self.egui_ctx.tessellate(shapes, pixels_per_point);
 
-                // ── Phase 5: build debug overlay (immutable borrows) ──────────
+                // ── Phase 5: build debug/telemetry overlays (immutable borrows) ─
                 let debug_lines: Option<Vec<String>> = if self.debug_mode {
                     Some(self.build_debug_lines())
                 } else {
                     None
                 };
                 let debug_overlay = debug_lines.as_deref().map(|lines| DebugOverlay { lines });
+
+                let telemetry_lines: Option<Vec<String>> = if self.telemetry_mode {
+                    Some(self.build_telemetry_lines())
+                } else {
+                    None
+                };
+                let telemetry_overlay =
+                    telemetry_lines.as_deref().map(|lines| TelemetryOverlay { lines });
 
                 // ── Phase 6: project sample crosshair ────────────────────────
                 // compute_page_rect borrows self.state immutably — must happen
@@ -947,6 +1167,42 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                             page_rect.top() + rel_y * page_rect.height(),
                         ])
                     });
+
+                // ── Pre-Phase 7: compute tile overlay pairs ───────────────────
+                // Must happen before `let state = self.state.as_mut()` because
+                // `compute_page_rect()` borrows `self.state` immutably. The pairs
+                // are owned (Images cloned cheaply via Arc) so no lifetime issue.
+                let (tile_bucket, tile_dpi) = crate::tiles::zoom_bucket(self.zoom);
+                let tile_pairs: Vec<(skia_safe::Rect, skia_safe::Image)> =
+                    if tile_bucket > 0
+                        && !self.show_wireframe
+                        && self.active_plate == PlateMode::All
+                    {
+                        if let (Some(page_rect), Some(boxes)) =
+                            (self.compute_page_rect(), self.page_boxes.as_ref())
+                        {
+                            let page_pts =
+                                (boxes.media_box.width as f32, boxes.media_box.height as f32);
+                            self.state.as_ref().map_or(vec![], |s| {
+                                s.tile_images
+                                    .iter()
+                                    .filter(|(k, _)| {
+                                        k.page == self.page && k.zoom_bucket == tile_bucket
+                                    })
+                                    .map(|(k, img)| {
+                                        let r = crate::tiles::tile_rect_on_screen(
+                                            k, &page_rect, page_pts, tile_dpi,
+                                        );
+                                        (r, img.clone())
+                                    })
+                                    .collect()
+                            })
+                        } else {
+                            vec![]
+                        }
+                    } else {
+                        vec![]
+                    };
 
                 // ── Phase 7: draw ─────────────────────────────────────────────
                 let state = self.state.as_mut().unwrap();
@@ -1001,8 +1257,18 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                     self.pan,
                     overlays.as_ref(),
                     wireframe.as_ref(),
+                );
+
+                // ── Phase 7b: tile overlay ────────────────────────────────────
+                if !tile_pairs.is_empty() {
+                    state.renderer.draw_tiles(&tile_pairs);
+                }
+
+                // ── Phase 7c: top-layer overlays (always above tiles) ─────────
+                state.renderer.draw_top_layer(
                     sample_screen_pos,
                     debug_overlay.as_ref(),
+                    telemetry_overlay.as_ref(),
                 );
 
                 state.renderer.draw_egui(&egui_primitives, pixels_per_point);
@@ -1070,6 +1336,14 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                         self.push_log(format!(
                             "Debug mode: {}",
                             if self.debug_mode { "ON" } else { "OFF" }
+                        ));
+                    }
+                    KeyCode::KeyT if self.ctrl_held && self.shift_held => {
+                        // Ctrl+Shift+T — toggle tile performance telemetry panel.
+                        self.telemetry_mode = !self.telemetry_mode;
+                        self.push_log(format!(
+                            "Telemetry: {}",
+                            if self.telemetry_mode { "ON" } else { "OFF" }
                         ));
                     }
                     KeyCode::KeyE if self.ctrl_held && self.shift_held => {
@@ -1159,6 +1433,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
 
                     _ => {}
                 }
+                self.enqueue_visible_tiles();
                 self.state.as_ref().unwrap().window.request_redraw();
             }
 
@@ -1178,6 +1453,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 };
                 let focal = self.cursor_pos;
                 self.apply_zoom(factor, Some(focal), win_w, win_h);
+                self.enqueue_visible_tiles();
                 self.state.as_ref().unwrap().window.request_redraw();
             }
 
@@ -1186,6 +1462,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 if let Some((cursor_start, pan_start)) = self.drag_origin {
                     self.pan[0] = pan_start[0] + new_pos[0] - cursor_start[0];
                     self.pan[1] = pan_start[1] + new_pos[1] - cursor_start[1];
+                    self.enqueue_visible_tiles();
                     self.state.as_ref().unwrap().window.request_redraw();
                 }
                 self.cursor_pos = new_pos;
@@ -1268,6 +1545,9 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 if self.active_plate != PlateMode::All {
                     self.spawn_plate_separation();
                 }
+                // Start the tile worker now that we have a full-resolution page image.
+                self.spawn_tile_worker();
+                self.enqueue_visible_tiles();
             }
             ViewerEvent::PlateReady { page, plate, image }
                 if page == self.page && plate == self.active_plate =>
@@ -1279,6 +1559,42 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                     state.window.request_redraw();
                 }
                 self.push_log("Plate separation ready".to_string());
+            }
+            ViewerEvent::TileReady { key, image }
+                if key.page == self.page
+                    && key.zoom_bucket == crate::tiles::zoom_bucket(self.zoom).0 =>
+            {
+                let cached = if let Some(state) = self.state.as_mut() {
+                    state.tile_images.insert(key, image_to_skia(&image));
+                    state.window.request_redraw();
+                    state.tile_images.len()
+                } else {
+                    0
+                };
+                self.push_log(format!(
+                    "Tile ready: p{}b{} ({},{}) → {} cached",
+                    key.page, key.zoom_bucket, key.col, key.row, cached
+                ));
+            }
+            ViewerEvent::TileReady { key, .. } => {
+                self.push_log(format!(
+                    "Tile stale: p{}b{} (cur p{}b{})",
+                    key.page,
+                    key.zoom_bucket,
+                    self.page,
+                    crate::tiles::zoom_bucket(self.zoom).0
+                ));
+            }
+            ViewerEvent::TileLog(msg) => {
+                self.push_log(msg);
+            }
+            ViewerEvent::TileMetrics { dpi, render_ms, img_w, img_h } => {
+                self.tile_perf.insert(dpi as u32, (render_ms, img_w, img_h));
+                if self.telemetry_mode {
+                    if let Some(state) = self.state.as_ref() {
+                        state.window.request_redraw();
+                    }
+                }
             }
             ViewerEvent::FileChanged => {
                 if let Ok(new_pipeline) = PdfPipeline::open(&self.file) {
@@ -1304,12 +1620,15 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
 
                     self.pipeline = Arc::new(new_pipeline);
                 }
-                // Page content changed — clear stale selection and plate data.
+                // Page content changed — clear stale selection, plate data, and tiles.
                 self.selected_object = None;
                 self.color_info = None;
                 self.sampling_pdf_pos = None;
+                self.tile_sender = None; // drop → worker channel closes → worker exits
+                self.tile_cache.clear();
                 if let Some(state) = self.state.as_mut() {
                     state.plate_image = None;
+                    state.tile_images.clear();
                 }
                 self.plate_image_for = PlateMode::All;
                 self.push_log("File reloaded — selection cleared");
@@ -1354,9 +1673,12 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                             self.sampling_pdf_pos = None;
                             self.pending_image = None;
                             self.current_image = None;
+                            self.tile_sender = None;
+                            self.tile_cache.clear();
                             if let Some(state) = self.state.as_mut() {
                                 state.page_image = None;
                                 state.plate_image = None;
+                                state.tile_images.clear();
                             }
                             self.plate_image_for = PlateMode::All;
 
@@ -1517,6 +1839,10 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig, listen: bool) {
         plate_tinted: false,
         plate_image_for: PlateMode::All,
         egui_pointer_over_panel: false,
+        tile_cache: crate::tiles::TileCache::new(),
+        tile_sender: None,
+        telemetry_mode: false,
+        tile_perf: std::collections::HashMap::new(),
     };
 
     event_loop.run_app(&mut viewer).expect("run app");

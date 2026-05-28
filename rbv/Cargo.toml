@@ -8,6 +8,7 @@ license = "GPL-3.0-only"
 image = "0.25.10"
 rustybara = { path = "../rustybara", features = ["raster", "outline"] }
 rustybara-icc = { path = "../rustybara-icc", features = ["bundled-profiles"] }
+pdfium-render = { version = "0.9.0", features = ["thread_safe"] }
 winit = "0.30.13"
 skia-safe = { version = "0.97.0", features = ["gl"] }
 glutin = "0.32.3"
