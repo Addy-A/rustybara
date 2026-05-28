@@ -19,7 +19,12 @@
       "Bash(grep -n \"fn same\\\\|pub fn same\\\\|struct Rounding\\\\|struct Margin\\\\|fn symmetric\" \"C:/Users/mardo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-0.34.2/src/style.rs\" 2>/dev/null | head -20)",
       "Read(//c/Users/mardo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/egui-0.34.2/src/**)",
       "Read(//c/Users/mardo/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f//**)",
-      "Bash(xargs grep -ln \"struct Rounding\\\\|fn same\")"
+      "Bash(xargs grep -ln \"struct Rounding\\\\|fn same\")",
+      "PowerShell([System.IO.File]::ReadAllText\\('c:\\\\Users\\\\mardo\\\\OneDrive\\\\Desktop\\\\rustybara\\\\rustybara\\\\Cargo.toml'\\) | Select-String -Pattern \"wasm\" -AllMatches | ForEach-Object { $_.Matches } | ForEach-Object { \"Pos: $\\($_.Index\\) Len: $\\($_.Length\\) Val: [$\\($_.Value\\)]\" })",
+      "PowerShell(Get-ChildItem \"c:\\\\Users\\\\mardo\\\\OneDrive\\\\Desktop\\\\rustybara\\\\rustybara-website\" -Recurse -File | Where-Object { $_.Extension -in '.md', '.html', '.mdx', '.txt', '.rst' } | Select-Object FullName)",
+      "PowerShell($content = [System.IO.File]::ReadAllText\\('c:\\\\Users\\\\mardo\\\\OneDrive\\\\Desktop\\\\rustybara\\\\rustybara\\\\Cargo.toml'\\); $content.Substring\\(1040, 30\\) | ForEach-Object { \\($_ | Format-Hex\\) -join '' })",
+      "PowerShell($path = 'c:\\\\Users\\\\mardo\\\\OneDrive\\\\Desktop\\\\rustybara\\\\rustybara\\\\Cargo.toml'; $content = [System.IO.File]::ReadAllText\\($path\\); $updated = $content -replace 'wasm    = \\\\[\\\\]', 'wasm    = [\"uuid/js\"]'; [System.IO.File]::WriteAllText\\($path, $updated\\); Write-Host \"Done\")",
+      "PowerShell($path = 'c:\\\\Users\\\\mardo\\\\OneDrive\\\\Desktop\\\\rustybara\\\\rustybara-wasm\\\\Cargo.toml'; $content = [System.IO.File]::ReadAllText\\($path\\); $updated = $content -replace 'features = \\\\[\"wasm\"\\\\]', 'features = [\"wasm\", \"outline\"]'; [System.IO.File]::WriteAllText\\($path, $updated\\); Write-Host \"Done\")"
     ]
   },
   "spinnerTipsEnabled": false

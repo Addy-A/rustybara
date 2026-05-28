@@ -23,30 +23,34 @@ GPU-accelerated PDF page viewer (`rbv`).
 
 ## Workspace
 
-| Crate            | Description                                    | License |
-| ---------------- | ---------------------------------------------- | ------- |
-| `rustybara`      | Core PDF manipulation library                  | LGPLv3  |
-| `rustybara-icc`  | ICC color management — 22 bundled profiles     | LGPLv3  |
-| `rustybara-wasm` | WebAssembly bindings — browser, Node.js, edge  | LGPLv3  |
-| `rbara`          | Terminal UI (Ratatui TUI)                      | GPLv3   |
-| `rbara-gui`      | Native desktop GUI                             | GPLv3   |
-| `rbv`            | GPU-accelerated PDF page viewer (wgpu + winit) | GPLv3   |
+| Crate            | Description                                   | License |
+| ---------------- | --------------------------------------------- | ------- |
+| `rustybara`      | Core PDF manipulation library                 | LGPLv3  |
+| `rustybara-icc`  | ICC color management — 22 bundled profiles    | LGPLv3  |
+| `rustybara-wasm` | WebAssembly bindings — browser, Node.js, edge | LGPLv3  |
+| `rbara`          | Terminal UI (Ratatui TUI)                     | GPLv3   |
+| `rbara-gui`      | Native desktop GUI (Tauri v2)                 | GPLv3   |
+| `rbv`            | Prepress PDF viewer (Skia + OpenGL + winit)   | GPLv3   |
 
 ---
 
 ## Features
 
-| Feature                     | rustybara | rustybara-icc | rustybara-wasm |
-| --------------------------- | --------- | ------------- | -------------- |
-| Page trim & resize          | ✓         | —             | ✓              |
-| CMYK remap                  | ✓         | —             | ✓              |
-| Split / stitch pages        | ✓         | —             | —              |
-| Extract page ranges         | ✓         | —             | —              |
-| Flatten spot colors         | ✓         | —             | —              |
-| Rasterization (pdfium)      | ✓         | —             | —              |
-| ICC color transforms        | —         | ✓             | —              |
-| WebAssembly / browser       | —         | —             | ✓              |
-| Node.js / edge runtime      | —         | —             | ✓              |
+| Feature                        | rustybara | rustybara-icc | rustybara-wasm |
+| ------------------------------ | --------- | ------------- | -------------- |
+| Page trim & resize             | ✓         | —             | ✓              |
+| CMYK remap                     | ✓         | —             | ✓              |
+| Split / stitch pages           | ✓         | —             | —              |
+| Extract page ranges            | ✓         | —             | —              |
+| Flatten spot colors            | ✓         | —             | —              |
+| Rasterization (pdfium)         | ✓         | —             | —              |
+| XMP metadata embed & read      | ✓         | —             | —              |
+| Page object tree + hit-testing | ✓         | —             | —              |
+| Plate separation filtering     | ✓         | —             | —              |
+| Outline text (glyph → paths)   | ✓         | —             | —              |
+| ICC color transforms           | —         | ✓             | —              |
+| WebAssembly / browser          | —         | —             | ✓              |
+| Node.js / edge runtime         | —         | —             | ✓              |
 
 - **Pipeline API** — Chain operations fluently: `open → trim → resize → remap → save`.
 - **Batch processing** — Process entire directories of PDFs from CLI or TUI.
@@ -159,6 +163,41 @@ fn main() -> rustybara::Result<()> {
 }
 ```
 
+### Embed XMP provenance metadata
+
+```rust
+use rustybara::{PdfPipeline, xmp};
+
+fn main() -> rustybara::Result<()> {
+    let source_hash = xmp::hash_file(std::path::Path::new("input.pdf"))?;
+    let timestamp = "2026-05-28T12:00:00Z".to_string();
+
+    PdfPipeline::open("input.pdf")?
+        .trim()?
+        .resize(9.0)?
+        .embed_metadata(&source_hash, &timestamp, &[("trim", ""), ("resize", "bleed_pts=9")])?
+        .save_pdf("output.pdf")?;
+    Ok(())
+}
+```
+
+### Inspect the page object tree
+
+```rust
+use rustybara::{PdfPipeline, objects::tree::build_object_tree};
+
+fn main() -> rustybara::Result<()> {
+    let pipeline = PdfPipeline::open("input.pdf")?;
+    let page_id = pipeline.doc().get_pages()[&1];
+    let tree = build_object_tree(pipeline.doc(), page_id)?;
+
+    for obj in &tree.objects {
+        println!("{:?}  bbox={:?}", obj.kind, obj.bbox);
+    }
+    Ok(())
+}
+```
+
 ### CLI
 
 ```sh
@@ -201,8 +240,8 @@ with no native dependencies.
 - `remap_color(from, to, tolerance)` — substitute CMYK values in content streams
 - `to_pdf_bytes()` — serialize result as bytes for download or further processing
 
-Rasterization (pdfium) and ICC color transforms (lcms2) require the native
-crate and are not available in the wasm build.
+Rasterization (pdfium), XMP embedding, object tree, and ICC color transforms (lcms2)
+require the native crate and are not available in the wasm build.
 
 ### Browser quickstart
 
@@ -243,15 +282,28 @@ rustybara/src/
   lib.rs          — Public re-exports
   pipeline.rs     — PdfPipeline: high-level chaining API
   error.rs        — Unified error type
+  xmp.rs          — XMP metadata embedding, reading, and SHA-256 provenance hashing
   geometry/
     rect.rs       — Rect (position + dimensions, PDF coordinate system)
     matrix.rs     — Matrix (2D affine CTM transformations)
   pages/
     boxes.rs      — PageBoxes: TrimBox, MediaBox, BleedBox, CropBox reader
     split.rs      — Page extraction and splitting utilities
+    stitch.rs     — Spread stitching utilities
+    layout.rs     — Page layout helpers
   stream/
     filter.rs     — ContentFilter: CTM-walking content stream filter
     color_ops.rs  — ColorRemap: CMYK→CMYK value substitution in content streams
+  objects/
+    tree.rs       — build_object_tree: full page object list (paths, images, text)
+                    with color, CTM, overprint state, and subpath geometry
+    hittest.rs    — Spatial hit-testing against the ObjectTree
+    separation.rs — filter_by_ink: plate isolation by CMYK channel or spot name
+  outline/        — (feature-gated: "outline")
+    font.rs       — Extract raw font bytes from PDF resource dictionaries
+    encoding.rs   — Resolve character codes to GlyphId
+    paths.rs      — outline_page_text: walk content stream → per-glyph path geometry
+    writer.rs     — glyphs_to_content_stream: serialize glyphs back to PDF operators
   raster/
     render.rs     — PageRenderer trait, CpuRenderer (pdfium-render)
     config.rs     — RenderConfig (DPI, annotation toggles)
@@ -283,16 +335,42 @@ PdfPipeline::open(path)?
     .trim()?                    // Remove content outside TrimBox
     .resize(bleed_pts)?         // Expand page boxes by bleed margin
     .remap_color(from, to, tolerance)?  // Substitute CMYK values
+    .add_trim_box(bleed_pts)?   // Inset MediaBox to set a TrimBox
+    .embed_metadata(hash, ts, ops)?     // Embed rbara: XMP provenance block
     .save_pdf(path)?;           // Write the result
 
 // Rasterization
 pipeline.render_page(0, &config)?;                          // → DynamicImage
 pipeline.save_page_image(0, path, &format, &config)?;       // → file
 
+// Page operations
+let new_pipeline = pipeline.extract_pages(&[0, 2, 4])?;    // → new pipeline
+let spreads      = pipeline.split_pages(panel_width_pts)?;  // → new pipeline
+let stitched     = pipeline.stitch_pages(spread_width_pts)?;// → new pipeline
+
 // Page inspection
 let boxes = PageBoxes::read(&doc, page_id)?;
 boxes.trim_or_media()           // TrimBox if present, else MediaBox
 boxes.bleed_rect(9.0)           // Expand trim by bleed amount
+
+// XMP provenance
+let hash = xmp::hash_file(path)?;                           // sha256:<hex>
+let block = pipeline.read_xmp_block();                      // Option<RbaraXmpBlock>
+
+// Object tree (paths, images, text — full geometry + color)
+let tree = objects::tree::build_object_tree(doc, page_id)?;
+let plate_objs = objects::separation::filter_by_ink(
+    &tree,
+    &InkSelector::CmykChannel(CmykChannel::Cyan),
+);
+
+// Text outline extraction (requires "outline" feature)
+#[cfg(feature = "outline")]
+{
+    use rustybara::outline::{outline_page_text, writer::glyphs_to_content_stream};
+    let glyphs = outline_page_text(doc, page_id)?;
+    let pdf_ops = glyphs_to_content_stream(&glyphs);  // → PDF path operators
+}
 
 // Color space conversion (requires "color" feature)
 #[cfg(feature = "color")]
@@ -308,6 +386,16 @@ boxes.bleed_rect(9.0)           // Expand trim by bleed amount
     pipeline.convert_color_space(&transform)?;  // Convert entire document
 }
 ```
+
+### Feature Flags
+
+| Flag      | What it enables                                       | Default |
+| --------- | ----------------------------------------------------- | ------- |
+| `raster`  | `pdfium-render`, `image`, `webp` — page rasterization | ✓       |
+| `outline` | `ttf-parser` — text outline / glyph-path extraction   | ✓       |
+| `color`   | `rustybara-icc` / `lcms2` — ICC color management      | —       |
+| `wasm`    | WebAssembly build gate                                | —       |
+| `gpu`     | Reserved for future GPU renderer                      | —       |
 
 ### Renderer Trait
 
@@ -333,6 +421,9 @@ pub struct CpuRenderer;   // pdfium-render — ships today
 | [`pdfium-render`](https://docs.rs/pdfium-render) 0.9                               | PDF rasterization via PDFium                                 |
 | [`image`](https://docs.rs/image) 0.25                                              | Bitmap encoding (JPEG, PNG, WebP, TIFF)                      |
 | [`rayon`](https://docs.rs/rayon) 1.11                                              | Parallel page rendering                                      |
+| [`ttf-parser`](https://docs.rs/ttf-parser) 0.25                                    | TrueType glyph outline extraction (`outline` feature)        |
+| [`uuid`](https://docs.rs/uuid) 1                                                   | UUID v4 generation for XMP provenance                        |
+| [`sha2`](https://docs.rs/sha2) 0.11                                                | SHA-256 source file hashing for XMP provenance               |
 | [`rustybara-icc`](https://github.com/Addy-A/rustybara/tree/main/rustybara-icc) 0.1 | ICC color management (optional, `color` feature)             |
 | [`lcms2`](https://docs.rs/lcms2) 6.1                                               | Little CMS color engine (via rustybara-icc, `color` feature) |
 
@@ -355,7 +446,7 @@ Pre-built binaries: [pdfium-binaries](https://github.com/bblanchon/pdfium-binari
 > library in your own Rust project.
 
 Operations that do not rasterize (`trim`, `resize`, `save_pdf`, `page_count`,
-`PageBoxes::read`) work without PDFium.
+`PageBoxes::read`, `build_object_tree`, `embed_metadata`) work without PDFium.
 
 ---
 
@@ -366,26 +457,26 @@ flag-based CLI for scripting and a TUI for guided workflows.
 
 ### Keyboard Reference (TUI)
 
-| Key                     | Action                           |
-| ----------------------- | -------------------------------- |
-| `t`                     | Trim print marks                 |
-| `r`                     | Resize to bleed                  |
-| `x`                     | Export to image                  |
-| `m`                     | Remap colors                     |
-| `c`                     | Convert color space              |
-| `s`                     | Flatten spot colors              |
-| `b`                     | Add trim box                     |
-| `p`                     | Split pages                      |
-| `g`                     | Stitch pages                     |
-| `e`                     | Extract pages                    |
-| `/`                     | Output path                      |
-| `o`                     | Toggle overwrite mode            |
-| `f`                     | Add files                        |
-| `a` / `n` / `i`         | Scope all / none / invert        |
-| `v`                     | View active file in rbv          |
-| `Enter`                 | Run active action                |
-| `:`                     | Open command bar                 |
-| `?`                     | Keyboard reference overlay       |
+| Key             | Action                     |
+| --------------- | -------------------------- |
+| `t`             | Trim print marks           |
+| `r`             | Resize to bleed            |
+| `x`             | Export to image            |
+| `m`             | Remap colors               |
+| `c`             | Convert color space        |
+| `s`             | Flatten spot colors        |
+| `b`             | Add trim box               |
+| `p`             | Split pages                |
+| `g`             | Stitch pages               |
+| `e`             | Extract pages              |
+| `/`             | Output path                |
+| `o`             | Toggle overwrite mode      |
+| `f`             | Add files                  |
+| `a` / `n` / `i` | Scope all / none / invert  |
+| `v`             | View active file in rbv    |
+| `Enter`         | Run active action          |
+| `:`             | Open command bar           |
+| `?`             | Keyboard reference overlay |
 
 ### UX Model
 
@@ -400,18 +491,70 @@ available. Directories auto-glob `*.pdf` files.
 
 ## rbv — PDF Page Viewer
 
-`rbv` is a GPU-accelerated window for PDF page preview, built on `wgpu` + `winit`.
-It is spawned by `rbara-gui` on demand for single-file previews.
+`rbv` is a prepress-focused PDF viewer built on Skia (OpenGL) + winit. It is
+designed for quick go/no-go QC decisions — bleed check, color space, spot ink
+declaration — not sub-pixel vector fidelity. Pages are rasterized by pdfium and
+displayed as a bitmap; the object tree layer adds wireframe, hit-testing, and
+color diagnostics on top.
 
 ```
-rbv <file_path>
+rbv <file> [page] [--dpi <dpi>]
 ```
 
-Navigate pages with `H`/`←`/`K`/`↑` (prev) and `L`/`→`/`J`/`↓` (next). Jump to a
-page with `Ng` (e.g. `5g`). Close with `Esc`.
+The initial preview renders at 72 DPI for fast startup, then a full-resolution
+render (at the specified DPI, default 300) replaces it in the background.
 
-Requires a GPU or software fallback adapter at runtime. Gracefully errors on headless
-environments.
+### Keyboard Shortcuts
+
+| Key                     | Action                                         |
+| ----------------------- | ---------------------------------------------- |
+| `W`                     | Toggle wireframe mode                          |
+| `O`                     | Toggle prepress box overlays (bleed/trim/crop) |
+| `Ctrl + =` / `Ctrl + +` | Zoom in                                        |
+| `Ctrl + -`              | Zoom out                                       |
+| `Ctrl + 0`              | Reset zoom and pan                             |
+| `Ctrl + Scroll`         | Zoom toward cursor                             |
+| Left drag               | Pan                                            |
+| Left click              | Select object + sample color                   |
+| `H` / `←` / `K` / `↑`   | Previous page                                  |
+| `L` / `→` / `J` / `↓`   | Next page                                      |
+| `Ng`                    | Jump to page N (e.g. `5g`)                     |
+| `Ctrl+Shift+D`          | Toggle debug overlay                           |
+| `Ctrl+Shift+E`          | Export wireframe diagnostic PDF                |
+| `Esc`                   | Exit                                           |
+
+### Wireframe Mode
+
+`W` replaces the raster image with a vector outline view derived from the page's
+`ObjectTree`. Every path, image, and text block is drawn as a thin black stroke
+in page-space coordinates. The selected object receives a 2px blue highlight.
+Glyph outlines (extracted via `outline_page_text`) are drawn on top when
+available. `Ctrl+Shift+E` exports the wireframe geometry to a diagnostic PDF
+for cross-referencing with `qpdf --qdf`.
+
+### Color Diagnostics
+
+Left-click any area to sample:
+
+- **Pixel RGBA** — what the monitor is displaying (sampled from the rasterized bitmap)
+- **PDF color** — the declared fill/stroke color of the hit object from the content stream (`DeviceGray` / `DeviceRGB` / `DeviceCMYK` / `Separation`)
+- **ICC CMYK** — the pixel RGB converted to CMYK via Little CMS 2 (destination: US Web Coated SWOP)
+
+A crosshair marker is stored in PDF coordinates and projected to screen each
+frame, so it stays locked to the correct page position as you zoom and pan.
+
+### File Watching
+
+rbv monitors the opened file via `notify`. When the file changes on disk (e.g.
+after an InDesign export), it automatically re-opens the document, rebuilds the
+object tree, and re-renders — supporting a save-and-preview loop without
+restarting.
+
+### IPC
+
+`rbara-gui` can send commands to a running rbv instance (e.g. switch to a
+different file after processing). rbv accepts these via a local IPC channel
+when launched with `--listen`.
 
 ---
 
@@ -424,6 +567,8 @@ environments.
 | Spot color approximation           | PDFium renders spot inks as CMYK approximations.                                                      |
 | No Form XObject ColorSpace pruning | Inherited limitation from content stream filtering.                                                   |
 | `rbv` requires display server      | No headless preview. Graceful error on missing GPU.                                                   |
+| `rbv` zoom quality                 | Raster-only rendering degrades past ~150–200% zoom. LOD tiling planned.                               |
+| CFF / Type1 glyph outlines         | `ttf-parser` requires sfnt container; raw CFF fonts use a OTTO header shim with ongoing refinement.   |
 
 ---
 
@@ -440,8 +585,19 @@ environments.
 - [x] Extract Pages — extract arbitrary page ranges into a new PDF — v0.1.5
 - [x] Flatten Spot Colors — flatten spot color inks to CMYK process — v0.1.5
 - [x] Command bar (`:` mode) with chord shortcuts and live preview — v0.1.5
-- [ ] RGB→CMYK conversion (vector graphics + embedded images)
-- [ ] Spot color detection service
+- [x] Page object tree with spatial hit-testing — v0.1.6
+- [x] Wireframe mode in `rbv` (Skia/OpenGL renderer) — v0.1.6
+- [x] Color diagnostics panel with ICC pixel sampling — v0.1.6
+- [x] Outline Text — vectorize embedded TrueType glyphs to PDF path operators — v0.1.6
+- [x] Plate separation filtering (`filter_by_ink`, `InkSelector`) — v0.1.6
+- [x] Wireframe diagnostic PDF export — v0.1.6
+- [x] File watching / live reload in `rbv` — v0.1.6
+- [x] XMP provenance metadata embedding and reading (`rbara:` namespace) — v0.1.7
+- [x] Tile rendering system in `rbv` for large pages — v0.1.7
+- [x] Resizable panels and activity log in `rbara-gui` — v0.1.7
+- [x] RGB→CMYK conversion (vector graphics + embedded images)
+- [x] Spot color detection service
+- [x] LOD-aware zoom tiling in `rbv`
 - [ ] PDF/X validation and preflight reports
 - [ ] Configurable JPEG quality (`--quality` flag)
 
@@ -470,7 +626,7 @@ To cut a new version:
 2. Commit and push.
 3. Tag and push the tag:
    ```sh
-   git tag v0.1.5
+   git tag v0.1.7
    git push --tags
    ```
 4. The workflow will build the Windows installer, the Linux tarball, both

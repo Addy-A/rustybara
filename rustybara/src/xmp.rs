@@ -20,15 +20,23 @@ pub struct RbaraXmpBlock {
     pub ops: Vec<String>,
 }
 
+/// Compute `"sha256:<hex>"` of raw bytes.
+///
+/// Use this in environments without a filesystem (e.g., WebAssembly) where the
+/// PDF data is already in memory.
+pub fn hash_bytes(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    format!("sha256:{hex}")
+}
+
 /// Compute `"sha256:<hex>"` of a file's raw bytes.
 ///
 /// Call this on the **source** path before opening a [`crate::PdfPipeline`] so
 /// the hash reflects the unmodified file.
 pub fn hash_file(path: &Path) -> crate::Result<String> {
     let bytes = std::fs::read(path)?;
-    let digest = Sha256::digest(&bytes);
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    Ok(format!("sha256:{hex}"))
+    Ok(hash_bytes(&bytes))
 }
 
 /// Generate a random v4 UUID string.
