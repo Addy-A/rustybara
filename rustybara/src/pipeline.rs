@@ -66,36 +66,24 @@ pub struct PdfPipeline {
 
 impl PdfPipeline {
     /// Returns a reference to the underlying `lopdf` document.
-    ///
-    /// Provides direct read access to the raw PDF document object, which can be used
-    /// to inspect or query document internals (e.g., page objects, resources, metadata)
-    /// without going through the pipeline abstraction.
-    ///
-    /// # Returns
-    ///
-    /// A shared reference to the inner `lopdf::Document`.
     pub fn doc(&self) -> &Document {
         &self.doc
     }
 
-    /// Opens a document from the specified file path.
+    /// Opens a PDF from `path` and wraps it in a new pipeline.
     ///
-    /// This function attempts to load a document from the given path and wraps it
-    /// in a new instance of the containing struct.
+    /// # Errors
     ///
-    /// # Arguments
+    /// Returns an error if the file cannot be read or parsed as a PDF.
     ///
-    /// * `path` - A path-like object that implements `AsRef<Path>` pointing to the document file
+    /// # Example
     ///
-    /// # Returns
-    ///
-    /// * `Ok(Self)` - A new instance containing the loaded document
-    /// * `Err(crate::Error)` - An error if the document could not be loaded
-    ///
-    /// # Examples
-    ///
-    /// ```no_test
-    /// let document = MyStruct::open("path/to/document.txt")?;
+    /// ```no_run
+    /// # use rustybara::PdfPipeline;
+    /// # fn main() -> rustybara::Result<()> {
+    /// let pipeline = PdfPipeline::open("input.pdf")?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn open(path: impl AsRef<Path>) -> crate::Result<Self> {
         let doc = Document::load(path)?;
@@ -111,28 +99,18 @@ impl PdfPipeline {
         Ok(Self { doc })
     }
 
-    /// Removes whitespace from the beginning and end of the document content.
+    /// Removes all PDF content outside each page's `TrimBox`.
     ///
-    /// This method trims excess whitespace characters (spaces, tabs, newlines, etc.)
-    /// from the outer boundaries of the document's content. It modifies the document
-    /// in-place and returns a mutable reference to self for method chaining.
+    /// Walks every page's content stream and drops paths, images, and fills that lie
+    /// entirely outside the `TrimBox` boundary. Pages without a `TrimBox` fall back
+    /// to the `MediaBox` and are left unchanged.
     ///
-    /// # Returns
-    ///
-    /// Returns `Ok(&mut Self)` containing a mutable reference to the document if
-    /// trimming succeeds, or an error if the trimming operation fails.
+    /// Call this before [`Self::resize`] to discard printer marks and bleed content
+    /// that should not appear in the final output.
     ///
     /// # Errors
     ///
-    /// Returns an error if the content filtering operation encounters issues
-    /// while attempting to remove the outer whitespace.
-    ///
-    /// # Example
-    ///
-    /// ```no_test
-    /// // Assuming `doc` is a mutable document instance
-    /// doc.trim()?;
-    /// ```
+    /// Returns an error if any page's content stream cannot be decoded or re-encoded.
     pub fn trim(&mut self) -> crate::Result<&mut Self> {
         ContentFilter::remove_outside_trim(&mut self.doc)?;
         Ok(self)
@@ -152,19 +130,9 @@ impl PdfPipeline {
     ///
     /// Returns a mutable reference to self on success, or an error if page box operations fail.
     ///
-    /// # Behavior
-    ///
-    /// For each page in the document:
-    /// - Reads the current page boxes (MediaBox, CropBox, etc.)
-    /// - Calculates a new media rectangle expanded by the bleed amount
-    /// - Updates the MediaBox with the new dimensions
-    /// - If the page has a CropBox, updates it to match the new MediaBox dimensions
-    ///
     /// # Errors
     ///
-    /// Returns an error if:
-    /// - Failed to read page boxes from any page
-    /// - Failed to access or modify page dictionary objects
+    /// Returns an error if any page's box entries cannot be read or written.
     pub fn resize(&mut self, bleed_pts: f64) -> crate::Result<&mut Self> {
         let pages = self.doc.get_pages();
         for &page_id in pages.values() {
@@ -222,11 +190,25 @@ impl PdfPipeline {
         Ok(Self { doc })
     }
 
+    /// Splits each page wider than `panel_width_pts` into left/right halves.
+    ///
+    /// Returns a new pipeline whose pages are the split panels, in document order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the page tree cannot be rewritten.
     pub fn split_pages(&self, panel_width_pts: f64) -> crate::Result<Self> {
         let doc = crate::pages::split_pages(&self.doc, panel_width_pts)?;
         Ok(Self { doc })
     }
 
+    /// Stitches adjacent page pairs into spreads of `spread_width_pts`.
+    ///
+    /// Returns a new pipeline whose pages are the stitched spreads, in document order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the page tree cannot be rewritten.
     pub fn stitch_pages(&self, spread_width_pts: f64) -> crate::Result<Self> {
         let doc = crate::pages::stitch_pages(&self.doc, spread_width_pts)?;
         Ok(Self { doc })
@@ -266,9 +248,9 @@ impl PdfPipeline {
     /// Embeds rustybara processing metadata into the document's XMP stream.
     ///
     /// Call this after all processing operations and before [`Self::save_pdf`].
-    /// If the document already has na XMP stream, the existing `rbara:` block is
+    /// If the document already has an XMP stream, the existing `rbara:` block is
     /// replaced in-place; all other XMP namespaces (`dc:`, `pdf:`, etc.) are
-    /// preserved. If the input was previously proessed by rustybara, its
+    /// preserved. If the input was previously processed by rustybara, its
     /// `rbara:uuid` is promoted to `rbara:parentId`, forming a lineage chain.
     ///
     /// # Arguments
@@ -668,55 +650,15 @@ impl PdfPipeline {
     }
 
     /// Returns the total number of pages in the document.
-    ///
-    /// This method retrieves the current page count by accessing the underlying
-    /// document's page collection and returning its length.
-    ///
-    /// # Returns
-    ///
-    /// The number of pages as a `usize`. Returns 0 if the document is empty
-    /// or contains no pages.
-    ///
-    /// # Examples
-    ///
-    /// ```no_test
-    /// let doc = Document::new();
-    /// assert_eq!(doc.page_count(), 0);
-    ///
-    /// // Add some pages...
-    /// assert_eq!(doc.page_count(), 3);
-    /// ```
     pub fn page_count(&self) -> usize {
         self.doc.get_pages().len()
     }
 
-    /// Saves the current document as a PDF file to the specified path.
+    /// Saves the document to a PDF file at `path`, overwriting if it exists.
     ///
-    /// This method serializes the document content and writes it to a PDF file
-    /// at the given location. If the file already exists, it will be overwritten.
+    /// # Errors
     ///
-    /// # Arguments
-    ///
-    /// * `path` - The file path where the PDF should be saved. Can be any type
-    ///   that implements `AsRef<Path>` (e.g., `&str`, `String`, `PathBuf`).
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(())` if the PDF was successfully saved, or an error if:
-    /// - The document could not be serialized
-    /// - There was an I/O error writing to the file
-    /// - The path is invalid or inaccessible
-    ///
-    /// # Examples
-    ///
-    /// ```no_test
-    /// // Save to a string path
-    /// document.save_pdf("output.pdf")?;
-    ///
-    /// // Save to a PathBuf
-    /// let path = std::path::PathBuf::from("documents/report.pdf");
-    /// document.save_pdf(path)?;
-    /// ```
+    /// Returns an error if the file cannot be written or the document cannot be serialized.
     pub fn save_pdf(&mut self, path: impl AsRef<Path>) -> crate::Result<()> {
         self.doc.save(path)?;
         Ok(())
@@ -732,50 +674,20 @@ impl PdfPipeline {
         Ok(buf)
     }
 
-    /// Renders a specific page from the PDF document as an image.
-    ///
-    /// This function takes a page number and rendering configuration, then generates
-    /// a rasterized image of that page. The rendering is performed using Pdfium (the
-    /// same engine used by Chrome for PDF rendering), which provides high-quality
-    /// and accurate PDF rendering.
-    ///
-    /// # Arguments
-    ///
-    /// * `page_num` - The zero-based index of the page to render
-    /// * `config` - A reference to `RenderConfig` containing rendering parameters
-    ///   such as scale factor, rotation, and color options
-    ///
-    /// # Returns
-    ///
-    /// Returns a `Result` containing either:
-    /// * `Ok(DynamicImage)` - The rendered page as a dynamic image that can be
-    ///   further processed or saved to various formats
-    /// * `Err(crate::Error)` - An error if the rendering fails, which could be due
-    ///   to invalid page numbers, PDF loading issues, or rendering problems
+    /// Rasterizes `page_num` (zero-based) to a [`DynamicImage`] using PDFium.
     ///
     /// # Platform Support
     ///
-    /// The function automatically detects the operating system and loads the
-    /// appropriate Pdfium library:
+    /// Loads the PDFium shared library from the executable's directory, then falls
+    /// back to the system library search path:
     /// * Windows: `pdfium.dll`
-    /// * macOS: `libpdfium.dylib`  
+    /// * macOS: `libpdfium.dylib`
     /// * Linux: `libpdfium.so`
     ///
-    /// # Example
+    /// # Errors
     ///
-    /// ```no_test
-    /// let config = RenderConfig::default();
-    /// let image = pdf_renderer.render_page(0, &config)?;
-    /// image.save("page_1.png")?;
-    /// ```
-    ///
-    /// # Notes
-    ///
-    /// * The page numbering is zero-based (first page = 0)
-    /// * The function clones the internal PDF document for rendering to avoid
-    ///   borrowing conflicts
-    /// * Pdfium library must be available at runtime in the same directory as
-    ///   the executable
+    /// Returns an error if the page index is out of range, the PDFium library cannot
+    /// be loaded, or rendering fails.
     #[cfg(feature = "raster")]
     pub fn render_page(&self, page_num: u32, config: &RenderConfig) -> crate::Result<DynamicImage> {
         use pdfium_render::prelude::*;
@@ -820,40 +732,22 @@ impl PdfPipeline {
         Ok(buf)
     }
 
-    /// Saves a rendered page as an image file.
-    ///
-    /// This method renders a specific page from the document and saves it to the specified
-    /// file path in the desired output format.
-    ///
-    /// # Arguments
-    ///
-    /// * `page_num` - The page number to render and save (0-indexed)
-    /// * `path` - The file path where the image should be saved
-    /// * `format` - The output format for the saved image (PNG, JPEG, etc.)
-    /// * `config` - Rendering configuration specifying quality, resolution, and other parameters
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(())` on successful save, or an error if rendering or encoding fails.
+    /// Renders `page_num` (zero-based) and saves it to `path` in the given format.
     ///
     /// # Errors
     ///
-    /// This function will return an error if:
-    /// - The page number is invalid
-    /// - Rendering the page fails
-    /// - Encoding or saving the image fails
-    /// - File system operations fail
+    /// Returns an error if the page index is out of range, rendering fails, or the
+    /// image file cannot be written.
     ///
     /// # Example
     ///
-    /// ```no_test
-    /// use document_renderer::{RenderConfig, OutputFormat};
-    ///
-    /// let renderer = DocumentRenderer::new();
-    /// let config = RenderConfig::default();
-    /// let format = OutputFormat::Png;
-    ///
-    /// renderer.save_page_image(0, "output/page_1.png", &format, &config)?;
+    /// ```no_run
+    /// # use rustybara::{PdfPipeline, encode::OutputFormat, raster::RenderConfig};
+    /// # fn main() -> rustybara::Result<()> {
+    /// let pipeline = PdfPipeline::open("input.pdf")?;
+    /// pipeline.save_page_image(0, "page_1.jpg", &OutputFormat::Jpg, &RenderConfig::prepress())?;
+    /// # Ok(())
+    /// # }
     /// ```
     #[cfg(feature = "raster")]
     pub fn save_page_image(

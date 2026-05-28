@@ -5217,6 +5217,7 @@ dependencies = [
  "rustybara",
  "serde",
  "serde-wasm-bindgen",
+ "uuid",
  "wasm-bindgen",
  "wasm-bindgen-test",
  "web-sys",

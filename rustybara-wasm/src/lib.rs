@@ -330,8 +330,7 @@ mod tests {
             .unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
         let handle2 = PipelineHandle::new(&bytes).unwrap();
-        let block_js = handle2.read_xmp_block();
-        assert!(!block_js.is_null());
+        assert!(handle2.inner.read_xmp_block().is_some());
     }
 
     #[test]

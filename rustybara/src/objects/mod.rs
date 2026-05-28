@@ -1,11 +1,11 @@
-//! PDF page object tree — logical painted objects extracted from content streams.
+﻿//! PDF page object tree — logical painted objects extracted from content streams.
 //!
 //! Provides a structured view of every painted element on a page: filled and stroked
 //! paths, placed images, form XObjects, and text runs — in back-to-front paint order.
 //!
 //! ## Key Types
 //!
-//! - [`PageObject`] — A singled painted shape, image, or text run with its geometry
+//! - [`PageObject`] — A single painted shape, image, or text run with its geometry
 //! - [`ObjectTree`] — All objects on a page, in paint order (back to front)
 //! - [`ObjectKind`] — Discriminates Fill / Stroke / FillStroke / Text / Image / Form
 //! - [`PdfColor`] — Per-object device color value (distinct from document-level classification)

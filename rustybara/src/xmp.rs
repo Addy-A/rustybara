@@ -1,7 +1,7 @@
-//! XMP metadata utilities for rustybara-
+//! XMP metadata utilities for rustybara.
 //!
 //! Provides SHA-256 hashing, UUID generation, XMP block rendering, and
-//! inject-or-create helpers used by [`crate::PdfPipeline::emebed_metadata`].
+//! inject-or-create helpers used by [`crate::PdfPipeline::embed_metadata`].
 
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -175,11 +175,11 @@ pub fn create_xmp(b: &RbaraXmpBlock) -> String {
     )
 }
 
-/// Inject the `rbara:` blcok  into an existing XMP document string.
+/// Inject the `rbara:` block into an existing XMP document string.
 ///
 /// Any previous `rbara:` block (identified by sentinel comments) is removed
 /// first so there is never more than one. The new block is inserted immediately
-/// befere `</rdf:RDF>`. Falls back to appending if `</rdf:REDF>` is absent.
+/// before `</rdf:RDF>`. Falls back to appending if `</rdf:RDF>` is absent.
 pub fn inject_into_xmp(existing: &str, b: &RbaraXmpBlock) -> String {
     const START: &str = "<!-- rbara:start -->";
     const END: &str = "<!-- rbara:end -->";

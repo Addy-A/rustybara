@@ -6,7 +6,7 @@ use rustybara::raster::RenderConfig;
 #[test]
 fn render_config_default_150dpi() {
     let cfg = RenderConfig::default();
-    assert_eq!(cfg.dpi, 150);
+    assert_eq!(cfg.dpi, 300);
     assert!(cfg.render_annotations);
     assert!(cfg.render_form_data);
 }

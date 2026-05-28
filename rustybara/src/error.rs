@@ -24,9 +24,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 ///
 /// # Examples
 ///
-/// ```no_test
-/// use crate::Error;
-/// use std::io;
+/// ```ignore
+/// use rustybara::Error;
 ///
 /// fn handle_pdf_error(error: Error) {
 ///     match error {
