@@ -87,7 +87,26 @@
     '/': 'output',
     ',': 'settings',
   }
-  let shortcuts = $derived({ ...DEFAULT_SHORTCUTS, ...(settings?.shortcuts ?? {}) })
+  // settings.shortcuts stores {action_id → key} (SettingsPanel format).
+  // DEFAULT_SHORTCUTS stores {key → action_id} (dispatch format).
+  // Build the final dispatch map by converting user overrides and removing
+  // the superseded default key so old and new key never both trigger the action.
+  let shortcuts = $derived.by(() => {
+    const result = { ...DEFAULT_SHORTCUTS }
+    for (const [actionId, newKey] of Object.entries(settings?.shortcuts ?? {})) {
+      if (!newKey) continue
+      for (const k of Object.keys(result)) {
+        if (result[k] === actionId) { delete result[k]; break }
+      }
+      result[newKey] = actionId
+    }
+    return result
+  })
+
+  // Reverse map: action_id → key — used by HelpOverlay and Ctrl+key handlers.
+  let actionToKey = $derived(
+    Object.fromEntries(Object.entries(shortcuts).map(([k, v]) => [v, k]))
+  )
 
   let fileXmp = $state(null) // rbara XMP block for the active file, or null
 
@@ -840,15 +859,20 @@
         e.preventDefault()
         return
       }
-      if (k === 't' || k === 'p' || k === 'c') {
-        clearTimeout(chordTimer)
-        chordTimer = null
-        chordPending = null
-        if (k === 't') trimExpanded = !trimExpanded
-        else if (k === 'p') pagesExpanded = !pagesExpanded
-        else colorExpanded = !colorExpanded
-        e.preventDefault()
-        return
+      {
+        const trimKey  = (actionToKey['trim']       ?? 't').toLowerCase()
+        const pagesKey = (actionToKey['splitpages']  ?? 'p').toLowerCase()
+        const colorKey = (actionToKey['colorspace']  ?? 'c').toLowerCase()
+        if (k === trimKey || k === pagesKey || k === colorKey) {
+          clearTimeout(chordTimer)
+          chordTimer = null
+          chordPending = null
+          if      (k === trimKey)  trimExpanded  = !trimExpanded
+          else if (k === pagesKey) pagesExpanded = !pagesExpanded
+          else                     colorExpanded = !colorExpanded
+          e.preventDefault()
+          return
+        }
       }
     }
 
@@ -1070,6 +1094,9 @@
     saveSettings,
     get shortcuts() {
       return shortcuts
+    },
+    get actionToKey() {
+      return actionToKey
     },
     get cmdBarVisible() {
       return cmdBarVisible

@@ -27,7 +27,9 @@
       {app.metadata?.color_space ?? '—'}
     </div>
   {:else}
-    <div class="sb-item idle">Last Action: {app.quip}</div>
+    {#if app.settings?.quips_enabled !== false}
+      <div class="sb-item idle">Last Action: {app.quip}</div>
+    {/if}
   {/if}
   <div class="sb-right">
     {#if app.processing}

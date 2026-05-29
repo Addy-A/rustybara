@@ -31,11 +31,12 @@
     return k ?? ''
   }
 
+  // actionToKey is the reverse map {action_id → key} already computed in App.svelte.
   let actionShortcuts = $derived(
-    ACTION_DEFS.map(def => [fmtKey(app.shortcuts?.[def.id]), def.label])
+    ACTION_DEFS.map(def => [fmtKey(app.actionToKey?.[def.id] ?? ''), def.label])
   )
 
-  // Non-rebindable utility and navigation keys — always hardcoded.
+  // Non-rebindable utility keys — always fixed.
   const fixedShortcuts = [
     ['o',     'Toggle overwrite'],
     ['f',     'Add files…'],
@@ -48,18 +49,19 @@
     ['Esc',   'Close help / cancel'],
   ]
 
-  const navShortcuts = [
+  // The three Ctrl+key category expand shortcuts follow the remapped action key.
+  let navShortcuts = $derived([
     ['h / l', 'Move cursor left / right'],
     ['j / k', 'Move cursor down / up  (row-aware)'],
     ['Shift + H / L', 'Scope in current, move left / right'],
     ['Shift + J / K', 'Scope in current, move down / up'],
     ['Ctrl + i', 'Toggle active file scope'],
-    ['Ctrl + t', 'Toggle Trim category expand'],
-    ['Ctrl + p', 'Toggle Pages category expand'],
-    ['Ctrl + c', 'Toggle Color category expand'],
+    [`Ctrl + ${fmtKey(app.actionToKey?.['trim']       ?? 't')}`, 'Toggle Trim category expand'],
+    [`Ctrl + ${fmtKey(app.actionToKey?.['splitpages']  ?? 'p')}`, 'Toggle Pages category expand'],
+    [`Ctrl + ${fmtKey(app.actionToKey?.['colorspace']  ?? 'c')}`, 'Toggle Color category expand'],
     ['Ctrl + h / l', 'Scope out current, move left / right'],
     ['Ctrl + j / k', 'Scope out current, move down / up'],
-  ]
+  ])
 
   const rbvShortcuts = [
     ['Esc', 'Close viewer'],

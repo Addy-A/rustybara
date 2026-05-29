@@ -3,14 +3,21 @@
   import { themes, sansFonts, monoFonts, applyTheme } from '../lib/themes.js'
   const app = useAppState()
 
-  let draft = $state(structuredClone($state.snapshot(app.settings) ?? {}))
+  function cloneSettings(s) {
+    return s ? JSON.parse(JSON.stringify(s)) : {}
+  }
+
+  let draft = $state(cloneSettings(app.settings))
   let saved = $state(false)
   let saveError = $state(null)
   let newQuip = $state('')
 
+  // Sync draft when settings first loads (null → object) or is reset externally.
+  let prevSettings = app.settings
   $effect(() => {
-    if (app.settings && !saved) {
-      draft = structuredClone($state.snapshot(app.settings))
+    if (app.settings && app.settings !== prevSettings) {
+      prevSettings = app.settings
+      if (!saved) draft = cloneSettings(app.settings)
     }
   })
 
@@ -31,7 +38,8 @@
   }
 
   function reset() {
-    draft = structuredClone($state.snapshot(app.settings))
+    if (!app.settings) return
+    draft = cloneSettings(app.settings)
     saveError = null
   }
 
