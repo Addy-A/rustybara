@@ -2,7 +2,8 @@
   import { onMount } from 'svelte'
   import { provideAppState } from './lib/context.js'
   import * as api from './lib/api.js'
-  import { randomQuip } from './lib/quips.js'
+  import { quips as builtinQuips, randomQuip } from './lib/quips.js'
+  import { applyTheme } from './lib/themes.js'
   import Titlebar from './components/Titlebar.svelte'
   import Toolbar from './components/Toolbar.svelte'
   import FileStrip from './components/FileStrip.svelte'
@@ -24,13 +25,15 @@
   let files = $state([]) // [{path, name, colorSpace, sizeKb}]
   let activeFile = $state(null) // index | null
   let metadata = $state(null)
-  let activeAction = $state('trim') // 'trim' | 'resize' | 'export' | 'remap' | 'output'
+  let activeAction = $state('trim') // 'trim' | 'resize' | 'export' | 'remap' | 'output' | 'settings'
   let processing = $state(false)
   let overwrite = $state(false)
   let outputDir = $state(null)
   let actionLog = $state([]) // {ok, message, output_paths, timestamp, action}
   let helpVisible = $state(false)
-  let theme = $state(localStorage.getItem('rbara-theme') ?? 'dark')
+  // theme_preset bootstraps from localStorage so the first render is correct
+  // before settings load. Falls back to ember-dark which matches :root defaults.
+  let theme = $state(localStorage.getItem('rbara-theme') === 'light' ? 'ember-light' : 'ember-dark')
   let cmdBarVisible = $state(false)
   let cmdBarInput = $state('')
   let chordPending = $state(null)
@@ -38,10 +41,53 @@
   let dragOver = $state(false)
   let quip = $state(randomQuip())
 
+  // ---------- settings ----------
+  let settings = $state(null)
+
+  // Keep theme_preset in sync with settings once loaded.
   $effect(() => {
-    document.body.classList.toggle('light', theme === 'light')
-    localStorage.setItem('rbara-theme', theme)
+    if (settings?.theme_preset) theme = settings.theme_preset
   })
+
+  // Apply CSS variables and body class whenever theme or fonts change.
+  $effect(() => {
+    applyTheme(theme, settings?.font_sans, settings?.font_mono)
+  })
+
+  // Hydrate per-action defaults from settings on first load and after reset.
+  $effect(() => {
+    if (!settings?.defaults) return
+    const d = settings.defaults
+    params.bleedInches         = d.bleed_inches
+    params.exportFormat        = d.export_format
+    params.exportDpi           = d.export_dpi
+    params.remapTolerance      = d.remap_tolerance
+    params.trimBoxBleedInches  = d.trim_box_bleed_inches
+    params.splitPanelInches    = d.split_panel_inches
+    params.stitchSpreadInches  = d.stitch_spread_inches
+    params.convertIntent       = d.color_intent
+  })
+
+  // ---- Rebindable action shortcut map ----------------------------------------
+  // Maps a single key to an activeAction id. Navigation keys, chord sequences,
+  // and direct-command keys (o, f, v, a, n, i, ?, Enter, Escape) are not here —
+  // they remain hardcoded and are not user-rebindable in v1.
+  const DEFAULT_SHORTCUTS = {
+    t: 'trim',
+    r: 'resize',
+    x: 'export',
+    m: 'remap',
+    c: 'colorspace',
+    s: 'spots',
+    b: 'addtrimbox',
+    T: 'outlinetext',
+    p: 'splitpages',
+    g: 'stitchpages',
+    e: 'extractpages',
+    '/': 'output',
+    ',': 'settings',
+  }
+  let shortcuts = $derived({ ...DEFAULT_SHORTCUTS, ...(settings?.shortcuts ?? {}) })
 
   let fileXmp = $state(null) // rbara XMP block for the active file, or null
 
@@ -98,11 +144,12 @@
   let windowWidth = $state(window.innerWidth)
   let windowHeight = $state(window.innerHeight)
   let layout = $derived(
-    windowWidth > windowHeight * 1.4
+    settings?.layout_override ??
+    (windowWidth > (settings?.wide_breakpoint_px ?? 900)
       ? 'wide'
       : windowHeight > windowWidth
         ? 'vertical'
-        : 'square',
+        : 'square'),
   )
 
   // ---------- preflight ----------
@@ -211,7 +258,17 @@
   }
 
   function refreshQuip() {
-    quip = randomQuip()
+    if (settings?.quips_enabled === false) return
+    const pool = settings?.custom_quips?.length ? settings.custom_quips : builtinQuips
+    quip = pool[Math.floor(Math.random() * pool.length)]
+  }
+
+  async function saveSettings(newSettings) {
+    await api.saveSettings(newSettings)
+    settings = newSettings
+    // Keep theme in sync immediately so the body class updates without waiting
+    // for the $effect cycle.
+    if (newSettings.theme) theme = newSettings.theme
   }
 
   async function executeCmdBar(parsed) {
@@ -233,6 +290,8 @@
       return
     } else if (parsed.cmd === 'theme') {
       theme = theme === 'dark' ? 'light' : 'dark'
+    } else if (parsed.cmd === 'settings') {
+      activeAction = 'settings'
     } else if (parsed.cmd === '/n') {
       closeCmdBar()
       try {
@@ -795,6 +854,13 @@
 
     if (e.ctrlKey || e.metaKey || e.altKey) return
 
+    // Rebindable action shortcuts — resolved through the user shortcut map.
+    if (shortcuts[e.key] !== undefined) {
+      activeAction = shortcuts[e.key]
+      e.preventDefault()
+      return
+    }
+
     switch (e.key) {
       case 'h':
         navigateFile('h')
@@ -834,42 +900,6 @@
         break
       case ':':
         openCmdBar('')
-        break
-      case 't':
-        activeAction = 'trim'
-        break
-      case 'r':
-        activeAction = 'resize'
-        break
-      case 'x':
-        activeAction = 'export'
-        break
-      case 'm':
-        activeAction = 'remap'
-        break
-      case 'c':
-        activeAction = 'colorspace'
-        break
-      case 's':
-        activeAction = 'spots'
-        break
-      case 'b':
-        activeAction = 'addtrimbox'
-        break
-      case 'T':
-        activeAction = 'outlinetext'
-        break
-      case 'p':
-        activeAction = 'splitpages'
-        break
-      case 'g':
-        activeAction = 'stitchpages'
-        break
-      case 'e':
-        activeAction = 'extractpages'
-        break
-      case '/':
-        activeAction = 'output'
         break
       case 'o':
         overwrite = !overwrite
@@ -912,6 +942,11 @@
     }
     window.addEventListener('resize', onResize)
     document.addEventListener('keydown', handleKey)
+
+    api
+      .loadSettings()
+      .then((s) => { settings = s })
+      .catch(() => {})
 
     api
       .listCustomProfiles()
@@ -1028,6 +1063,13 @@
     },
     set theme(v) {
       theme = v
+    },
+    get settings() {
+      return settings
+    },
+    saveSettings,
+    get shortcuts() {
+      return shortcuts
     },
     get cmdBarVisible() {
       return cmdBarVisible

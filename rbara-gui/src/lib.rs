@@ -6,10 +6,11 @@ use std::sync::Mutex;
 use commands::{
     add_trim_box, convert_color_space, exit_app, export_images, extract_pages, flatten_spots,
     list_custom_profiles, list_dirs, list_pdf_files, load_icc_profile, load_metadata,
-    load_persisted_profiles, minimize_window, notify_viewer, open_file_dialog, open_in_viewer,
-    open_in_viewer_persistent, outline_text, read_xmp_metadata, remap_colors, resize_to_bleed,
-    split_pages, stitch_pages, toggle_maximize_window, trim_marks, ProcessingLock,
-    ProfileRegistry, ViewerHandle,
+    load_persisted_profiles, load_persisted_settings, load_settings, minimize_window,
+    notify_viewer, open_file_dialog, open_in_viewer, open_in_viewer_persistent, outline_text,
+    read_xmp_metadata, remap_colors, resize_to_bleed, save_settings, split_pages, stitch_pages,
+    toggle_maximize_window, trim_marks, AppSettings, ProcessingLock, ProfileRegistry,
+    SettingsDto, ViewerHandle,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -19,8 +20,10 @@ pub fn run() {
         .manage(ProcessingLock(Mutex::new(false)))
         .manage(ProfileRegistry(Mutex::new(HashMap::new())))
         .manage(ViewerHandle(Mutex::new(None)))
+        .manage(AppSettings(Mutex::new(SettingsDto::default())))
         .setup(|app| {
             load_persisted_profiles(app);
+            load_persisted_settings(app);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -48,6 +51,8 @@ pub fn run() {
             list_pdf_files,
             minimize_window,
             toggle_maximize_window,
+            load_settings,
+            save_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running rbara-gui");

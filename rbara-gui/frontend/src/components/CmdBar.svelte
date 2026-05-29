@@ -355,6 +355,8 @@
     if (lo === 'full' || lo === 'max' || lo === 'maximize')
       return { cmd: 'maximize' }
     if (lo === 'theme') return { cmd: 'theme' }
+    if (lo === 'settings' || lo === 'prefs' || lo === 'config')
+      return { cmd: 'settings' }
     if (lo === '/n') return { cmd: '/n' }
     if (lo === '/s') return { cmd: '/s' }
     if (lo === 'nq') return { cmd: 'nq' }
@@ -662,6 +664,7 @@
       case 'minimize':
       case 'maximize':
       case 'theme':
+      case 'settings':
       case '/n':
       case '/s':
       case 'nq':
@@ -902,6 +905,8 @@
           <span class="text"
             >toggle theme → {app.theme === 'dark' ? 'light' : 'dark'}</span
           >
+        {:else if parsed.cmd === 'settings'}
+          <span class="text">open settings panel</span>
         {:else if parsed.cmd === '/n'}
           <span class="text">pick custom output folder…</span>
         {:else if parsed.cmd === '/s'}

@@ -5,28 +5,47 @@
   let page = $state('shortcuts')
   let search = $state('')
 
-  const shortcuts = [
-    ['t', 'Trim Marks'],
-    ['r', 'Resize to Bleed'],
-    ['x', 'Export Images'],
-    ['m', 'Remap Colors'],
-    ['c', 'Convert Color Space'],
-    ['s', 'Flatten Spot Colors'],
-    ['b', 'Add Trim Box'],
-    ['Shift + T', 'Outline Text'],
-    ['p', 'Split Pages'],
-    ['g', 'Stitch Pages (exp)'],
-    ['e', 'Extract Pages'],
-    ['/', 'Output Path'],
-    ['o', 'Toggle overwrite'],
-    ['f', 'Add files…'],
-    ['v', 'View active file in rbv'],
-    ['a', 'Scope all files'],
-    ['n', 'Scope no files'],
-    ['i', 'Invert file scope'],
+  // Rebindable action shortcuts — derived from the live app shortcut map so
+  // user-configured keys are always reflected accurately here.
+  const ACTION_DEFS = [
+    { id: 'trim',         label: 'Trim Marks' },
+    { id: 'resize',       label: 'Resize to Bleed' },
+    { id: 'export',       label: 'Export Images' },
+    { id: 'remap',        label: 'Remap Colors' },
+    { id: 'colorspace',   label: 'Convert Color Space' },
+    { id: 'spots',        label: 'Flatten Spot Colors' },
+    { id: 'addtrimbox',   label: 'Add Trim Box' },
+    { id: 'outlinetext',  label: 'Outline Text' },
+    { id: 'splitpages',   label: 'Split Pages' },
+    { id: 'stitchpages',  label: 'Stitch Pages (exp)' },
+    { id: 'extractpages', label: 'Extract Pages' },
+    { id: 'output',       label: 'Output Path' },
+    { id: 'settings',     label: 'Settings' },
+  ]
+
+  // Uppercase single letters mean Shift is required — show that in the label.
+  function fmtKey(k) {
+    if (k && k.length === 1 && k === k.toUpperCase() && k !== k.toLowerCase()) {
+      return `Shift + ${k}`
+    }
+    return k ?? ''
+  }
+
+  let actionShortcuts = $derived(
+    ACTION_DEFS.map(def => [fmtKey(app.shortcuts?.[def.id]), def.label])
+  )
+
+  // Non-rebindable utility and navigation keys — always hardcoded.
+  const fixedShortcuts = [
+    ['o',     'Toggle overwrite'],
+    ['f',     'Add files…'],
+    ['v',     'View active file in rbv'],
+    ['a',     'Scope all files'],
+    ['n',     'Scope no files'],
+    ['i',     'Invert file scope'],
     ['Enter', 'Run active action'],
-    ['?', 'Toggle help'],
-    ['Esc', 'Close help / cancel'],
+    ['?',     'Toggle help'],
+    ['Esc',   'Close help / cancel'],
   ]
 
   const navShortcuts = [
@@ -269,7 +288,11 @@
 
     {#if page === 'shortcuts'}
       <div class="grid">
-        {#each shortcuts as [k, label]}
+        {#each actionShortcuts as [k, label]}
+          <div class="key">{k}</div>
+          <div class="label">{label}</div>
+        {/each}
+        {#each fixedShortcuts as [k, label]}
           <div class="key">{k}</div>
           <div class="label">{label}</div>
         {/each}

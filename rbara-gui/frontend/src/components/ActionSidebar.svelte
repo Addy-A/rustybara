@@ -5,11 +5,20 @@
 
   const MIN_W = 150
   const MAX_W = 320
-  const STORE_KEY = 'rbara-sidebar-left-width'
 
+  // Bootstrap from localStorage so the sidebar is the right size before
+  // settings loads asynchronously. After load, settings is the source of truth.
   let width = $state(Math.max(MIN_W, Math.min(MAX_W,
-    parseInt(localStorage.getItem(STORE_KEY) ?? '210', 10)
+    app.settings?.sidebar_width
+      ?? parseInt(localStorage.getItem('rbara-sidebar-left-width') ?? '210', 10)
   )))
+
+  // Sync width if settings load after initial render with a different value.
+  $effect(() => {
+    if (app.settings?.sidebar_width) {
+      width = Math.max(MIN_W, Math.min(MAX_W, app.settings.sidebar_width))
+    }
+  })
 
   let dragging = false
   let startX = 0
@@ -25,11 +34,14 @@
   function onMouseMove(e) {
     if (!dragging) return
     width = Math.max(MIN_W, Math.min(MAX_W, startWidth + (e.clientX - startX)))
-    localStorage.setItem(STORE_KEY, width)
   }
 
   function onMouseUp() {
+    if (!dragging) return
     dragging = false
+    if (app.settings) {
+      app.saveSettings({ ...app.settings, sidebar_width: width }).catch(() => {})
+    }
   }
 
   const trimActions = [

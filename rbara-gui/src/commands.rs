@@ -100,6 +100,30 @@ pub(crate) fn load_persisted_profiles(app: &tauri::App) {
     }
 }
 
+/// Resolves the path to `settings.json` inside the Tauri app data directory.
+/// Creates the directory if it does not yet exist. Returns `None` if the path
+/// cannot be resolved (e.g. sandboxed environment without write access).
+fn settings_path<R: tauri::Runtime>(manager: &impl Manager<R>) -> Option<PathBuf> {
+    let path = manager.path().app_data_dir().ok()?;
+    Some(path.join("settings.json"))
+}
+
+/// Reads `settings.json` from the app data directory and stores the result in
+/// the `AppSettings` managed state. Falls back silently to `SettingsDto::default()`
+/// on any I/O or parse error so a corrupt or missing file never prevents startup.
+pub(crate) fn load_persisted_settings(app: &tauri::App) {
+    let Some(path) = settings_path(app) else {
+        return;
+    };
+    let Ok(contents) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(parsed_settings) = serde_json::from_str::<SettingsDto>(&contents) else {
+        return;
+    };
+    *app.state::<AppSettings>().0.lock().unwrap() = parsed_settings
+}
+
 #[derive(serde::Serialize)]
 pub struct ActionResult {
     pub ok: bool,
@@ -138,6 +162,99 @@ pub struct PdfMetadataDto {
     pub spot_colors: Vec<String>,
     pub has_spots: bool,
 }
+
+/// Default parameter values for each action, persisted across sessions.
+/// Mirrors the `params` object in App.svelte — every field maps 1:1 to a
+/// ParamsPanel control. On first launch the `Default` impl provides the same
+/// values that were previously hardcoded in the frontend.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ActionDefaultsDto {
+    #[serde(default)]
+    bleed_inches: f64,
+    #[serde(default)]
+    export_format: String,
+    #[serde(default)]
+    export_dpi: u32,
+    #[serde(default)]
+    remap_tolerance: f64,
+    #[serde(default)]
+    trim_box_bleed_inches: f64,
+    #[serde(default)]
+    split_panel_inches: f64,
+    #[serde(default)]
+    stitch_spread_inches: f64,
+    #[serde(default)]
+    color_intent: String,
+}
+
+impl Default for ActionDefaultsDto {
+    fn default() -> Self {
+        Self {
+            bleed_inches: 0.125,
+            export_format: "jpg".to_string(),
+            export_dpi: 300,
+            remap_tolerance: 1.0,
+            trim_box_bleed_inches: 0.125,
+            split_panel_inches: 3.67,
+            stitch_spread_inches: 8.5,
+            color_intent: "RelativeColorimetric".to_string(),
+        }
+    }
+}
+
+/// Full application settings written to `{appDataDir}/settings.json`.
+/// `#[serde(default)]` on every field ensures forward compatibility — fields
+/// added in future versions fall back to their `Default` values when reading
+/// an older settings file rather than causing a parse error. Fields removed
+/// in this version (`theme`, `responsive_threshold`) are silently ignored on
+/// deserialize since `deny_unknown_fields` is not set.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SettingsDto {
+    #[serde(default)]
+    version: u32,
+    #[serde(default)]
+    theme_preset: String,
+    #[serde(default)]
+    layout_override: Option<String>,
+    #[serde(default)]
+    wide_breakpoint_px: u32,
+    #[serde(default)]
+    sidebar_width: u32,
+    #[serde(default)]
+    font_sans: String,
+    #[serde(default)]
+    font_mono: String,
+    #[serde(default)]
+    shortcuts: HashMap<String, String>,
+    #[serde(default)]
+    defaults: Box<ActionDefaultsDto>,
+    #[serde(default)]
+    quips_enabled: bool,
+    #[serde(default)]
+    custom_quips: Option<Vec<String>>,
+}
+
+impl Default for SettingsDto {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            theme_preset: "ember-dark".to_string(),
+            layout_override: None,
+            wide_breakpoint_px: 900,
+            sidebar_width: 240,
+            font_sans: "Inter".to_string(),
+            font_mono: "JetBrains Mono".to_string(),
+            shortcuts: HashMap::new(),
+            defaults: Box::new(ActionDefaultsDto::default()),
+            quips_enabled: true,
+            custom_quips: None,
+        }
+    }
+}
+
+/// Tauri-managed state holding the live application settings.
+/// Initialized from `settings.json` at startup; updated by `save_settings`.
+pub struct AppSettings(pub Mutex<SettingsDto>);
 
 fn output_path(
     input: &Path,
@@ -482,7 +599,9 @@ pub fn split_pages(
         // is replaced. The source file is never touched regardless of overwrite state.
         let out = dir.join(format!("{}_split.pdf", stem));
         let page_count = result.page_count() as u32;
-        result.embed_metadata(&hash, &ts, &[("split_pages", &params)]).map_err(friendly_error)?;
+        result
+            .embed_metadata(&hash, &ts, &[("split_pages", &params)])
+            .map_err(friendly_error)?;
         result.save_pdf(&out).map_err(friendly_error)?;
         output_paths.push(out.to_string_lossy().into_owned());
         total_pages += page_count;
@@ -551,7 +670,10 @@ pub fn flatten_spots(
     let mut output_paths = Vec::new();
     let mut total_spots = 0u32;
     let ts = xmp_timestamp();
-    let params = icc_profile.as_deref().map(|n| format!("icc={n}")).unwrap_or_default();
+    let params = icc_profile
+        .as_deref()
+        .map(|n| format!("icc={n}"))
+        .unwrap_or_default();
 
     let dst_bytes: Option<Arc<[u8]>> = match &icc_profile {
         Some(name) => Some(resolve_profile_bytes(name, &profiles)?),
@@ -872,7 +994,9 @@ pub fn stitch_pages(
             .unwrap_or(std::path::Path::new("."));
         let stem = path.file_stem().unwrap_or_default().to_string_lossy();
         let out = dir.join(format!("{}_stitch.pdf", stem));
-        result.embed_metadata(&hash, &ts, &[("stitch_pages", &params)]).map_err(friendly_error)?;
+        result
+            .embed_metadata(&hash, &ts, &[("stitch_pages", &params)])
+            .map_err(friendly_error)?;
         result.save_pdf(&out).map_err(friendly_error)?;
         output_paths.push(out.to_string_lossy().into_owned());
     }
@@ -1115,4 +1239,137 @@ pub async fn open_file_dialog(app: tauri::AppHandle) -> Result<Vec<String>, Stri
     Ok(files
         .map(|paths| paths.into_iter().map(|p| p.to_string()).collect::<Vec<_>>())
         .unwrap_or_default())
+}
+
+/// Returns a clone of the current settings from managed state.
+/// Called once by the frontend at startup to hydrate the reactive settings store.
+#[tauri::command]
+pub fn load_settings(state: State<'_, AppSettings>) -> SettingsDto {
+    state.0.lock().unwrap().clone()
+}
+
+/// Serializes `settings` to `{appDataDir}/settings.json` and replaces the
+/// in-memory copy atomically. Returns an error string if the file cannot be
+/// written so the frontend can surface a notification without crashing.
+#[tauri::command]
+pub fn save_settings(
+    settings: SettingsDto,
+    state: State<'_, AppSettings>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let path = settings_path(&app).ok_or("Cannot resolve app data dir")?;
+    let json = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    *state.0.lock().unwrap() = settings;
+    Ok(())
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    #[test]
+    fn settings_dto_default_version_is_one() {
+        let s = SettingsDto::default();
+        assert_eq!(s.version, 1);
+    }
+
+    #[test]
+    fn settings_dto_default_shortcuts_is_empty() {
+        let s = SettingsDto::default();
+        assert!(s.shortcuts.is_empty());
+    }
+
+    #[test]
+    fn settings_dto_default_quips_enabled() {
+        let s = SettingsDto::default();
+        assert!(s.quips_enabled);
+    }
+
+    #[test]
+    fn settings_dto_default_theme_preset_is_ember_dark() {
+        assert_eq!(SettingsDto::default().theme_preset, "ember-dark");
+    }
+
+    #[test]
+    fn settings_dto_default_wide_breakpoint_px_is_900() {
+        assert_eq!(SettingsDto::default().wide_breakpoint_px, 900);
+    }
+
+    #[test]
+    fn settings_dto_default_custom_quips_is_none() {
+        assert!(SettingsDto::default().custom_quips.is_none());
+    }
+
+    #[test]
+    fn settings_dto_default_fonts_are_nonempty() {
+        let s = SettingsDto::default();
+        assert!(!s.font_sans.is_empty());
+        assert!(!s.font_mono.is_empty());
+    }
+
+    #[test]
+    fn settings_dto_roundtrips_through_json() {
+        let original = SettingsDto::default();
+        let json = serde_json::to_string(&original).unwrap();
+        let parsed: SettingsDto = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.theme_preset, original.theme_preset);
+        assert_eq!(parsed.version, original.version);
+        assert_eq!(parsed.quips_enabled, original.quips_enabled);
+        assert_eq!(parsed.wide_breakpoint_px, original.wide_breakpoint_px);
+    }
+
+    #[test]
+    fn settings_dto_unknown_fields_ignored_on_deserialize() {
+        // Verifies #[serde(deny_unknown_fields)] is NOT present — required for
+        // forward compatibility, and also ensures old settings files that still
+        // carry the removed `theme` and `responsive_threshold` fields load cleanly.
+        let json = r#"{
+            "version": 1,
+            "theme": "dark",
+            "responsive_threshold": 1.4,
+            "theme_preset": "ember-dark",
+            "unknown_future_field": 42,
+            "quips_enabled": true
+        }"#;
+        let result = serde_json::from_str::<SettingsDto>(json);
+        assert!(
+            result.is_ok(),
+            "unknown/removed fields must not cause a parse failure"
+        );
+        assert_eq!(result.unwrap().theme_preset, "ember-dark");
+    }
+
+    #[test]
+    fn settings_dto_custom_quips_roundtrips() {
+        let mut s = SettingsDto::default();
+        s.custom_quips = Some(vec!["hello world".to_string(), "test quip".to_string()]);
+        let json = serde_json::to_string(&s).unwrap();
+        let parsed: SettingsDto = serde_json::from_str(&json).unwrap();
+        let quips = parsed
+            .custom_quips
+            .expect("custom_quips should survive roundtrip");
+        assert_eq!(quips.len(), 2);
+        assert_eq!(quips[0], "hello world");
+    }
+
+    #[test]
+    fn action_defaults_roundtrip_through_json() {
+        let d = ActionDefaultsDto::default();
+        let json = serde_json::to_string(&d).unwrap();
+        let parsed: ActionDefaultsDto = serde_json::from_str(&json).unwrap();
+        assert!((parsed.bleed_inches - d.bleed_inches).abs() < f64::EPSILON);
+        assert_eq!(parsed.export_format, d.export_format);
+        assert_eq!(parsed.export_dpi, d.export_dpi);
+    }
+
+    #[test]
+    fn action_defaults_export_dpi_is_300() {
+        assert_eq!(ActionDefaultsDto::default().export_dpi, 300);
+    }
+
+    #[test]
+    fn action_defaults_bleed_is_eighth_inch() {
+        assert!((ActionDefaultsDto::default().bleed_inches - 0.125).abs() < f64::EPSILON);
+    }
 }

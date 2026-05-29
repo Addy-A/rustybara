@@ -12,6 +12,7 @@
   import ExtractPagesPanel from './ExtractPagesPanel.svelte'
   import OutputPanel from './OutputPanel.svelte'
   import OutlineTextPanel from './OutlineTextPanel.svelte'
+  import SettingsPanel from './SettingsPanel.svelte'
   const app = useAppState()
 </script>
 
@@ -40,6 +41,8 @@
     <OutlineTextPanel />
   {:else if app.activeAction === 'output'}
     <OutputPanel />
+  {:else if app.activeAction === 'settings'}
+    <SettingsPanel />
   {/if}
 </div>
 

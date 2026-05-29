@@ -146,6 +146,14 @@ export async function pickOutputDir() {
   return typeof selected === 'string' ? selected : null
 }
 
+export async function loadSettings() {
+  return await invoke('load_settings')
+}
+
+export async function saveSettings(settings) {
+  return await invoke('save_settings', { settings })
+}
+
 export async function loadIccProfile() {
   return await invoke('load_icc_profile')
 }

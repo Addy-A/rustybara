@@ -16,11 +16,23 @@
     Clear All
   </button>
   <div class="tb-right">
-    <button class="tb-btn" onclick={() => (app.theme = app.theme === 'dark' ? 'light' : 'dark')}>
-      {app.theme === 'dark' ? '☀' : '☾'}
+    <button class="tb-btn" onclick={() => {
+      const isDark = !app.theme.endsWith('-light')
+      const base = app.theme.replace(/-dark$|-light$/, '')
+      app.theme = isDark ? `${base}-light` : `${base}-dark`
+    }} title="Toggle dark / light">
+      {app.theme.endsWith('-light') ? '☾' : '☀'}
     </button>
     <button class="tb-btn" style="color:var(--muted)" onclick={() => (app.helpVisible = true)}>
       ? Help
+    </button>
+    <button
+      class="tb-btn"
+      class:active={app.activeAction === 'settings'}
+      onclick={() => (app.activeAction = 'settings')}
+      title="Settings (,)"
+    >
+      ⚙
     </button>
   </div>
 </div>
@@ -72,4 +84,9 @@
     margin: 0 4px;
   }
   .tb-right { margin-left: auto; display: flex; gap: 6px; }
+  .tb-btn.active {
+    background: var(--orange-dim);
+    border-color: var(--orange);
+    color: var(--orange-hi);
+  }
 </style>
