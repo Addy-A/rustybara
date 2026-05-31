@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { provideAppState } from './lib/context.js'
   import * as api from './lib/api.js'
+  import { sizeExceedsLimit } from './lib/resource.js'
   import { quips as builtinQuips, randomQuip } from './lib/quips.js'
   import { applyTheme } from './lib/themes.js'
   import Titlebar from './components/Titlebar.svelte'
@@ -20,6 +21,8 @@
   import StatusBar from './components/StatusBar.svelte'
   import HelpOverlay from './components/HelpOverlay.svelte'
   import CmdBar from './components/CmdBar.svelte'
+  import ResourceWarningModal from './components/ResourceWarningModal.svelte'
+  import ForNotice from './components/ForNotice.svelte'
 
   // ---------- core state ----------
   let files = $state([]) // [{path, name, colorSpace, sizeKb}]
@@ -40,6 +43,9 @@
   let chordTimer = null
   let dragOver = $state(false)
   let quip = $state(randomQuip())
+  let largeFileBlock = $state(null)       // { name, sizeKb } | null — file refused as too large
+  let forNotice = $state(null)            // { message: string } | null
+  let hasProcessedInOverwrite = false     // session flag, not reactive
 
   // ---------- settings ----------
   let settings = $state(null)
@@ -127,7 +133,10 @@
   // Reactively re-fetch XMP whenever the active file's path changes.
   $effect(() => {
     const path = activeFile !== null ? files[activeFile]?.path : null
-    if (!path) {
+    // Skip XMP read for placeholder files (metadata === null means the file was
+    // too large to load metadata — opening it with pdfium here would block the
+    // IPC thread before the user even responds to the resource warning modal).
+    if (!path || files[activeFile]?.metadata === null) {
       fileXmp = null
       return
     }
@@ -200,19 +209,36 @@
   async function addFilesFromPaths(paths) {
     for (const path of paths) {
       if (files.some((f) => f.path === path)) continue
+
+      const name = api.basename(path)
+
+      // ── Hard size gate — no PDF parsing (instant fs::metadata) ──────────────
+      // Very large PDFs can't be parsed without freezing the app, so oversized
+      // files are refused outright rather than added. A failed/unknown size
+      // fails safe: sizeExceedsLimit(null) returns true → treated as too large.
+      let sizeKb = null
+      try {
+        sizeKb = await api.getFileSize(path)
+      } catch (_) {
+        // Intentionally swallowed — handled as "too large" below.
+      }
+      if (sizeExceedsLimit(sizeKb, settings?.resource_warn_size_mb ?? 200)) {
+        largeFileBlock = { name, sizeKb: sizeKb ?? 0 }
+        continue // do not add the file
+      }
+
+      // ── Within limits — load metadata (async; never blocks the UI) ──────────
       try {
         const meta = await api.loadMetadata(path)
-        files = [
-          ...files,
-          {
-            path,
-            name: api.basename(path),
-            colorSpace: meta.color_space,
-            sizeKb: meta.file_size_kb,
-            metadata: meta,
-            scoped: true,
-          },
-        ]
+        const fileObj = {
+          path, name,
+          colorSpace: meta.color_space,
+          sizeKb: meta.file_size_kb,
+          metadata: meta,
+          scoped: true,
+        }
+        files = [...files, fileObj]
+        maybeShowFor('add', [fileObj.name])
       } catch (e) {
         actionLog = [
           {
@@ -231,6 +257,10 @@
     }
   }
 
+  function dismissLargeFile() {
+    largeFileBlock = null
+  }
+
   async function addFiles() {
     let paths
     try {
@@ -241,6 +271,25 @@
     }
     if (!paths.length) return
     await addFilesFromPaths(paths)
+  }
+
+  // Launch a file in rbv, but first warn for oversized files. rbv opens the PDF
+  // synchronously on its own main thread (PdfPipeline::open), so a large file
+  // freezes the viewer for many seconds while lopdf parses it.
+  function viewInRbv(fileObj) {
+    if (!fileObj) return
+    // Files are size-gated on add, so this only triggers when the block is
+    // disabled/raised and a large file got in anyway — rbv opens the PDF
+    // synchronously on its own main thread, freezing the viewer while it parses.
+    if (sizeExceedsLimit(fileObj.sizeKb, settings?.resource_warn_size_mb ?? 200)) {
+      const ok = window.confirm(
+        `"${fileObj.name}" is large (${api.formatSize(fileObj.sizeKb ?? 0)}).\n\n` +
+          `Opening it in rbv loads the entire document and can freeze the viewer ` +
+          `for many seconds. Open it anyway?`,
+      )
+      if (!ok) return
+    }
+    api.openInViewer(fileObj.path).catch(console.error)
   }
 
   function removeFile(idx) {
@@ -355,7 +404,7 @@
         parsed.index != null
           ? [files[parsed.index]].filter(Boolean)
           : files.filter((f) => f.scoped)
-      targets.forEach((f) => api.openInViewer(f.path).catch(console.error))
+      targets.forEach((f) => viewInRbv(f))
     } else if (parsed.cmd === 'csrc') {
       params.fromProfile = parsed.profile
       activeAction = 'colorspace'
@@ -426,23 +475,43 @@
     closeCmdBar()
   }
 
+  // Raise the Friendly Overwrite Reminder if conditions are met.
+  // Trigger 1 (scope shift): only after at least one overwrite action has run.
+  // Trigger 2 (new file): fires regardless of prior processing history.
+  function maybeShowFor(trigger, names) {
+    if (!overwrite) return
+    if (settings?.for_enabled === false) return
+    if (forNotice) return // already visible
+    if (trigger === 'scope' && !hasProcessedInOverwrite) return
+    const label = names.length === 1
+      ? `"${names[0]}" will be modified in place if you run now.`
+      : `${names.length} files are scoped and will be modified in place if you run now.`
+    forNotice = { message: `Overwrite is on — ${label}` }
+  }
+
   function toggleScope(idx) {
+    const wasScoped = files[idx]?.scoped
     files = files.map((f, i) => (i === idx ? { ...f, scoped: !f.scoped } : f))
+    if (!wasScoped) maybeShowFor('scope', [files[idx]?.name].filter(Boolean))
   }
   function scopeIn(idx) {
     files = files.map((f, i) => (i === idx ? { ...f, scoped: true } : f))
+    maybeShowFor('scope', [files[idx]?.name].filter(Boolean))
   }
   function scopeOut(idx) {
     files = files.map((f, i) => (i === idx ? { ...f, scoped: false } : f))
   }
   function scopeAll() {
     files = files.map((f) => ({ ...f, scoped: true }))
+    maybeShowFor('scope', files.map((f) => f.name))
   }
   function scopeNone() {
     files = files.map((f) => ({ ...f, scoped: false }))
   }
   function invertScope() {
     files = files.map((f) => ({ ...f, scoped: !f.scoped }))
+    const nowScoped = files.filter((f) => f.scoped).map((f) => f.name)
+    if (nowScoped.length > 0) maybeShowFor('scope', nowScoped)
   }
 
   // ---------- vim-style file navigation ----------
@@ -542,12 +611,32 @@
     }
   }
 
+  // Run an action against a list of paths, returning a consolidated ActionResult.
+  async function runActionOnPaths(paths) {
+    switch (activeAction) {
+      case 'trim':        return api.trimMarks(paths, outputDir, overwrite)
+      case 'resize':      return api.resizeToBleed(paths, params.bleedInches, outputDir, overwrite)
+      case 'export':      return api.exportImages(paths, params.exportFormat, params.exportDpi, outputDir)
+      case 'addtrimbox':  return api.addTrimBox(paths, params.trimBoxBleedInches, outputDir, overwrite)
+      case 'outlinetext': return api.outlineText(paths, outputDir, overwrite)
+      case 'splitpages':  return api.splitPages(paths, params.splitPanelInches * 72, outputDir, overwrite)
+      case 'stitchpages': return api.stitchPages(paths, params.stitchSpreadInches * 72, outputDir, overwrite)
+      case 'extractpages':return api.extractPages(paths, api.parsePageNums(params.extractPagesInput), outputDir, overwrite)
+      case 'remap':       return api.remapColors(paths, params.remapFrom, params.remapTo, params.remapTolerance, outputDir, overwrite)
+      case 'colorspace':  return api.convertColorSpace(paths, params.fromProfile, params.toProfile, params.convertIntent, outputDir, overwrite)
+      case 'spots':       return api.flattenSpots(paths, outputDir, overwrite, params.spotIccProfile)
+      default:            return null
+    }
+  }
+
   async function runAction() {
     if (processing || files.length === 0) return
-    if (activeAction === 'output') return
+    if (activeAction === 'output' || activeAction === 'settings') return
 
-    const paths = files.filter((f) => f.scoped).map((f) => f.path)
-    if (paths.length === 0) return
+    const scopedFiles = files.filter((f) => f.scoped)
+    if (scopedFiles.length === 0) return
+
+    const paths = scopedFiles.map((f) => f.path)
 
     // Double-processing guard: warn if the active file already has this op applied.
     const opName = ACTION_TO_OP[activeAction]
@@ -559,128 +648,33 @@
     }
 
     processing = true
+    forNotice = null // dismiss any pending FOR when the user commits to running
+
+    const ACTION_LABELS = {
+      trim: 'TrimMarks', resize: 'ResizeToBleed', export: 'ExportImages',
+      remap: 'RemapColors', colorspace: 'ConvertColorSpace', spots: 'FlattenSpots',
+      addtrimbox: 'AddTrimBox', splitpages: 'SplitPages', stitchpages: 'StitchPages',
+      extractpages: 'ExtractPages', outlinetext: 'OutlineText',
+    }
+    const SWAP_ACTIONS = new Set([
+      'trim', 'resize', 'remap', 'colorspace', 'spots',
+      'addtrimbox', 'outlinetext', 'extractpages', 'splitpages', 'stitchpages',
+    ])
+    const actionLabel = ACTION_LABELS[activeAction]
+    if (!actionLabel) { processing = false; return }
 
     try {
-      let result
-      let actionLabel
-      switch (activeAction) {
-        case 'trim':
-          actionLabel = 'TrimMarks'
-          result = await api.trimMarks(paths, outputDir, overwrite)
-          break
-        case 'resize':
-          actionLabel = 'ResizeToBleed'
-          result = await api.resizeToBleed(
-            paths,
-            params.bleedInches,
-            outputDir,
-            overwrite,
-          )
-          break
-        case 'export':
-          actionLabel = 'ExportImages'
-          result = await api.exportImages(
-            paths,
-            params.exportFormat,
-            params.exportDpi,
-            outputDir,
-          )
-          break
-        case 'remap':
-          actionLabel = 'RemapColors'
-          result = await api.remapColors(
-            paths,
-            params.remapFrom,
-            params.remapTo,
-            params.remapTolerance,
-            outputDir,
-            overwrite,
-          )
-          break
-        case 'colorspace':
-          actionLabel = 'ConvertColorSpace'
-          result = await api.convertColorSpace(
-            paths,
-            params.fromProfile,
-            params.toProfile,
-            params.convertIntent,
-            outputDir,
-            overwrite,
-          )
-          break
-        case 'spots':
-          actionLabel = 'FlattenSpots'
-          result = await api.flattenSpots(
-            paths,
-            outputDir,
-            overwrite,
-            params.spotIccProfile,
-          )
-          break
-        case 'addtrimbox':
-          actionLabel = 'AddTrimBox'
-          result = await api.addTrimBox(
-            paths,
-            params.trimBoxBleedInches,
-            outputDir,
-            overwrite,
-          )
-          break
-        case 'splitpages':
-          actionLabel = 'SplitPages'
-          result = await api.splitPages(
-            paths,
-            params.splitPanelInches * 72,
-            outputDir,
-            overwrite,
-          )
-          break
-        case 'stitchpages':
-          actionLabel = 'StitchPages'
-          result = await api.stitchPages(
-            paths,
-            params.stitchSpreadInches * 72,
-            outputDir,
-            overwrite,
-          )
-          break
-        case 'extractpages': {
-          actionLabel = 'ExtractPages'
-          const pageNums = api.parsePageNums(params.extractPagesInput)
-          result = await api.extractPages(paths, pageNums, outputDir, overwrite)
-          break
-        }
-        case 'outlinetext':
-          actionLabel = 'OutlineText'
-          result = await api.outlineText(paths, outputDir, overwrite)
-          break
-        default:
-          processing = false
-          return
-      }
-      actionLog = [{ ...result, action: actionLabel }, ...actionLog]
-
-      const SWAP_ACTIONS = new Set([
-        'trim',
-        'resize',
-        'remap',
-        'colorspace',
-        'spots',
-        'addtrimbox',
-        'outlinetext',
-        'extractpages',
-        'splitpages',
-        'stitchpages',
-      ])
-      if (SWAP_ACTIONS.has(activeAction) && result.output_paths.length > 0) {
-        // Capture whether the active file was scoped before the swap so we know
-        // if its path will change after replaceProcessedFiles updates the buffer.
-        const activeWasScoped = activeFile !== null && files[activeFile]?.scoped
-        await replaceProcessedFiles(result.output_paths)
-        // If rbv is open and the active file was processed, push the new path.
-        if (activeWasScoped && activeFile !== null) {
-          const updatedPath = files[activeFile]?.path
-          if (updatedPath) api.notifyViewer(updatedPath).catch(() => {})
+      const result = await runActionOnPaths(paths)
+      if (result) {
+        if (overwrite) hasProcessedInOverwrite = true
+        actionLog = [{ ...result, action: actionLabel }, ...actionLog]
+        if (SWAP_ACTIONS.has(activeAction) && result.output_paths.length > 0) {
+          const activeWasScoped = activeFile !== null && files[activeFile]?.scoped
+          await replaceProcessedFiles(result.output_paths)
+          if (activeWasScoped && activeFile !== null) {
+            const updatedPath = files[activeFile]?.path
+            if (updatedPath) api.notifyViewer(updatedPath).catch(() => {})
+          }
         }
       }
     } catch (e) {
@@ -927,13 +921,13 @@
         break
       case 'o':
         overwrite = !overwrite
+        if (!overwrite) { hasProcessedInOverwrite = false; forNotice = null }
         break
       case 'f':
         addFiles()
         break
       case 'v':
-        if (activeFileObj)
-          api.openInViewer(activeFileObj.path).catch(console.error)
+        viewInRbv(activeFileObj)
         break
       case 'a':
         scopeAll()
@@ -1036,6 +1030,7 @@
     },
     set overwrite(v) {
       overwrite = v
+      if (!v) { hasProcessedInOverwrite = false; forNotice = null }
     },
     get outputDir() {
       return outputDir
@@ -1124,6 +1119,7 @@
       return scopedCount
     },
     addFiles,
+    viewInRbv,
     removeFile,
     selectFile,
     clearAll,
@@ -1162,6 +1158,18 @@
 </script>
 
 <Titlebar />
+
+{#if largeFileBlock}
+  <ResourceWarningModal file={largeFileBlock} onDismiss={dismissLargeFile} />
+{/if}
+
+{#if forNotice}
+  <ForNotice
+    message={forNotice.message}
+    onTurnOff={() => { overwrite = false; hasProcessedInOverwrite = false; forNotice = null }}
+    onKeep={() => { forNotice = null }}
+  />
+{/if}
 
 {#if layout === 'wide'}
   <Toolbar />

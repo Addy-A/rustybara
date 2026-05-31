@@ -319,6 +319,34 @@
     <div class="section-label">Behavior</div>
 
     <div class="field-row">
+      <span class="field-label">Block files above</span>
+      <div class="input-with-hint">
+        <input
+          class="param-input narrow"
+          type="number"
+          min="0"
+          max="2000"
+          step="10"
+          bind:value={draft.resource_warn_size_mb}
+        />
+        <span class="field-hint">
+          MB — files larger than this are refused on add (the app can't parse very
+          large PDFs yet). <strong>0</strong> disables the limit, but big files will
+          likely hang the app.
+        </span>
+      </div>
+    </div>
+
+    <div class="field-row">
+      <span class="field-label">Overwrite reminder</span>
+      <label class="toggle">
+        <input type="checkbox" bind:checked={draft.for_enabled} />
+        <span class="toggle-track"></span>
+        <span class="toggle-label">{draft.for_enabled ? 'Enabled' : 'Disabled'}</span>
+      </label>
+    </div>
+
+    <div class="field-row">
       <span class="field-label">Quips</span>
       <label class="toggle">
         <input type="checkbox" bind:checked={draft.quips_enabled} />

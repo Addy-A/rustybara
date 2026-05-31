@@ -146,6 +146,12 @@ export async function pickOutputDir() {
   return typeof selected === 'string' ? selected : null
 }
 
+// Returns file size in KB via a cheap fs::metadata call (no PDF parsing). Used
+// to hard-gate oversized files on add before any heavy load.
+export async function getFileSize(path) {
+  return await invoke('get_file_size', { path })
+}
+
 export async function loadSettings() {
   return await invoke('load_settings')
 }

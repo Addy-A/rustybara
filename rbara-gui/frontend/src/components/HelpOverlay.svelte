@@ -377,6 +377,7 @@
       </div>
     {/if}
 
+
     <button class="close" onclick={close}>Close</button>
   </div>
 </div>

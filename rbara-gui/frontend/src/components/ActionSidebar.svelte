@@ -1,6 +1,5 @@
 <script>
   import { useAppState } from '../lib/context.js'
-  import { openInViewer } from '../lib/api.js'
   const app = useAppState()
 
   const MIN_W = 150
@@ -189,7 +188,7 @@
     <div
       class="action-item view-btn"
       class:disabled={!app.activeFileObj}
-      onclick={() => app.activeFileObj && openInViewer(app.activeFileObj.path)}
+      onclick={() => app.viewInRbv(app.activeFileObj)}
       role="button"
       tabindex="0"
       title="Open active file in rbv viewer"

@@ -235,10 +235,15 @@ impl PdfPipeline {
             _ => return None,
         };
 
-        let meta_id = cat.get(b"Metadata").ok().and_then(|o| o.as_reference().ok())?;
+        let meta_id = cat
+            .get(b"Metadata")
+            .ok()
+            .and_then(|o| o.as_reference().ok())?;
 
         let xmp_bytes = match self.doc.get_object(meta_id) {
-            Ok(Object::Stream(s)) => s.decompressed_content().unwrap_or_else(|_| s.content.clone()),
+            Ok(Object::Stream(s)) => s
+                .decompressed_content()
+                .unwrap_or_else(|_| s.content.clone()),
             _ => return None,
         };
 
@@ -289,7 +294,10 @@ impl PdfPipeline {
                 Ok(Object::Dictionary(d)) => d.clone(),
                 _ => return Ok(self),
             };
-            let meta_ref = cat.get(b"Metadata").ok().and_then(|o| o.as_reference().ok());
+            let meta_ref = cat
+                .get(b"Metadata")
+                .ok()
+                .and_then(|o| o.as_reference().ok());
             let bytes = match meta_ref.and_then(|id| self.doc.get_object(id).ok()) {
                 Some(Object::Stream(s)) => s
                     .decompressed_content()

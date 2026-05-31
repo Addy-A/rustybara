@@ -232,6 +232,24 @@ pub struct SettingsDto {
     quips_enabled: bool,
     #[serde(default)]
     custom_quips: Option<Vec<String>>,
+    /// Files larger than this (in MB) are hard-blocked on add — the app cannot
+    /// parse very large PDFs without freezing, so they are refused outright
+    /// rather than processed. `0` disables the block. See README "Known
+    /// Limitations".
+    #[serde(default = "default_block_size_mb")]
+    resource_warn_size_mb: u32,
+    /// When `true`, the Friendly Overwrite Reminder fires on context shifts
+    /// (scope change or new file added) while overwrite mode is active.
+    #[serde(default)]
+    for_enabled: bool,
+}
+
+/// Hard file-size block threshold, in MB. Used both by `impl Default` and by
+/// `#[serde(default = …)]` so a settings file that predates this field fills it
+/// with this sensible value instead of `u32::default()` (0, which would disable
+/// the block).
+fn default_block_size_mb() -> u32 {
+    200
 }
 
 impl Default for SettingsDto {
@@ -248,6 +266,8 @@ impl Default for SettingsDto {
             defaults: Box::new(ActionDefaultsDto::default()),
             quips_enabled: true,
             custom_quips: None,
+            resource_warn_size_mb: default_block_size_mb(),
+            for_enabled: true,
         }
     }
 }
@@ -302,13 +322,29 @@ fn now_timestamp() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
 }
 
-/// RAII guard that releases the processing lock on drop, even on early returns.
-struct LockGuard<'a> {
-    lock: &'a Mutex<bool>,
-}
-
-impl<'a> LockGuard<'a> {
-    fn acquire(lock: &'a Mutex<bool>) -> Result<Self, String> {
+/// Runs a blocking PDF action off the Tauri main thread.
+///
+/// Tauri executes synchronous commands on the main (webview) thread, so any
+/// command that calls `PdfPipeline::open` directly would freeze the UI while
+/// lopdf parses the file — badly so on large documents. This helper centralizes
+/// the correct pattern for every action command:
+///
+/// 1. Acquire the single processing lock synchronously (rejecting re-entry).
+/// 2. Move the owned work closure onto the blocking thread pool via
+///    `spawn_blocking` so the main thread stays responsive.
+/// 3. Release the lock **unconditionally** once the task finishes — including
+///    when the task panics and `await` yields a `JoinError`. Returning early on
+///    a join error without releasing would wedge the lock forever ("A file is
+///    already being processed" on every later action).
+///
+/// `work` owns all of its inputs (`Vec<String>` paths, resolved ICC bytes, …);
+/// nothing borrowing from `State` may cross the closure boundary, since the
+/// blocking thread outlives the command's borrow.
+async fn run_blocking_action<F>(lock: &Mutex<bool>, work: F) -> Result<ActionResult, String>
+where
+    F: FnOnce() -> Result<ActionResult, String> + Send + 'static,
+{
+    {
         let mut guard = lock
             .lock()
             .map_err(|_| "Processing lock poisoned".to_string())?;
@@ -316,93 +352,98 @@ impl<'a> LockGuard<'a> {
             return Err("A file is already being processed".to_string());
         }
         *guard = true;
-        Ok(Self { lock })
     }
-}
 
-impl Drop for LockGuard<'_> {
-    fn drop(&mut self) {
-        if let Ok(mut guard) = self.lock.lock() {
-            *guard = false;
-        }
+    let joined = tauri::async_runtime::spawn_blocking(work).await;
+
+    // Release the lock regardless of whether the task succeeded, errored, or
+    // panicked — must happen before we propagate any error.
+    if let Ok(mut guard) = lock.lock() {
+        *guard = false;
     }
+
+    joined.map_err(|e| format!("Task join error: {e}"))?
 }
 
 #[tauri::command]
-pub fn trim_marks(
+pub async fn trim_marks(
     paths: Vec<String>,
     output_dir: Option<String>,
     overwrite: bool,
     state: State<'_, ProcessingLock>,
 ) -> Result<ActionResult, String> {
-    let _guard = LockGuard::acquire(&state.0)?;
     let output_dir = output_dir.map(PathBuf::from);
-    let mut output_paths = Vec::new();
-    let ts = xmp_timestamp();
+    run_blocking_action(&state.0, move || {
+        let ts = xmp_timestamp();
+        let mut output_paths = Vec::new();
 
-    for path_str in &paths {
-        let path = PathBuf::from(path_str);
-        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
-        let out = output_path(&path, &output_dir, None, overwrite);
-        PdfPipeline::open(&path)
-            .and_then(|mut p| {
-                p.trim()?;
-                p.embed_metadata(&hash, &ts, &[("trim", "")])?;
-                p.save_pdf(&out)?;
-                Ok(())
-            })
-            .map_err(friendly_error)?;
-        output_paths.push(out.to_string_lossy().into_owned());
-    }
+        for path_str in &paths {
+            let path = PathBuf::from(path_str);
+            let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
+            let out = output_path(&path, &output_dir, None, overwrite);
+            PdfPipeline::open(&path)
+                .and_then(|mut p| {
+                    p.trim()?;
+                    p.embed_metadata(&hash, &ts, &[("trim", "")])?;
+                    p.save_pdf(&out)?;
+                    Ok(())
+                })
+                .map_err(friendly_error)?;
+            output_paths.push(out.to_string_lossy().into_owned());
+        }
 
-    Ok(ActionResult {
-        ok: true,
-        message: format!("Trimmed {} file(s)", paths.len()),
-        output_paths,
-        timestamp: now_timestamp(),
+        Ok(ActionResult {
+            ok: true,
+            message: format!("Trimmed {} file(s)", paths.len()),
+            output_paths,
+            timestamp: now_timestamp(),
+        })
     })
+    .await
 }
 
 #[tauri::command]
-pub fn resize_to_bleed(
+pub async fn resize_to_bleed(
     paths: Vec<String>,
     bleed_inches: f64,
     output_dir: Option<String>,
     overwrite: bool,
     state: State<'_, ProcessingLock>,
 ) -> Result<ActionResult, String> {
-    let _guard = LockGuard::acquire(&state.0)?;
     let output_dir = output_dir.map(PathBuf::from);
     let bleed_pts = bleed_inches * 72.0;
-    let mut output_paths = Vec::new();
-    let params = format!("bleed_in={bleed_inches}");
-    let ts = xmp_timestamp();
+    run_blocking_action(&state.0, move || {
+        let mut output_paths = Vec::new();
+        let params = format!("bleed_in={bleed_inches}");
+        let ts = xmp_timestamp();
 
-    for path_str in &paths {
-        let path = PathBuf::from(path_str);
-        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
-        let out = output_path(&path, &output_dir, None, overwrite);
-        PdfPipeline::open(&path)
-            .and_then(|mut p| {
-                p.resize(bleed_pts)?;
-                p.embed_metadata(&hash, &ts, &[("resize", &params)])?;
-                p.save_pdf(&out)?;
-                Ok(())
-            })
-            .map_err(friendly_error)?;
-        output_paths.push(out.to_string_lossy().into_owned());
-    }
+        for path_str in &paths {
+            let path = PathBuf::from(path_str);
+            let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
+            let out = output_path(&path, &output_dir, None, overwrite);
+            PdfPipeline::open(&path)
+                .and_then(|mut p| {
+                    p.resize(bleed_pts)?;
+                    p.embed_metadata(&hash, &ts, &[("resize", &params)])?;
+                    p.save_pdf(&out)?;
+                    Ok(())
+                })
+                .map_err(friendly_error)?;
+            output_paths.push(out.to_string_lossy().into_owned());
+        }
 
-    Ok(ActionResult {
-        ok: true,
-        message: format!(
-            "Resized {} file(s) (bleed: {} in)",
-            paths.len(),
-            bleed_inches
-        ),
-        output_paths,
-        timestamp: now_timestamp(),
+        Ok(ActionResult {
+            ok: true,
+            message: format!(
+                "Resized {} file(s) (bleed: {} in)",
+                paths.len(),
+                bleed_inches
+            ),
+            output_paths,
+            timestamp: now_timestamp(),
+        })
     })
+    .await
 }
 
 #[tauri::command]
@@ -413,18 +454,6 @@ pub async fn export_images(
     output_dir: Option<String>,
     state: State<'_, ProcessingLock>,
 ) -> Result<ActionResult, String> {
-    // Acquire lock synchronously before spawning the blocking render task.
-    {
-        let mut guard = state
-            .0
-            .lock()
-            .map_err(|_| "Processing lock poisoned".to_string())?;
-        if *guard {
-            return Err("A file is already being processed".to_string());
-        }
-        *guard = true;
-    }
-
     let fmt = match format.as_str() {
         "png" => OutputFormat::Png,
         "webp" => OutputFormat::WebP,
@@ -439,8 +468,7 @@ pub async fn export_images(
     let output_dir = output_dir.map(PathBuf::from);
     let format_label = format.clone();
 
-    // Run the slow pdfium render on a blocking thread so the UI stays responsive.
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    run_blocking_action(&state.0, move || {
         let mut output_paths = Vec::new();
         let mut total_images = 0u32;
 
@@ -465,7 +493,7 @@ pub async fn export_images(
             }
         }
 
-        Ok::<ActionResult, String>(ActionResult {
+        Ok(ActionResult {
             ok: true,
             message: format!(
                 "Exported {} image(s) ({}, {}dpi)",
@@ -476,18 +504,10 @@ pub async fn export_images(
         })
     })
     .await
-    .map_err(|e| format!("Task join error: {e}"))?;
-
-    // Release lock whether the task succeeded or failed.
-    if let Ok(mut guard) = state.0.lock() {
-        *guard = false;
-    }
-
-    result
 }
 
 #[tauri::command]
-pub fn remap_colors(
+pub async fn remap_colors(
     paths: Vec<String>,
     from: [f64; 4],
     to: [f64; 4],
@@ -496,168 +516,176 @@ pub fn remap_colors(
     overwrite: bool,
     state: State<'_, ProcessingLock>,
 ) -> Result<ActionResult, String> {
-    let _guard = LockGuard::acquire(&state.0)?;
     let output_dir = output_dir.map(PathBuf::from);
-    let mut output_paths = Vec::new();
-    let ts = xmp_timestamp();
-    let params = format!("from={from:?},to={to:?},tol={tolerance}");
+    run_blocking_action(&state.0, move || {
+        let mut output_paths = Vec::new();
+        let ts = xmp_timestamp();
+        let params = format!("from={from:?},to={to:?},tol={tolerance}");
 
-    for path_str in &paths {
-        let path = PathBuf::from(path_str);
-        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
-        let out = output_path(&path, &output_dir, None, overwrite);
-        PdfPipeline::open(&path)
-            .and_then(|mut p| {
-                p.remap_color(from, to, tolerance)?;
-                p.embed_metadata(&hash, &ts, &[("remap_color", &params)])?;
-                p.save_pdf(&out)?;
-                Ok(())
-            })
-            .map_err(friendly_error)?;
-        output_paths.push(out.to_string_lossy().into_owned());
-    }
+        for path_str in &paths {
+            let path = PathBuf::from(path_str);
+            let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
+            let out = output_path(&path, &output_dir, None, overwrite);
+            PdfPipeline::open(&path)
+                .and_then(|mut p| {
+                    p.remap_color(from, to, tolerance)?;
+                    p.embed_metadata(&hash, &ts, &[("remap_color", &params)])?;
+                    p.save_pdf(&out)?;
+                    Ok(())
+                })
+                .map_err(friendly_error)?;
+            output_paths.push(out.to_string_lossy().into_owned());
+        }
 
-    Ok(ActionResult {
-        ok: true,
-        message: format!("Remapped {} file(s)", paths.len()),
-        output_paths,
-        timestamp: now_timestamp(),
+        Ok(ActionResult {
+            ok: true,
+            message: format!("Remapped {} file(s)", paths.len()),
+            output_paths,
+            timestamp: now_timestamp(),
+        })
     })
+    .await
 }
 
 #[tauri::command]
-pub fn add_trim_box(
+pub async fn add_trim_box(
     paths: Vec<String>,
     bleed_inches: f64,
     output_dir: Option<String>,
     overwrite: bool,
     state: State<'_, ProcessingLock>,
 ) -> Result<ActionResult, String> {
-    let _guard = LockGuard::acquire(&state.0)?;
     let output_dir = output_dir.map(PathBuf::from);
     let bleed_pts = bleed_inches * 72.0;
-    let mut output_paths = Vec::new();
-    let params = format!("bleed_in={bleed_inches}");
-    let ts = xmp_timestamp();
+    run_blocking_action(&state.0, move || {
+        let mut output_paths = Vec::new();
+        let params = format!("bleed_in={bleed_inches}");
+        let ts = xmp_timestamp();
 
-    for path_str in &paths {
-        let path = PathBuf::from(path_str);
-        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
-        let out = output_path(&path, &output_dir, None, overwrite);
-        PdfPipeline::open(&path)
-            .and_then(|mut p| {
-                p.add_trim_box(bleed_pts)?;
-                p.embed_metadata(&hash, &ts, &[("add_trim_box", &params)])?;
-                p.save_pdf(&out)?;
-                Ok(())
-            })
-            .map_err(friendly_error)?;
-        output_paths.push(out.to_string_lossy().into_owned());
-    }
+        for path_str in &paths {
+            let path = PathBuf::from(path_str);
+            let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
+            let out = output_path(&path, &output_dir, None, overwrite);
+            PdfPipeline::open(&path)
+                .and_then(|mut p| {
+                    p.add_trim_box(bleed_pts)?;
+                    p.embed_metadata(&hash, &ts, &[("add_trim_box", &params)])?;
+                    p.save_pdf(&out)?;
+                    Ok(())
+                })
+                .map_err(friendly_error)?;
+            output_paths.push(out.to_string_lossy().into_owned());
+        }
 
-    Ok(ActionResult {
-        ok: true,
-        message: format!(
-            "Added trim box to {} file(s) (bleed: {}″)",
-            paths.len(),
-            bleed_inches
-        ),
-        output_paths,
-        timestamp: now_timestamp(),
+        Ok(ActionResult {
+            ok: true,
+            message: format!(
+                "Added trim box to {} file(s) (bleed: {}″)",
+                paths.len(),
+                bleed_inches
+            ),
+            output_paths,
+            timestamp: now_timestamp(),
+        })
     })
+    .await
 }
 
 #[tauri::command]
-pub fn split_pages(
+pub async fn split_pages(
     paths: Vec<String>,
     panel_width_pts: f64,
     output_dir: Option<String>,
     overwrite: bool,
     state: State<'_, ProcessingLock>,
 ) -> Result<ActionResult, String> {
-    let _guard = LockGuard::acquire(&state.0)?;
     let _ = overwrite; // path is always _split; overwrite signals intent, not path selection
     let output_dir = output_dir.map(PathBuf::from);
-    let mut output_paths = Vec::new();
-    let mut total_pages = 0u32;
-    let ts = xmp_timestamp();
-    let params = format!("panel_width_pts={panel_width_pts}");
+    run_blocking_action(&state.0, move || {
+        let mut output_paths = Vec::new();
+        let mut total_pages = 0u32;
+        let ts = xmp_timestamp();
+        let params = format!("panel_width_pts={panel_width_pts}");
 
-    for path_str in &paths {
-        let path = PathBuf::from(path_str);
-        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
-        let pipeline = PdfPipeline::open(&path).map_err(friendly_error)?;
-        let mut result = pipeline
-            .split_pages(panel_width_pts)
-            .map_err(friendly_error)?;
-        let dir: &std::path::Path = output_dir
-            .as_deref()
-            .or_else(|| path.parent().filter(|p| !p.as_os_str().is_empty()))
-            .unwrap_or(std::path::Path::new("."));
-        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-        // Always uses _split suffix — overwrite controls whether an existing _split file
-        // is replaced. The source file is never touched regardless of overwrite state.
-        let out = dir.join(format!("{}_split.pdf", stem));
-        let page_count = result.page_count() as u32;
-        result
-            .embed_metadata(&hash, &ts, &[("split_pages", &params)])
-            .map_err(friendly_error)?;
-        result.save_pdf(&out).map_err(friendly_error)?;
-        output_paths.push(out.to_string_lossy().into_owned());
-        total_pages += page_count;
-    }
+        for path_str in &paths {
+            let path = PathBuf::from(path_str);
+            let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
+            let pipeline = PdfPipeline::open(&path).map_err(friendly_error)?;
+            let mut result = pipeline
+                .split_pages(panel_width_pts)
+                .map_err(friendly_error)?;
+            let dir: &std::path::Path = output_dir
+                .as_deref()
+                .or_else(|| path.parent().filter(|p| !p.as_os_str().is_empty()))
+                .unwrap_or(std::path::Path::new("."));
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+            // Always uses _split suffix — overwrite controls whether an existing _split file
+            // is replaced. The source file is never touched regardless of overwrite state.
+            let out = dir.join(format!("{}_split.pdf", stem));
+            let page_count = result.page_count() as u32;
+            result
+                .embed_metadata(&hash, &ts, &[("split_pages", &params)])
+                .map_err(friendly_error)?;
+            result.save_pdf(&out).map_err(friendly_error)?;
+            output_paths.push(out.to_string_lossy().into_owned());
+            total_pages += page_count;
+        }
 
-    Ok(ActionResult {
-        ok: true,
-        message: format!("Split {} file(s) into {} page(s)", paths.len(), total_pages),
-        output_paths,
-        timestamp: now_timestamp(),
+        Ok(ActionResult {
+            ok: true,
+            message: format!("Split {} file(s) into {} page(s)", paths.len(), total_pages),
+            output_paths,
+            timestamp: now_timestamp(),
+        })
     })
+    .await
 }
 
 #[tauri::command]
-pub fn extract_pages(
+pub async fn extract_pages(
     paths: Vec<String>,
     page_nums: Vec<u32>,
     output_dir: Option<String>,
     overwrite: bool,
     state: State<'_, ProcessingLock>,
 ) -> Result<ActionResult, String> {
-    let _guard = LockGuard::acquire(&state.0)?;
     let output_dir = output_dir.map(PathBuf::from);
-    let mut output_paths = Vec::new();
-    let ts = xmp_timestamp();
-    let params = format!("pages={page_nums:?}");
+    run_blocking_action(&state.0, move || {
+        let mut output_paths = Vec::new();
+        let ts = xmp_timestamp();
+        let params = format!("pages={page_nums:?}");
 
-    for path_str in &paths {
-        let path = PathBuf::from(path_str);
-        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
-        let out = output_path(&path, &output_dir, None, overwrite);
-        PdfPipeline::open(&path)
-            .and_then(|p| {
-                let mut extracted = p.extract_pages(&page_nums)?;
-                extracted.embed_metadata(&hash, &ts, &[("extract_pages", &params)])?;
-                extracted.save_pdf(&out)?;
-                Ok(())
-            })
-            .map_err(friendly_error)?;
-        output_paths.push(out.to_string_lossy().into_owned());
-    }
+        for path_str in &paths {
+            let path = PathBuf::from(path_str);
+            let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
+            let out = output_path(&path, &output_dir, None, overwrite);
+            PdfPipeline::open(&path)
+                .and_then(|p| {
+                    let mut extracted = p.extract_pages(&page_nums)?;
+                    extracted.embed_metadata(&hash, &ts, &[("extract_pages", &params)])?;
+                    extracted.save_pdf(&out)?;
+                    Ok(())
+                })
+                .map_err(friendly_error)?;
+            output_paths.push(out.to_string_lossy().into_owned());
+        }
 
-    Ok(ActionResult {
-        ok: true,
-        message: format!(
-            "Extracted {} page(s) from {} file(s)",
-            page_nums.len(),
-            paths.len()
-        ),
-        output_paths,
-        timestamp: now_timestamp(),
+        Ok(ActionResult {
+            ok: true,
+            message: format!(
+                "Extracted {} page(s) from {} file(s)",
+                page_nums.len(),
+                paths.len()
+            ),
+            output_paths,
+            timestamp: now_timestamp(),
+        })
     })
+    .await
 }
 
 #[tauri::command]
-pub fn flatten_spots(
+pub async fn flatten_spots(
     paths: Vec<String>,
     output_dir: Option<String>,
     overwrite: bool,
@@ -665,47 +693,53 @@ pub fn flatten_spots(
     state: State<'_, ProcessingLock>,
     profiles: State<'_, ProfileRegistry>,
 ) -> Result<ActionResult, String> {
-    let _guard = LockGuard::acquire(&state.0)?;
     let output_dir = output_dir.map(PathBuf::from);
-    let mut output_paths = Vec::new();
-    let mut total_spots = 0u32;
-    let ts = xmp_timestamp();
     let params = icc_profile
         .as_deref()
         .map(|n| format!("icc={n}"))
         .unwrap_or_default();
 
+    // Resolve ICC bytes up front — touches the registry mutex and clones an
+    // `Arc<[u8]>` (cheap), so it stays on the main thread; the resulting owned
+    // bytes move into the blocking closure without borrowing `State`.
     let dst_bytes: Option<Arc<[u8]>> = match &icc_profile {
         Some(name) => Some(resolve_profile_bytes(name, &profiles)?),
         None => None,
     };
 
-    for path_str in &paths {
-        let path = PathBuf::from(path_str);
-        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
-        let out = output_path(&path, &output_dir, None, overwrite);
-        let spots = PdfPipeline::open(&path)
-            .and_then(|mut p| {
-                let n = p.flatten_spots_with_icc(dst_bytes.as_deref())?;
-                p.embed_metadata(&hash, &ts, &[("flatten_spots", &params)])?;
-                p.save_pdf(&out)?;
-                Ok(n)
-            })
-            .map_err(friendly_error)?;
-        total_spots += spots;
-        output_paths.push(out.to_string_lossy().into_owned());
-    }
+    run_blocking_action(&state.0, move || {
+        let mut output_paths = Vec::new();
+        let mut total_spots = 0u32;
+        let ts = xmp_timestamp();
 
-    Ok(ActionResult {
-        ok: true,
-        message: format!(
-            "Flattened {} spot color use(s) across {} file(s)",
-            total_spots,
-            paths.len()
-        ),
-        output_paths,
-        timestamp: now_timestamp(),
+        for path_str in &paths {
+            let path = PathBuf::from(path_str);
+            let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
+            let out = output_path(&path, &output_dir, None, overwrite);
+            let spots = PdfPipeline::open(&path)
+                .and_then(|mut p| {
+                    let n = p.flatten_spots_with_icc(dst_bytes.as_deref())?;
+                    p.embed_metadata(&hash, &ts, &[("flatten_spots", &params)])?;
+                    p.save_pdf(&out)?;
+                    Ok(n)
+                })
+                .map_err(friendly_error)?;
+            total_spots += spots;
+            output_paths.push(out.to_string_lossy().into_owned());
+        }
+
+        Ok(ActionResult {
+            ok: true,
+            message: format!(
+                "Flattened {} spot color use(s) across {} file(s)",
+                total_spots,
+                paths.len()
+            ),
+            output_paths,
+            timestamp: now_timestamp(),
+        })
     })
+    .await
 }
 
 fn resolve_profile_bytes(
@@ -727,7 +761,7 @@ fn resolve_profile_bytes(
 }
 
 #[tauri::command]
-pub fn convert_color_space(
+pub async fn convert_color_space(
     paths: Vec<String>,
     from_profile: String,
     to_profile: String,
@@ -737,40 +771,45 @@ pub fn convert_color_space(
     state: State<'_, ProcessingLock>,
     profiles: State<'_, ProfileRegistry>,
 ) -> Result<ActionResult, String> {
-    let _guard = LockGuard::acquire(&state.0)?;
+    // Resolve both ICC profiles up front (cheap `Arc` clones) so no `State`
+    // borrow crosses into the blocking closure.
     let from_bytes = resolve_profile_bytes(&from_profile, &profiles)?;
     let to_bytes = resolve_profile_bytes(&to_profile, &profiles)?;
     let output_dir = output_dir.map(PathBuf::from);
-    let mut output_paths = Vec::new();
-    let ts = xmp_timestamp();
     let params = format!("from={from_profile},to={to_profile},intent={intent}");
 
-    for path_str in &paths {
-        let path = PathBuf::from(path_str);
-        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
-        let out = output_path(&path, &output_dir, None, overwrite);
-        PdfPipeline::open(&path)
-            .and_then(|mut p| {
-                p.convert_color_space_raw(&from_bytes, &to_bytes, &intent)?;
-                p.embed_metadata(&hash, &ts, &[("convert_color_space", &params)])?;
-                p.save_pdf(&out)?;
-                Ok(())
-            })
-            .map_err(friendly_error)?;
-        output_paths.push(out.to_string_lossy().into_owned());
-    }
+    run_blocking_action(&state.0, move || {
+        let mut output_paths = Vec::new();
+        let ts = xmp_timestamp();
 
-    Ok(ActionResult {
-        ok: true,
-        message: format!(
-            "Converted {} file(s): {} → {}",
-            paths.len(),
-            from_profile,
-            to_profile
-        ),
-        output_paths,
-        timestamp: now_timestamp(),
+        for path_str in &paths {
+            let path = PathBuf::from(path_str);
+            let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
+            let out = output_path(&path, &output_dir, None, overwrite);
+            PdfPipeline::open(&path)
+                .and_then(|mut p| {
+                    p.convert_color_space_raw(&from_bytes, &to_bytes, &intent)?;
+                    p.embed_metadata(&hash, &ts, &[("convert_color_space", &params)])?;
+                    p.save_pdf(&out)?;
+                    Ok(())
+                })
+                .map_err(friendly_error)?;
+            output_paths.push(out.to_string_lossy().into_owned());
+        }
+
+        Ok(ActionResult {
+            ok: true,
+            message: format!(
+                "Converted {} file(s): {} → {}",
+                paths.len(),
+                from_profile,
+                to_profile
+            ),
+            output_paths,
+            timestamp: now_timestamp(),
+        })
     })
+    .await
 }
 
 #[tauri::command]
@@ -858,7 +897,13 @@ pub fn list_custom_profiles(profiles: State<'_, ProfileRegistry>) -> Vec<CustomP
 }
 
 #[tauri::command]
-pub fn load_metadata(path: String) -> Result<PdfMetadataDto, String> {
+pub async fn load_metadata(path: String) -> Result<PdfMetadataDto, String> {
+    tauri::async_runtime::spawn_blocking(move || load_metadata_inner(path))
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?
+}
+
+fn load_metadata_inner(path: String) -> Result<PdfMetadataDto, String> {
     use rustybara::DocumentColorKind;
 
     let path = PathBuf::from(path);
@@ -932,81 +977,85 @@ pub fn load_metadata(path: String) -> Result<PdfMetadataDto, String> {
 }
 
 #[tauri::command]
-pub fn outline_text(
+pub async fn outline_text(
     paths: Vec<String>,
     output_dir: Option<String>,
     overwrite: bool,
     state: State<'_, ProcessingLock>,
 ) -> Result<ActionResult, String> {
-    let _guard = LockGuard::acquire(&state.0)?;
     let output_dir = output_dir.map(PathBuf::from);
-    let mut output_paths = Vec::new();
-    let ts = xmp_timestamp();
+    run_blocking_action(&state.0, move || {
+        let mut output_paths = Vec::new();
+        let ts = xmp_timestamp();
 
-    for path_str in &paths {
-        let path = PathBuf::from(path_str);
-        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
-        let out = output_path(&path, &output_dir, None, overwrite);
-        PdfPipeline::open(&path)
-            .and_then(|mut p| {
-                p.outline_text()?;
-                p.embed_metadata(&hash, &ts, &[("outline_text", "")])?;
-                p.save_pdf(&out)?;
-                Ok(())
-            })
-            .map_err(friendly_error)?;
-        output_paths.push(out.to_string_lossy().into_owned());
-    }
+        for path_str in &paths {
+            let path = PathBuf::from(path_str);
+            let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
+            let out = output_path(&path, &output_dir, None, overwrite);
+            PdfPipeline::open(&path)
+                .and_then(|mut p| {
+                    p.outline_text()?;
+                    p.embed_metadata(&hash, &ts, &[("outline_text", "")])?;
+                    p.save_pdf(&out)?;
+                    Ok(())
+                })
+                .map_err(friendly_error)?;
+            output_paths.push(out.to_string_lossy().into_owned());
+        }
 
-    Ok(ActionResult {
-        ok: true,
-        message: format!("Outlined text in {} file(s)", paths.len()),
-        output_paths,
-        timestamp: now_timestamp(),
+        Ok(ActionResult {
+            ok: true,
+            message: format!("Outlined text in {} file(s)", paths.len()),
+            output_paths,
+            timestamp: now_timestamp(),
+        })
     })
+    .await
 }
 
 #[tauri::command]
-pub fn stitch_pages(
+pub async fn stitch_pages(
     paths: Vec<String>,
     spread_width_pts: f64,
     output_dir: Option<String>,
     overwrite: bool,
     state: State<'_, ProcessingLock>,
 ) -> Result<ActionResult, String> {
-    let _guard = LockGuard::acquire(&state.0)?;
     let _ = overwrite; // path is always _stitch; overwrite controls replacement, not source
     let output_dir = output_dir.map(PathBuf::from);
-    let mut output_paths = Vec::new();
-    let ts = xmp_timestamp();
-    let params = format!("spread_width_pts={spread_width_pts}");
+    run_blocking_action(&state.0, move || {
+        let mut output_paths = Vec::new();
+        let ts = xmp_timestamp();
+        let params = format!("spread_width_pts={spread_width_pts}");
 
-    for path_str in &paths {
-        let path = PathBuf::from(path_str);
-        let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
-        let pipeline = PdfPipeline::open(&path).map_err(friendly_error)?;
-        let mut result = pipeline
-            .stitch_pages(spread_width_pts)
-            .map_err(friendly_error)?;
-        let dir: &std::path::Path = output_dir
-            .as_deref()
-            .or_else(|| path.parent().filter(|p| !p.as_os_str().is_empty()))
-            .unwrap_or(std::path::Path::new("."));
-        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-        let out = dir.join(format!("{}_stitch.pdf", stem));
-        result
-            .embed_metadata(&hash, &ts, &[("stitch_pages", &params)])
-            .map_err(friendly_error)?;
-        result.save_pdf(&out).map_err(friendly_error)?;
-        output_paths.push(out.to_string_lossy().into_owned());
-    }
+        for path_str in &paths {
+            let path = PathBuf::from(path_str);
+            let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
+            let pipeline = PdfPipeline::open(&path).map_err(friendly_error)?;
+            let mut result = pipeline
+                .stitch_pages(spread_width_pts)
+                .map_err(friendly_error)?;
+            let dir: &std::path::Path = output_dir
+                .as_deref()
+                .or_else(|| path.parent().filter(|p| !p.as_os_str().is_empty()))
+                .unwrap_or(std::path::Path::new("."));
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+            let out = dir.join(format!("{}_stitch.pdf", stem));
+            result
+                .embed_metadata(&hash, &ts, &[("stitch_pages", &params)])
+                .map_err(friendly_error)?;
+            result.save_pdf(&out).map_err(friendly_error)?;
+            output_paths.push(out.to_string_lossy().into_owned());
+        }
 
-    Ok(ActionResult {
-        ok: true,
-        message: format!("Stitched {} file(s) into spreads", paths.len()),
-        output_paths,
-        timestamp: now_timestamp(),
+        Ok(ActionResult {
+            ok: true,
+            message: format!("Stitched {} file(s) into spreads", paths.len()),
+            output_paths,
+            timestamp: now_timestamp(),
+        })
     })
+    .await
 }
 
 fn try_detect_stale(processed_path: &Path, source_hash: &str) -> Option<bool> {
@@ -1030,20 +1079,25 @@ fn try_detect_stale(processed_path: &Path, source_hash: &str) -> Option<bool> {
 /// file cannot be opened. Includes a `source_stale` flag when the original source
 /// file is still present alongside the processed output.
 #[tauri::command]
-pub fn read_xmp_metadata(path: String) -> Option<XmpInfoDto> {
-    let path = PathBuf::from(&path);
-    let pipeline = PdfPipeline::open(&path).ok()?;
-    let block = pipeline.read_xmp_block()?;
-    let source_stale = try_detect_stale(&path, &block.source_hash);
-    Some(XmpInfoDto {
-        source_stale,
-        uuid: block.uuid,
-        version: block.version,
-        timestamp: block.timestamp,
-        source_hash: block.source_hash,
-        parent_id: block.parent_id,
-        ops: block.ops,
+pub async fn read_xmp_metadata(path: String) -> Option<XmpInfoDto> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = PathBuf::from(&path);
+        let pipeline = PdfPipeline::open(&path).ok()?;
+        let block = pipeline.read_xmp_block()?;
+        let source_stale = try_detect_stale(&path, &block.source_hash);
+        Some(XmpInfoDto {
+            source_stale,
+            uuid: block.uuid,
+            version: block.version,
+            timestamp: block.timestamp,
+            source_hash: block.source_hash,
+            parent_id: block.parent_id,
+            ops: block.ops,
+        })
     })
+    .await
+    .ok()
+    .flatten()
 }
 
 /// Notify the persistent rbv process of a new file path, but **only if rbv is
@@ -1241,6 +1295,16 @@ pub async fn open_file_dialog(app: tauri::AppHandle) -> Result<Vec<String>, Stri
         .unwrap_or_default())
 }
 
+/// Returns the file size in kilobytes using only a filesystem metadata call —
+/// no PDF parsing. Use this to pre-check large files before calling
+/// `load_metadata` so lopdf never opens a file that should be chunked first.
+#[tauri::command]
+pub fn get_file_size(path: String) -> Result<u64, String> {
+    std::fs::metadata(&path)
+        .map(|m| m.len() / 1024)
+        .map_err(|e| e.to_string())
+}
+
 /// Returns a clone of the current settings from managed state.
 /// Called once by the frontend at startup to hydrate the reactive settings store.
 #[tauri::command]
@@ -1351,6 +1415,16 @@ mod settings_tests {
             .expect("custom_quips should survive roundtrip");
         assert_eq!(quips.len(), 2);
         assert_eq!(quips[0], "hello world");
+    }
+
+    #[test]
+    fn settings_dto_default_resource_warn_size_mb_is_200() {
+        assert_eq!(SettingsDto::default().resource_warn_size_mb, 200);
+    }
+
+    #[test]
+    fn settings_dto_default_for_enabled_is_true() {
+        assert!(SettingsDto::default().for_enabled);
     }
 
     #[test]

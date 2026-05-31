@@ -27,7 +27,15 @@
       "PowerShell($path = 'c:\\\\Users\\\\mardo\\\\OneDrive\\\\Desktop\\\\rustybara\\\\rustybara-wasm\\\\Cargo.toml'; $content = [System.IO.File]::ReadAllText\\($path\\); $updated = $content -replace 'features = \\\\[\"wasm\"\\\\]', 'features = [\"wasm\", \"outline\"]'; [System.IO.File]::WriteAllText\\($path, $updated\\); Write-Host \"Done\")",
       "PowerShell($content = [System.IO.File]::ReadAllText\\('c:\\\\Users\\\\mardo\\\\OneDrive\\\\Desktop\\\\rustybara\\\\rustybara\\\\src\\\\objects\\\\mod.rs'\\); $bytes = [System.Text.Encoding]::UTF8.GetBytes\\($content.Substring\\(220, 80\\)\\); $bytes | ForEach-Object { \"{0:X2}\" -f $_ } | Join-String -Separator ' ')",
       "PowerShell($content = [System.IO.File]::ReadAllText\\('c:\\\\Users\\\\mardo\\\\OneDrive\\\\Desktop\\\\rustybara\\\\rustybara\\\\src\\\\objects\\\\mod.rs'\\); $line8 = \\($content -split \"`n\"\\)[7]; [byte[]][char[]]$line8 | ForEach-Object { \"{0:X2}\" -f $_ })",
-      "PowerShell($path = 'c:\\\\Users\\\\mardo\\\\OneDrive\\\\Desktop\\\\rustybara\\\\rustybara\\\\src\\\\objects\\\\mod.rs'; $content = [System.IO.File]::ReadAllText\\($path, [System.Text.Encoding]::UTF8\\); $updated = $content -replace 'A singled painted shape', 'A single painted shape'; [System.IO.File]::WriteAllText\\($path, $updated, [System.Text.Encoding]::UTF8\\); Write-Host \"Done\")"
+      "PowerShell($path = 'c:\\\\Users\\\\mardo\\\\OneDrive\\\\Desktop\\\\rustybara\\\\rustybara\\\\src\\\\objects\\\\mod.rs'; $content = [System.IO.File]::ReadAllText\\($path, [System.Text.Encoding]::UTF8\\); $updated = $content -replace 'A singled painted shape', 'A single painted shape'; [System.IO.File]::WriteAllText\\($path, $updated, [System.Text.Encoding]::UTF8\\); Write-Host \"Done\")",
+      "Bash(find \"C:/Users/mardo/AppData/Roaming\" -iname \"settings.json\" 2>/dev/null | grep -iE \"rbara|rustybara\" ; echo \"---also local---\" ; find \"C:/Users/mardo/AppData\" -iname \"settings.json\" 2>/dev/null | grep -iE \"rbara|rustybara|gui\")",
+      "Read(//c/Users/mardo/AppData/Roaming/**)",
+      "Read(//c/Users/mardo/AppData/**)",
+      "Bash(npm install *)",
+      "Bash(npm test *)",
+      "Bash(npx vite *)",
+      "Bash(ls README*)",
+      "Bash(head -50 README.md)"
     ]
   },
   "spinnerTipsEnabled": false

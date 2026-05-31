@@ -569,6 +569,30 @@ when launched with `--listen`.
 | `rbv` requires display server      | No headless preview. Graceful error on missing GPU.                                                   |
 | `rbv` zoom quality                 | Raster-only rendering degrades past ~150–200% zoom. LOD tiling planned.                               |
 | CFF / Type1 glyph outlines         | `ttf-parser` requires sfnt container; raw CFF fonts use a OTTO header shim with ongoing refinement.   |
+| Very large PDFs (~200 MB+)         | Hard-blocked on add in `rbara-gui`. See below.                                                        |
+
+### Large file handling
+
+`rustybara` opens PDFs eagerly: `lopdf` parses the entire object graph into memory
+on load, and the PDFium render path round-trips through a full document
+serialization. For very large files (roughly **200 MB and up**, e.g. imposed
+print runs of hundreds of pages) this parse can take tens of seconds and consume
+multiple gigabytes of RAM — long enough to make the desktop app appear frozen.
+
+We explored **splitting large files into page-range chunks** (processing each
+independently) and **re-merging** the results into a single output. It worked
+mechanically but didn't hold up as a real solution: chunking still pays the full
+parse cost, the merge re-materializes the whole document in memory, and neither
+approaches the performance of mature tools like Acrobat or PitStop, which use
+lazy/random-access parsing. That experiment has been removed.
+
+For now, `rbara-gui` **hard-blocks files above a configurable size limit**
+(default 200 MB, set in *Settings → Behavior*; `0` disables the limit at your own
+risk) and surfaces a clear warning rather than freezing. The underlying library
+operations remain available for callers who can afford the memory/time.
+
+A proper fix — lazy/streaming parse and metadata extraction that never loads the
+whole document — is planned for a future release (see Roadmap).
 
 ---
 
@@ -600,6 +624,7 @@ when launched with `--listen`.
 - [x] LOD-aware zoom tiling in `rbv`
 - [ ] PDF/X validation and preflight reports
 - [ ] Configurable JPEG quality (`--quality` flag)
+- [ ] Lazy / streaming PDF parsing for large files (remove the hard size block)
 
 ---
 
