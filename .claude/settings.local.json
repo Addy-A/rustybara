@@ -35,7 +35,9 @@
       "Bash(npm test *)",
       "Bash(npx vite *)",
       "Bash(ls README*)",
-      "Bash(head -50 README.md)"
+      "Bash(head -50 README.md)",
+      "Read(//c/Users/mardo/.cargo/registry/src/**)",
+      "Read(//c//**)"
     ]
   },
   "spinnerTipsEnabled": false
