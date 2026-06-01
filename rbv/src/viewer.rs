@@ -61,7 +61,12 @@ pub enum ViewerEvent {
     /// A debug/status message from the tile worker thread.
     TileLog(String),
     /// Performance metrics from the worker after a full-page render at a given DPI.
-    TileMetrics { dpi: f32, render_ms: u64, img_w: u32, img_h: u32 },
+    TileMetrics {
+        dpi: f32,
+        render_ms: u64,
+        img_w: u32,
+        img_h: u32,
+    },
     FileChanged,
     IpcCommand(IpcCmd),
 }
@@ -137,6 +142,8 @@ struct Viewer {
     /// Whether the prepress tools panel is currently visible.
     /// Hidden by default; toggled by the floating ⚙ button.
     show_tools_panel: bool,
+    /// Live per-box overlay styling (trim/bleed/crop), edited in the tools panel.
+    box_overlay_styles: crate::box_overlay_style::BoxOverlayStyles,
     /// Whether the zoom HUD shows the bucket/DPI detail row (expanded) or just
     /// the zoom number (collapsed). Starts expanded.
     zoom_hud_expanded: bool,
@@ -259,7 +266,10 @@ impl Viewer {
         }
         self.push_log(format!(
             "Tiles: bucket={} dpi={} visible={} queued={}",
-            bucket, dpi as u32, keys.len(), new_count
+            bucket,
+            dpi as u32,
+            keys.len(),
+            new_count
         ));
     }
 
@@ -331,11 +341,8 @@ impl Viewer {
                 // object regions through ICC without borrowing self.
                 let page_image = src.clone();
                 // Clone glyph outlines so the thread can render actual text paths.
-                let glyph_outlines: Vec<PositionedGlyph> = self
-                    .glyph_outlines
-                    .as_deref()
-                    .unwrap_or(&[])
-                    .to_vec();
+                let glyph_outlines: Vec<PositionedGlyph> =
+                    self.glyph_outlines.as_deref().unwrap_or(&[]).to_vec();
                 let tinted = self.plate_tinted;
                 let proxy = self.proxy.clone();
                 let page = self.page;
@@ -385,15 +392,18 @@ impl Viewer {
                     .cloned()
                     .collect();
                 // Clone glyph outlines for spot plate text rendering.
-                let glyph_outlines: Vec<PositionedGlyph> = self
-                    .glyph_outlines
-                    .as_deref()
-                    .unwrap_or(&[])
-                    .to_vec();
+                let glyph_outlines: Vec<PositionedGlyph> =
+                    self.glyph_outlines.as_deref().unwrap_or(&[]).to_vec();
                 let name = name.clone();
                 std::thread::spawn(move || {
                     let image = crate::separation::render_spot_plate(
-                        &matched, &media, tinted, None, &glyph_outlines, img_w, img_h,
+                        &matched,
+                        &media,
+                        tinted,
+                        None,
+                        &glyph_outlines,
+                        img_w,
+                        img_h,
                     );
                     let _ = proxy.send_event(ViewerEvent::PlateReady {
                         page,
@@ -689,7 +699,10 @@ impl Viewer {
         lines.push("── TELEMETRY  (Ctrl+Shift+T to close) ──────────".to_string());
 
         let (bucket, dpi) = crate::tiles::zoom_bucket(self.zoom);
-        lines.push(format!("Zoom  {:.3}×   Bucket {}   {:.0} DPI", self.zoom, bucket, dpi));
+        lines.push(format!(
+            "Zoom  {:.3}×   Bucket {}   {:.0} DPI",
+            self.zoom, bucket, dpi
+        ));
 
         lines.push("\u{2500}\u{2500}\u{2500} Full-page Render Times \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}".to_string());
 
@@ -715,8 +728,7 @@ impl Viewer {
 
         lines.push("\u{2500}\u{2500}\u{2500} Tile Cache \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}".to_string());
 
-        let mut per_bucket: std::collections::HashMap<u8, usize> =
-            std::collections::HashMap::new();
+        let mut per_bucket: std::collections::HashMap<u8, usize> = std::collections::HashMap::new();
         if let Some(state) = self.state.as_ref() {
             for k in state.tile_images.keys() {
                 *per_bucket.entry(k.zoom_bucket).or_insert(0) += 1;
@@ -724,8 +736,13 @@ impl Viewer {
         }
 
         const BUCKET_INFO: &[(u8, f32)] = &[
-            (1, 300.0), (2, 450.0), (3, 500.0), (4, 600.0),
-            (5, 800.0), (6, 1000.0), (7, 1200.0),
+            (1, 300.0),
+            (2, 450.0),
+            (3, 500.0),
+            (4, 600.0),
+            (5, 800.0),
+            (6, 1000.0),
+            (7, 1200.0),
         ];
         for (b, bdpi) in BUCKET_INFO {
             let count = per_bucket.get(b).copied().unwrap_or(0);
@@ -753,10 +770,8 @@ impl Viewer {
                 .unwrap_or((612.0, 792.0));
             let tile_page_w = page_pts.0 * dpi / 72.0;
             let tile_page_h = page_pts.1 * dpi / 72.0;
-            let cols =
-                (tile_page_w / crate::tiles::TILE_SIZE as f32).ceil() as u32;
-            let rows =
-                (tile_page_h / crate::tiles::TILE_SIZE as f32).ceil() as u32;
+            let cols = (tile_page_w / crate::tiles::TILE_SIZE as f32).ceil() as u32;
+            let rows = (tile_page_h / crate::tiles::TILE_SIZE as f32).ceil() as u32;
             let cached = per_bucket.get(&bucket).copied().unwrap_or(0);
             lines.push(format!(
                 "  {}×{} = {} tiles total   {} cached",
@@ -1098,6 +1113,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                         &mut self.show_tools_panel,
                         self.zoom,
                         &mut self.zoom_hud_expanded,
+                        &mut self.box_overlay_styles,
                     );
                 });
                 // Store for next-frame use in mouse-event gating.
@@ -1155,8 +1171,9 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 } else {
                     None
                 };
-                let telemetry_overlay =
-                    telemetry_lines.as_deref().map(|lines| TelemetryOverlay { lines });
+                let telemetry_overlay = telemetry_lines
+                    .as_deref()
+                    .map(|lines| TelemetryOverlay { lines });
 
                 // ── Phase 6: project sample crosshair ────────────────────────
                 // compute_page_rect borrows self.state immutably — must happen
@@ -1178,41 +1195,42 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 // `compute_page_rect()` borrows `self.state` immutably. The pairs
                 // are owned (Images cloned cheaply via Arc) so no lifetime issue.
                 let (tile_bucket, tile_dpi) = crate::tiles::zoom_bucket(self.zoom);
-                let tile_pairs: Vec<(skia_safe::Rect, skia_safe::Image)> =
-                    if tile_bucket > 0
-                        && !self.show_wireframe
-                        && self.active_plate == PlateMode::All
+                let tile_pairs: Vec<(skia_safe::Rect, skia_safe::Image)> = if tile_bucket > 0
+                    && !self.show_wireframe
+                    && self.active_plate == PlateMode::All
+                {
+                    if let (Some(page_rect), Some(boxes)) =
+                        (self.compute_page_rect(), self.page_boxes.as_ref())
                     {
-                        if let (Some(page_rect), Some(boxes)) =
-                            (self.compute_page_rect(), self.page_boxes.as_ref())
-                        {
-                            let page_pts =
-                                (boxes.media_box.width as f32, boxes.media_box.height as f32);
-                            self.state.as_ref().map_or(vec![], |s| {
-                                s.tile_images
-                                    .iter()
-                                    .filter(|(k, _)| {
-                                        k.page == self.page && k.zoom_bucket == tile_bucket
-                                    })
-                                    .map(|(k, img)| {
-                                        let r = crate::tiles::tile_rect_on_screen(
-                                            k, &page_rect, page_pts, tile_dpi,
-                                        );
-                                        (r, img.clone())
-                                    })
-                                    .collect()
-                            })
-                        } else {
-                            vec![]
-                        }
+                        let page_pts =
+                            (boxes.media_box.width as f32, boxes.media_box.height as f32);
+                        self.state.as_ref().map_or(vec![], |s| {
+                            s.tile_images
+                                .iter()
+                                .filter(|(k, _)| {
+                                    k.page == self.page && k.zoom_bucket == tile_bucket
+                                })
+                                .map(|(k, img)| {
+                                    let r = crate::tiles::tile_rect_on_screen(
+                                        k, &page_rect, page_pts, tile_dpi,
+                                    );
+                                    (r, img.clone())
+                                })
+                                .collect()
+                        })
                     } else {
                         vec![]
-                    };
+                    }
+                } else {
+                    vec![]
+                };
 
                 // ── Phase 7: draw ─────────────────────────────────────────────
                 let state = self.state.as_mut().unwrap();
                 let overlays = if self.show_overlays {
-                    self.page_boxes.as_ref().map(|b| OverlayData { boxes: b })
+                    self.page_boxes
+                        .as_ref()
+                        .map(|b| OverlayData { boxes: b, styles: &self.box_overlay_styles })
                 } else {
                     None
                 };
@@ -1593,7 +1611,12 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
             ViewerEvent::TileLog(msg) => {
                 self.push_log(msg);
             }
-            ViewerEvent::TileMetrics { dpi, render_ms, img_w, img_h } => {
+            ViewerEvent::TileMetrics {
+                dpi,
+                render_ms,
+                img_w,
+                img_h,
+            } => {
                 self.tile_perf.insert(dpi as u32, (render_ms, img_w, img_h));
                 if self.telemetry_mode {
                     if let Some(state) = self.state.as_ref() {
@@ -1841,6 +1864,7 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig, listen: bool) {
         active_plate: PlateMode::All,
         plate_spot_names,
         show_tools_panel: false,
+        box_overlay_styles: crate::box_overlay_style::BoxOverlayStyles::default(),
         zoom_hud_expanded: true,
         plate_tinted: false,
         plate_image_for: PlateMode::All,
@@ -1873,6 +1897,7 @@ fn build_egui_ui(
     show_panel: &mut bool,
     zoom: f32,
     zoom_hud_expanded: &mut bool,
+    box_overlay_styles: &mut crate::box_overlay_style::BoxOverlayStyles,
 ) -> bool {
     // Capture current pointer position in egui's logical-pixel coordinate space.
     // Used to test whether the pointer is over any egui surface this frame so
@@ -1915,22 +1940,28 @@ fn build_egui_ui(
                                     .monospace(),
                             );
                             if ui
-                                .add(egui::Button::new(
-                                    egui::RichText::new("-")
-                                        .size(9.0)
-                                        .color(egui::Color32::from_rgb(120, 120, 155)),
-                                ).frame(false))
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("-")
+                                            .size(9.0)
+                                            .color(egui::Color32::from_rgb(120, 120, 155)),
+                                    )
+                                    .frame(false),
+                                )
                                 .on_hover_text("Collapse")
                                 .clicked()
                             {
                                 *zoom_hud_expanded = false;
                             }
                         } else if ui
-                            .add(egui::Button::new(
-                                egui::RichText::new("+")
-                                    .size(9.0)
-                                    .color(egui::Color32::from_rgb(120, 120, 155)),
-                            ).frame(false))
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("+")
+                                        .size(9.0)
+                                        .color(egui::Color32::from_rgb(120, 120, 155)),
+                                )
+                                .frame(false),
+                            )
                             .on_hover_text("Expand")
                             .clicked()
                         {
@@ -2029,6 +2060,33 @@ fn build_egui_ui(
                                 .italics()
                                 .size(10.0),
                         );
+                    }
+
+                    // ── Box overlay styling (Trim / Bleed / Crop) ─────────────────────
+                    ui.separator();
+                    ui.heading("Box Overlays");
+                    let box_row = |ui: &mut egui::Ui,
+                                   label: &str,
+                                   s: &mut crate::box_overlay_style::BoxOverlayStyle| {
+                        egui::CollapsingHeader::new(label)
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Color");
+                                    ui.color_edit_button_srgba(&mut s.color);
+                                });
+                                ui.add(
+                                    egui::Slider::new(&mut s.thickness, 0.1..=5.0).text("Thickness"),
+                                );
+                                ui.checkbox(&mut s.dashed, "Dashed");
+                            });
+                    };
+                    box_row(ui, "Trim", &mut box_overlay_styles.trim);
+                    box_row(ui, "Bleed", &mut box_overlay_styles.bleed);
+                    box_row(ui, "Crop", &mut box_overlay_styles.crop);
+                    if ui.button("Reset box overlays").clicked() {
+                        *box_overlay_styles =
+                            crate::box_overlay_style::BoxOverlayStyles::default();
                     }
 
                     // ── Keyboard shortcuts reference ──────────────────────────────────

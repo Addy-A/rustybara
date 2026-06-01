@@ -269,7 +269,12 @@ fn parse_content(
             }
             "cm" if op.operands.len() >= 6 => {
                 let m = ops_to_matrix(&op.operands);
-                gs.ctm = gs.ctm.concat(&m);
+                // PDF applies the operand matrix BEFORE the existing CTM:
+                // CTM' = M · CTM_old (M maps the new user space into the old one).
+                // `concat` is self-then-other, so the operand M must be the
+                // receiver. Reversing this only corrupts geometry under *nested*
+                // transforms (a `cm`/form matrix composed onto a non-identity CTM).
+                gs.ctm = m.concat(&gs.ctm);
             }
             "w" if !op.operands.is_empty() => {
                 gs.stroke_width = object_to_f64(&op.operands[0]);
@@ -655,9 +660,10 @@ fn parse_content(
 ///
 /// 1. The form's `/Matrix` entry maps the form's local coordinate space to the
 ///    parent's user space. When absent the identity matrix is used (no change).
-/// 2. The parent's CTM is then concatenated, yielding the effective CTM for
-///    every object inside the form:
-///    `effective_ctm = parent_gs.ctm × form_matrix`
+/// 2. The parent's CTM is then applied, yielding the effective CTM for every
+///    object inside the form (the form `/Matrix` maps local → parent space, so
+///    it is applied first):
+///    `effective_ctm = form_matrix · parent_gs.ctm`
 ///
 /// The form's object ID is used as the `resource_parent_id` for the inner
 /// [`parse_content`] call, because each Form XObject carries its own
@@ -686,7 +692,8 @@ fn parse_form_xobject(
     };
 
     // A form's /Matrix maps its local space into the parent user space.
-    // The effective CTM for objects inside is parent_ctm × form_matrix.
+    // The effective CTM for objects inside is form_matrix · parent_ctm
+    // (form matrix applied first, then the parent CTM).
     let form_matrix = stream
         .dict
         .get(b"Matrix")
@@ -697,7 +704,7 @@ fn parse_form_xobject(
         .unwrap_or_else(Matrix::identity);
 
     let mut entry_gs = parent_gs.clone();
-    entry_gs.ctm = parent_gs.ctm.concat(&form_matrix);
+    entry_gs.ctm = form_matrix.concat(&parent_gs.ctm);
 
     // Decompress the stream content (FlateDecode for virtually all Form XObjects).
     // Mirror the fallback used in lopdf's own get_page_content: if decompression
@@ -1300,6 +1307,80 @@ mod tests {
         assert!(matches!(objects[0].kind, ObjectKind::Fill));
         assert!((objects[0].bbox.width - 100.0).abs() < 0.1);
         assert!((objects[0].bbox.height - 100.0).abs() < 0.1);
+    }
+
+    /// Regression guard for CTM concatenation order under *nested* transforms.
+    ///
+    /// A `cm` translate (+300 x) followed by a `cm` scale (0.5) must place a
+    /// local-origin rectangle at page x = 300 (translate applied first, in the
+    /// outer space). The previous reversed `concat` order scaled the translation
+    /// down to 150 — the "right flap offset left" bug. Single-level transforms on
+    /// an identity CTM are unaffected, which is why this needs nesting to catch.
+    #[test]
+    fn parse_content_nested_cm_uses_spec_order() {
+        use lopdf::content::Operation;
+
+        let ops = vec![
+            // Move the origin right by 300pt …
+            Operation::new(
+                "cm",
+                vec![
+                    Object::Real(1.0),
+                    Object::Real(0.0),
+                    Object::Real(0.0),
+                    Object::Real(1.0),
+                    Object::Real(300.0),
+                    Object::Real(0.0),
+                ],
+            ),
+            // … then scale the local space to 50%.
+            Operation::new(
+                "cm",
+                vec![
+                    Object::Real(0.5),
+                    Object::Real(0.0),
+                    Object::Real(0.0),
+                    Object::Real(0.5),
+                    Object::Real(0.0),
+                    Object::Real(0.0),
+                ],
+            ),
+            Operation::new(
+                "re",
+                vec![
+                    Object::Real(0.0),
+                    Object::Real(0.0),
+                    Object::Real(20.0),
+                    Object::Real(20.0),
+                ],
+            ),
+            Operation::new("f", vec![]),
+        ];
+
+        let mut objects: Vec<PageObject> = Vec::new();
+        parse_content(
+            &lopdf::Document::new(),
+            &ops,
+            &GraphicsState::default(),
+            (0, 0),
+            &mut objects,
+            1,
+        );
+
+        assert_eq!(objects.len(), 1, "re+f must emit exactly one object");
+        let b = &objects[0].bbox;
+        // Translate-first: local (0,0) → (300,0); buggy reversed order gives 150.
+        assert!(
+            (b.x - 300.0).abs() < 0.01,
+            "nested-CTM origin x = {}, want 300 (reversed concat order gives 150)",
+            b.x
+        );
+        // 20pt rect scaled by 0.5 → 10pt wide in page space.
+        assert!(
+            (b.width - 10.0).abs() < 0.01,
+            "scaled width = {}, want 10",
+            b.width
+        );
     }
 
     // ── build_object_tree (integration, requires fixture) ─────────────────────

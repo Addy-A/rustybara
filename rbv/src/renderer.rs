@@ -23,6 +23,8 @@ type WindowSurfaceType = GlWindowSurface<WindowSurface>;
 
 pub struct OverlayData<'a> {
     pub boxes: &'a PageBoxes,
+    /// Per-box overlay stroke styling (color/thickness/dash).
+    pub styles: &'a crate::box_overlay_style::BoxOverlayStyles,
 }
 
 /// Diagnostics panel data populated on a selection click.
@@ -191,32 +193,17 @@ fn draw_overlays(
 
     if let Some(bleed) = &overlays.boxes.bleed_box {
         let r = pdf_rect_to_skia(bleed, media, page_screen_rect);
-        let mut paint = skia_safe::Paint::default();
-        paint.set_style(skia_safe::paint::Style::Stroke);
-        paint.set_stroke_width(1.5);
-        paint.set_color(skia_safe::Color::from_argb(220, 255, 100, 0));
-        paint.set_path_effect(skia_safe::dash_path_effect::new(&[6.0, 4.0], 0.0));
-        canvas.draw_rect(r, &paint);
+        canvas.draw_rect(r, &overlays.styles.bleed.to_stroke_paint());
     }
 
     if let Some(trim) = &overlays.boxes.trim_box {
         let r = pdf_rect_to_skia(trim, media, page_screen_rect);
-        let mut paint = skia_safe::Paint::default();
-        paint.set_style(skia_safe::paint::Style::Stroke);
-        paint.set_stroke_width(1.5);
-        paint.set_color(skia_safe::Color::from_argb(220, 0, 160, 255));
-        paint.set_path_effect(skia_safe::dash_path_effect::new(&[6.0, 4.0], 0.0));
-        canvas.draw_rect(r, &paint);
+        canvas.draw_rect(r, &overlays.styles.trim.to_stroke_paint());
     }
 
     if let Some(crop) = &overlays.boxes.crop_box {
         let r = pdf_rect_to_skia(crop, media, page_screen_rect);
-        let mut paint = skia_safe::Paint::default();
-        paint.set_style(skia_safe::paint::Style::Stroke);
-        paint.set_stroke_width(1.5);
-        paint.set_color(skia_safe::Color::from_argb(200, 0, 200, 80));
-        paint.set_path_effect(skia_safe::dash_path_effect::new(&[6.0, 4.0], 0.0));
-        canvas.draw_rect(r, &paint);
+        canvas.draw_rect(r, &overlays.styles.crop.to_stroke_paint());
     }
 }
 
@@ -743,10 +730,7 @@ impl SkiaRenderer {
         // track the window size — without this call the OS compositor stretches
         // the stale framebuffer to fill the new window, distorting the image.
         // WGL (Windows) auto-tracks the HWND, so this is effectively a no-op there.
-        if let (Some(w), Some(h)) = (
-            NonZeroU32::new(self.width),
-            NonZeroU32::new(self.height),
-        ) {
+        if let (Some(w), Some(h)) = (NonZeroU32::new(self.width), NonZeroU32::new(self.height)) {
             self.gl_surface.resize(&self.gl_context, w, h);
         }
         self.skia_surface = make_skia_surface(&mut self.gr_context, self.width, self.height)
@@ -825,14 +809,14 @@ impl SkiaRenderer {
     ///
     /// Call after [`Self::draw`] and [`Self::update_egui_textures`],
     /// and before [`Self::present`].
-    pub fn draw_egui(
-        &mut self,
-        primitives: &[egui::ClippedPrimitive],
-        pixels_per_point: f32,
-    ) {
+    pub fn draw_egui(&mut self, primitives: &[egui::ClippedPrimitive], pixels_per_point: f32) {
         let canvas = self.skia_surface.canvas();
 
-        for egui::ClippedPrimitive { clip_rect, primitive } in primitives {
+        for egui::ClippedPrimitive {
+            clip_rect,
+            primitive,
+        } in primitives
+        {
             let egui::epaint::Primitive::Mesh(mesh) = primitive else {
                 continue;
             };
@@ -853,10 +837,7 @@ impl SkiaRenderer {
                 .vertices
                 .iter()
                 .map(|v| {
-                    skia_safe::Point::new(
-                        v.pos.x * pixels_per_point,
-                        v.pos.y * pixels_per_point,
-                    )
+                    skia_safe::Point::new(v.pos.x * pixels_per_point, v.pos.y * pixels_per_point)
                 })
                 .collect();
 
@@ -870,12 +851,7 @@ impl SkiaRenderer {
                 .vertices
                 .iter()
                 .map(|v| {
-                    skia_safe::Color::from_argb(
-                        v.color.a(),
-                        v.color.r(),
-                        v.color.g(),
-                        v.color.b(),
-                    )
+                    skia_safe::Color::from_argb(v.color.a(), v.color.r(), v.color.g(), v.color.b())
                 })
                 .collect();
 
