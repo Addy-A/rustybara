@@ -8,6 +8,7 @@ use pdfium_render::prelude::PdfiumError;
 use std::fmt;
 use std::io::Error as IoError;
 
+/// Convenience result type for fallible rustybara operations.
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Represents errors that can occur during PDF processing operations.

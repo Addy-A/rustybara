@@ -1059,6 +1059,7 @@ pub fn deref<'a>(doc: &'a Document, obj: &'a Object) -> &'a Object {
     }
 }
 
+/// Returns the object ID an `Object::Reference` points to, or `None` for any other object.
 pub fn ref_id(obj: &Object) -> Option<ObjectId> {
     if let Object::Reference(id) = obj {
         Some(*id)

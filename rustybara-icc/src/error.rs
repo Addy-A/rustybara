@@ -21,4 +21,5 @@ pub enum IccError {
     Profile(String),
 }
 
+/// Convenience result type for fallible rustybara-icc operations.
 pub type Result<T> = std::result::Result<T, IccError>;

@@ -2,6 +2,7 @@ use crate::raster::config::RenderConfig;
 use image::DynamicImage;
 use pdfium_render::prelude::*;
 
+/// Renders PDF pages to images; implemented per rasterization backend (e.g. PDFium).
 pub trait PageRenderer {
     /// Renders a PDF page to a dynamic image format.
     ///

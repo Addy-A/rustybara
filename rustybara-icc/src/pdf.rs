@@ -361,6 +361,7 @@ fn convert_operation(op: &Operation, transform: &ColorTransform) -> Operation {
     }
 }
 
+/// Scans `doc` for spot-color (Separation / DeviceN) color spaces, returning `(resource name, ink name)` pairs.
 pub fn find_spot_colorspaces(doc: &Document) -> Vec<(String, String)> {
     let mut spots = Vec::new();
 

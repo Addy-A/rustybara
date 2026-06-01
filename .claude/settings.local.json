@@ -37,7 +37,9 @@
       "Bash(ls README*)",
       "Bash(head -50 README.md)",
       "Read(//c/Users/mardo/.cargo/registry/src/**)",
-      "Read(//c//**)"
+      "Read(//c//**)",
+      "Bash(cargo rustc *)",
+      "WebFetch(domain:crates.io)"
     ]
   },
   "spinnerTipsEnabled": false

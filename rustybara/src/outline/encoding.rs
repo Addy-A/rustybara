@@ -15,17 +15,20 @@ use std::sync::OnceLock;
 use std::{char, collections::HashMap};
 use ttf_parser::{Face, GlyphId};
 
+/// A standard PDF text encoding whose code-to-glyph mapping is fixed by a built-in table.
 pub enum NamedEncoding {
     WinAnsi,
     MacRoman,
     Standard,
 }
 
+/// A single `/Differences` entry: either a PostScript glyph name or a resolved character.
 pub enum EncodingSlot {
     Name(String),
     Char(char),
 }
 
+/// How a simple font maps raw character codes to glyphs, tried in resolution-priority order.
 pub enum FontEncoding {
     ToUnicode(HashMap<u8, char>),
     Differences(HashMap<u8, EncodingSlot>),
@@ -34,6 +37,7 @@ pub enum FontEncoding {
 }
 
 impl FontEncoding {
+    /// Resolves a character code to a glyph ID in `face`, or `None` if it can't be mapped.
     pub fn resolve(&self, charcode: u8, face: &Face<'_>) -> Option<GlyphId> {
         match self {
             Self::ToUnicode(map) => glyph_id_for_char(face, *map.get(&charcode)?),
@@ -227,6 +231,7 @@ fn char_to_adobe_glyph_name(c: char) -> Option<&'static str> {
 }
 
 impl NamedEncoding {
+    /// Maps a byte code to its character under this encoding, or `None` if unmapped.
     pub fn to_char(&self, code: u8) -> Option<char> {
         match self {
             Self::WinAnsi => win_ansi_char(code),
@@ -295,6 +300,7 @@ fn win_ansi_char(code: u8) -> Option<char> {
     })[code as usize]
 }
 
+/// Builds the [`FontEncoding`] for a page's named simple font from its PDF encoding entries.
 pub fn build_encoding(doc: &Document, page_id: ObjectId, font_name: &[u8]) -> FontEncoding {
     let Some(font_dict) = get_font_dict(doc, page_id, font_name) else {
         return FontEncoding::Passthrough;

@@ -2,6 +2,7 @@ use crate::pages::PageBoxes;
 use lopdf::content::{Content, Operation};
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 
+/// Splits every page wider than `panel_width_pts` into left/right panels, returning a new document.
 pub fn split_pages(src: &Document, panel_width_pts: f64) -> crate::Result<Document> {
     if panel_width_pts <= 0.0 {
         return Err(crate::Error::Io(std::io::Error::new(
