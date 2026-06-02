@@ -47,6 +47,7 @@ codebase.
 | 16 | Print Layout & Imposer (app/add-on) | **T5** | 🔴 | Med |
 | 17 | Drawing / copy-paste / curve creation | **T5** | 🔴 | Low |
 | 18 | RIP software (app/add-on) | **T5** | 🔴 | Low |
+| 19 | 3D fold/model viewer + shareable web proof | **T5** | 🔴 | Med |
 
 ---
 
@@ -220,6 +221,34 @@ output resolution, device profiles). Furthest-horizon; would lean on the color/
 separation work in [`rbv/src/separation.rs`](rbv/src/separation.rs) and **#12/#13**,
 but is realistically a separate long-term initiative.
 
+### 19. 3D fold/model viewer + shareable web proof · 🔴 · Med — *idea capture (not scheduled)*
+Model fold lines / creases / page-flips so a flat dieline can be previewed as a
+**folded 3D product** (folder, carton, brochure) — and share that proof online for
+client sign-off. This is Esko Studio / ArtiosCAD-3D territory; nothing free/open
+fills it, so it's a strong differentiator for the packaging/folder audience. High
+*value*, very high *effort* — it spans a new rendering domain **and** hosting infra.
+
+Key architectural calls (so it stays tractable):
+- **One shared web 3D viewer, not two.** `rbara-gui` is a Tauri app — its frontend
+  is already a webview — so a single three.js/WebGL viewer can live in *both* the
+  GUI frontend and [`rustybara-website`](rustybara-website/). **`rbv` stays 2D**
+  (it's deliberately a raster-first Skia/GL viewer; a 3D engine would fight that).
+- **Embed the fold *spec*, not just a hash.** A hash can't reconstruct a model —
+  store the compact spec (panel polygons in trim space, crease lines, fold angles,
+  adjacency graph, fold order) in the XMP `rbara:` block ([`xmp.rs`](rustybara/src/xmp.rs)),
+  with a content hash for integrity/caching.
+- **Sharing = new infrastructure.** The site is static today; shareable proof links
+  need file storage + a share route + **privacy/expiry** (prepress files are
+  confidential client work). Treat this as the last, infra-heavy phase.
+
+Builds on existing geometry — `PageBoxes` and the panel concept in
+[`pages/spread.rs`](rustybara/src/pages/spread.rs) — and crease detection could seed
+from spot/layer analysis (`find_spot_colorspaces` + the object tree). Suggested
+phasing: **(1)** fold-spec model + XMP embed (core, testable) → **(2)** three.js
+viewer reading the spec from a locally-opened PDF → **(3)** embed that viewer in the
+`rbara-gui` webview → **(4)** hosting + share links. Keep **fold authoring** (the real
+engineering risk) and **3D viewing** (the demo magnet) as separate milestones.
+
 ---
 
 ## 🗺️ Dependency notes
@@ -233,6 +262,10 @@ but is realistically a separate long-term initiative.
   (content removal) and *Add Trim Box* actions.
 - **#15 (automation)** rides on the now-uniform async command layer + command bar +
   action log; design already captured in `rbara-automation-plan.md`.
+- **#19 (3D viewer)** pairs with **#16 (imposer)** — both answer "how does this flat
+  file become a physical object" — reuses the XMP precedent ([`xmp.rs`](rustybara/src/xmp.rs))
+  and the panel geometry from **#16**'s primitives. Captured as a forward idea; no
+  XMP/fold work scheduled yet.
 
 ---
 
