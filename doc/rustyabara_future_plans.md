@@ -40,6 +40,7 @@ codebase.
 | 9 | Compress / optimize file size | **T3** | 🟡 | Med |
 | 10 | Undo action | **T3** | 🟡 | Med |
 | 11 | Clipping-mask remover / override | **T3** | 🟡🔴 | Med |
+| 20 | System / network print | **T3** | 🟡 | Med |
 | 12 | **Lazy streaming / large-file parsing** | **T4** | 🔴 | **High** |
 | 13 | PDF/X writing | **T4** | 🔴 | **High** |
 | 14 | Preflight reporting & validation | **T4** | 🔴 | **High** |
@@ -152,6 +153,22 @@ Touches content-stream interpretation — `W`/`W*` clip operators — in
 paths without corrupting the graphics-state stack is fiddly (it's adjacent to the
 CTM/`q`/`Q` handling we just fixed). Niche but valuable in prepress cleanup; rated
 moderate→hard depending on how robust we want it.
+
+### 20. System / network print · 🟡 · Med
+Send the active PDF straight to a network/system printer for **fast proofs** — no
+app-switching, no separate print application. The tractable path hands the file to
+the **OS print system** rather than speaking raw IPP: `lp`/`lpr` (CUPS) on
+macOS/Linux, the Windows spooler (`Start-Process -Verb Print` or the Win32 print
+API) on Windows — plus a printer-enumeration call (`lpstat -p` / `EnumPrinters`) to
+populate a device picker. In practice a "network device" is just a printer the OS
+already has installed, so leaning on the spooler sidesteps protocol work.
+
+No new core PDF work: it's a new `rbara-gui` command + a small frontend (device
+list, copies, page range). For image-only devices you could rasterize via the
+existing export/pdfium path, but handing the PDF to the spooler preserves vector.
+Main effort is the cross-platform divergence (CUPS vs Windows). Explicitly a
+proofing *convenience* (speed) — **not** calibrated/halftoned output, which is the
+separate RIP item (**#18**).
 
 ---
 
@@ -266,6 +283,9 @@ engineering risk) and **3D viewing** (the demo magnet) as separate milestones.
   file become a physical object" — reuses the XMP precedent ([`xmp.rs`](rustybara/src/xmp.rs))
   and the panel geometry from **#16**'s primitives. Captured as a forward idea; no
   XMP/fold work scheduled yet.
+- **#20 (network print)** is OS-spooler *proofing* — distinct from **#18 (RIP)**
+  (calibrated raster output). It can optionally reuse the export/raster path for
+  image-only devices, but otherwise touches no core PDF code.
 
 ---
 
