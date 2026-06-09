@@ -2,6 +2,7 @@
   import { useAppState } from '../lib/context.js'
   import TrimPanel from './TrimPanel.svelte'
   import ResizePanel from './ResizePanel.svelte'
+  import RotatePanel from './RotatePanel.svelte'
   import ExportPanel from './ExportPanel.svelte'
   import RemapPanel from './RemapPanel.svelte'
   import ConvertColorSpacePanel from './ConvertColorSpacePanel.svelte'
@@ -21,6 +22,8 @@
     <TrimPanel />
   {:else if app.activeAction === 'resize'}
     <ResizePanel />
+  {:else if app.activeAction === 'rotate'}
+    <RotatePanel />
   {:else if app.activeAction === 'export'}
     <ExportPanel />
   {:else if app.activeAction === 'remap'}

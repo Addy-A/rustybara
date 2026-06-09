@@ -120,6 +120,7 @@
   const ACTION_TO_OP = {
     trim: 'trim',
     resize: 'resize',
+    rotate: 'rotate',
     addtrimbox: 'add_trim_box',
     remap: 'remap_color',
     colorspace: 'convert_color_space',
@@ -155,6 +156,8 @@
     bleedInches: 0.125,
     exportFormat: 'jpg',
     exportDpi: 150,
+    exportQuality: 90,
+    rotateDegrees: 90,
     remapFrom: [1.0, 1.0, 1.0, 1.0],
     remapTo: [0.6, 0.4, 0.2, 1.0],
     remapTolerance: 1.0,
@@ -616,7 +619,8 @@
     switch (activeAction) {
       case 'trim':        return api.trimMarks(paths, outputDir, overwrite)
       case 'resize':      return api.resizeToBleed(paths, params.bleedInches, outputDir, overwrite)
-      case 'export':      return api.exportImages(paths, params.exportFormat, params.exportDpi, outputDir)
+      case 'rotate':      return api.rotate(paths, params.rotateDegrees, outputDir, overwrite)
+      case 'export':      return api.exportImages(paths, params.exportFormat, params.exportDpi, params.exportQuality, outputDir)
       case 'addtrimbox':  return api.addTrimBox(paths, params.trimBoxBleedInches, outputDir, overwrite)
       case 'outlinetext': return api.outlineText(paths, outputDir, overwrite)
       case 'splitpages':  return api.splitPages(paths, params.splitPanelInches * 72, outputDir, overwrite)
@@ -654,10 +658,10 @@
       trim: 'TrimMarks', resize: 'ResizeToBleed', export: 'ExportImages',
       remap: 'RemapColors', colorspace: 'ConvertColorSpace', spots: 'FlattenSpots',
       addtrimbox: 'AddTrimBox', splitpages: 'SplitPages', stitchpages: 'StitchPages',
-      extractpages: 'ExtractPages', outlinetext: 'OutlineText',
+      extractpages: 'ExtractPages', outlinetext: 'OutlineText', rotate: 'Rotate',
     }
     const SWAP_ACTIONS = new Set([
-      'trim', 'resize', 'remap', 'colorspace', 'spots',
+      'trim', 'resize', 'rotate', 'remap', 'colorspace', 'spots',
       'addtrimbox', 'outlinetext', 'extractpages', 'splitpages', 'stitchpages',
     ])
     const actionLabel = ACTION_LABELS[activeAction]

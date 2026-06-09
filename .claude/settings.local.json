@@ -39,7 +39,8 @@
       "Read(//c/Users/mardo/.cargo/registry/src/**)",
       "Read(//c//**)",
       "Bash(cargo rustc *)",
-      "WebFetch(domain:crates.io)"
+      "WebFetch(domain:crates.io)",
+      "Bash(cargo check *)"
     ]
   },
   "spinnerTipsEnabled": false

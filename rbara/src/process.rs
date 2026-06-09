@@ -111,7 +111,7 @@ pub fn run_image(
             } else {
                 out
             };
-            pipeline.save_page_image(page, &out, &fmt, &config)?;
+            pipeline.save_page_image(page, &out, &fmt, &config, 90)?;
             print!("{} page {} → {}", path.display(), page + 1, out.display());
         }
     }
@@ -146,7 +146,7 @@ pub fn load_metadata(path: &Path) -> rustybara::Result<crate::tui::app::PdfMetad
             return Err(rustybara::Error::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "PDF has no pages",
-            )))
+            )));
         }
     };
     let boxes = PageBoxes::read(doc, first_id)?;
@@ -259,7 +259,7 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>, Act
                     } else {
                         out
                     };
-                    pipeline.save_page_image(page, &out, &fmt, &config)?;
+                    pipeline.save_page_image(page, &out, &fmt, &config, 90)?;
                     total += 1;
                 }
             }

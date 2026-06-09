@@ -7,4 +7,5 @@
 /rbara-gui/resources/
 /rustybara-website/
 /rbara-gui/frontend/dist/
+/graphify-out/
 .env

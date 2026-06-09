@@ -50,6 +50,7 @@
 
   const mainActions = [
     { id: 'resize',       icon: '⊡', label: 'Resize to Bleed', key: 'r'  },
+    { id: 'rotate',       icon: '⟳', label: 'Rotate PDF',      key: ''   },
     { id: 'export',       icon: '⇲', label: 'Export Images',   key: 'x'  },
     { id: 'outlinetext',  icon: '⊤', label: 'Outline Text',    key: '⇧t' },
   ]

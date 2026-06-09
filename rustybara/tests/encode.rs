@@ -9,7 +9,7 @@ fn encode_jpg_embeds_dpi_in_jfif_header() {
     let dir = std::env::temp_dir().join("rustybara_test_encode");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("encode_dpi_test.jpg");
-    save(&img, &path, &OutputFormat::Jpg, 300).unwrap();
+    save(&img, &path, &OutputFormat::Jpg, 300, 90).unwrap();
 
     let bytes = std::fs::read(&path).unwrap();
     // SOI marker is bytes 0-1; APP0 marker starts at byte 2
@@ -59,7 +59,7 @@ fn encode_save_png_writes_file() {
     let dir = std::env::temp_dir().join("rustybara_test_encode");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("encode_test.png");
-    save(&img, &path, &OutputFormat::Png, 150).unwrap();
+    save(&img, &path, &OutputFormat::Png, 150, 90).unwrap();
     assert!(path.exists());
     assert!(std::fs::metadata(&path).unwrap().len() > 0);
     std::fs::remove_file(&path).ok();
@@ -71,7 +71,7 @@ fn encode_save_jpg_writes_file() {
     let dir = std::env::temp_dir().join("rustybara_test_encode");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("encode_test.jpg");
-    save(&img, &path, &OutputFormat::Jpg, 150).unwrap();
+    save(&img, &path, &OutputFormat::Jpg, 150, 90).unwrap();
     assert!(path.exists());
     assert!(std::fs::metadata(&path).unwrap().len() > 0);
     std::fs::remove_file(&path).ok();
@@ -83,7 +83,7 @@ fn encode_save_webp_writes_file() {
     let dir = std::env::temp_dir().join("rustybara_test_encode");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("encode_test.webp");
-    save(&img, &path, &OutputFormat::WebP, 150).unwrap();
+    save(&img, &path, &OutputFormat::WebP, 150, 90).unwrap();
     assert!(path.exists());
     assert!(std::fs::metadata(&path).unwrap().len() > 0);
     std::fs::remove_file(&path).ok();
@@ -95,7 +95,7 @@ fn encode_save_tiff_writes_file() {
     let dir = std::env::temp_dir().join("rustybara_test_encode");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("encode_test.tiff");
-    save(&img, &path, &OutputFormat::Tiff, 150).unwrap();
+    save(&img, &path, &OutputFormat::Tiff, 150, 90).unwrap();
     assert!(path.exists());
     assert!(std::fs::metadata(&path).unwrap().len() > 0);
     std::fs::remove_file(&path).ok();

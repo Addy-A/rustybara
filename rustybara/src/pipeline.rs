@@ -56,7 +56,7 @@ pub enum DocumentColorKind {
 /// let config = RenderConfig::prepress(); // 300 DPI
 ///
 /// // Export first page as JPEG
-/// pipeline.save_page_image(0, "page_1.jpg", &OutputFormat::Jpg, &config)?;
+/// pipeline.save_page_image(0, "page_1.jpg", &OutputFormat::Jpg, &config, 90)?;
 /// # Ok(())
 /// # }
 /// ```
@@ -160,6 +160,36 @@ impl PdfPipeline {
     /// Returns an error if any page dictionary cannot be accessed.
     pub fn add_trim_box(&mut self, bleed_pts: f64) -> crate::Result<&mut Self> {
         crate::pages::set_trim_boxes(&mut self.doc, bleed_pts)?;
+        Ok(self)
+    }
+
+    /// Rotates every page by `degrees`, which must be a multiple of 90.
+    ///
+    /// The rotation is applied **additively** to each page's existing `/Rotate`
+    /// entry and normalized into `[0, 360)`. Only the page's display rotation is
+    /// changed — content streams and page boxes are left untouched.
+    ///
+    /// # Errors
+    /// Returns an error if `degrees` is not a multiple of 90, or if a page
+    /// dictionary cannot be accessed.
+    pub fn rotate(&mut self, degrees: i32) -> crate::Result<&mut Self> {
+        if degrees % 90 != 0 {
+            return Err(crate::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "rotation must be a multiple of 90",
+            )));
+        }
+        let pages = self.doc.get_pages();
+        for &page_id in pages.values() {
+            let page = self.doc.get_dictionary_mut(page_id)?;
+            let current = page
+                .get(b"Rotate")
+                .ok()
+                .and_then(|o| o.as_i64().ok())
+                .unwrap_or(0);
+            let new_rotate = (current + degrees as i64).rem_euclid(360);
+            page.set(b"Rotate", lopdf::Object::Integer(new_rotate));
+        }
         Ok(self)
     }
 
@@ -718,10 +748,7 @@ impl PdfPipeline {
             .and_then(|lib| Pdfium::bind_to_library(lib).ok())
             .map_or_else(|| Pdfium::bind_to_system_library(), Ok);
 
-        let pdfium = match bindings_result {
-            Ok(bindings) => Pdfium::new(bindings),
-            Err(_) => Pdfium,
-        };
+        let pdfium = Pdfium::new(bindings_result.map_err(crate::Error::Render)?);
 
         let pdf_doc = pdfium.load_pdf_from_byte_vec(buf, None)?;
         let page = pdf_doc.pages().get(page_num as PdfPageIndex)?;
@@ -753,7 +780,7 @@ impl PdfPipeline {
     /// # use rustybara::{PdfPipeline, encode::OutputFormat, raster::RenderConfig};
     /// # fn main() -> rustybara::Result<()> {
     /// let pipeline = PdfPipeline::open("input.pdf")?;
-    /// pipeline.save_page_image(0, "page_1.jpg", &OutputFormat::Jpg, &RenderConfig::prepress())?;
+    /// pipeline.save_page_image(0, "page_1.jpg", &OutputFormat::Jpg, &RenderConfig::prepress(), 90)?;
     /// # Ok(())
     /// # }
     /// ```
@@ -764,9 +791,10 @@ impl PdfPipeline {
         path: impl AsRef<Path>,
         format: &OutputFormat,
         config: &RenderConfig,
+        quality: u8,
     ) -> crate::Result<()> {
         let image = self.render_page(page_num, config)?;
-        crate::encode::save(&image, path.as_ref(), format, config.dpi)?;
+        crate::encode::save(&image, path.as_ref(), format, config.dpi, quality)?;
         Ok(())
     }
 }
@@ -876,6 +904,62 @@ mod tests {
             .unwrap();
         assert!(out.exists());
         std::fs::remove_file(&out).ok();
+    }
+
+    /// Read a page's own `/Rotate` (default 0 when absent), for rotation assertions.
+    fn page_rotation(doc: &lopdf::Document, id: lopdf::ObjectId) -> i64 {
+        doc.get_dictionary(id)
+            .ok()
+            .and_then(|d| d.get(b"Rotate").ok())
+            .and_then(|o| o.as_i64().ok())
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn rotate_adds_to_every_page() {
+        // Capture each page's starting rotation from a fresh open.
+        let baseline = PdfPipeline::open(fixture()).unwrap();
+        let before: Vec<(lopdf::ObjectId, i64)> = baseline
+            .doc()
+            .get_pages()
+            .values()
+            .map(|&id| (id, page_rotation(baseline.doc(), id)))
+            .collect();
+
+        let mut p = PdfPipeline::open(fixture()).unwrap();
+        p.rotate(90).unwrap();
+        for (id, prev) in before {
+            assert_eq!(
+                page_rotation(p.doc(), id),
+                (prev + 90).rem_euclid(360),
+                "each page should advance 90° from its prior rotation"
+            );
+        }
+    }
+
+    #[test]
+    fn rotate_accumulates_and_normalizes() {
+        let baseline = PdfPipeline::open(fixture()).unwrap();
+        let first = *baseline.doc().get_pages().values().next().unwrap();
+        let start = page_rotation(baseline.doc(), first);
+
+        let mut p = PdfPipeline::open(fixture()).unwrap();
+        p.rotate(270).unwrap();
+        p.rotate(180).unwrap(); // +450 total → +90 after mod 360
+        assert_eq!(
+            page_rotation(p.doc(), first),
+            (start + 90).rem_euclid(360),
+            "rotations accumulate and wrap mod 360"
+        );
+    }
+
+    #[test]
+    fn rotate_rejects_non_multiple_of_90() {
+        let mut p = PdfPipeline::open(fixture()).unwrap();
+        assert!(
+            p.rotate(45).is_err(),
+            "a non-multiple of 90 must be rejected"
+        );
     }
 
     #[test]

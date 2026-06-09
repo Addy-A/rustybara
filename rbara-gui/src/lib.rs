@@ -8,9 +8,9 @@ use commands::{
     get_file_size, list_custom_profiles, list_dirs, list_pdf_files, load_icc_profile,
     load_metadata, load_persisted_profiles, load_persisted_settings, load_settings, minimize_window,
     notify_viewer, open_file_dialog, open_in_viewer, open_in_viewer_persistent, outline_text,
-    read_xmp_metadata, remap_colors, resize_to_bleed, save_settings, split_pages, stitch_pages,
-    toggle_maximize_window, trim_marks, AppSettings, ProcessingLock, ProfileRegistry, SettingsDto,
-    ViewerHandle,
+    read_xmp_metadata, remap_colors, resize_to_bleed, rotate, save_settings, split_pages,
+    stitch_pages, toggle_maximize_window, trim_marks, AppSettings, ProcessingLock, ProfileRegistry,
+    SettingsDto, ViewerHandle,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -29,6 +29,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             trim_marks,
             resize_to_bleed,
+            rotate,
             add_trim_box,
             outline_text,
             split_pages,

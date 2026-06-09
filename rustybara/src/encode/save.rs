@@ -117,11 +117,12 @@ pub fn save(
     path: &Path,
     format: &OutputFormat,
     dpi: u32,
+    quality: u8,
 ) -> crate::Result<()> {
     match format {
         OutputFormat::Jpg => {
             let mut buf = std::io::BufWriter::new(std::fs::File::create(path)?);
-            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 90);
+            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality);
             encoder.set_pixel_density(image::codecs::jpeg::PixelDensity {
                 density: (dpi as u16, dpi as u16),
                 unit: image::codecs::jpeg::PixelDensityUnit::Inches,
@@ -146,7 +147,8 @@ pub fn save(
         OutputFormat::WebP => {
             let encoder = webp::Encoder::from_image(image)
                 .map_err(|e| crate::Error::Io(std::io::Error::other(e)))?;
-            let memory = encoder.encode(75.0);
+            let quality_clamp = quality.clamp(1, 100);
+            let memory = encoder.encode(quality_clamp as f32);
             std::fs::write(path, &*memory)?;
             Ok(())
         }

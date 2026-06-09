@@ -27,8 +27,12 @@ export async function resizeToBleed(paths, bleedInches, outputDir, overwrite) {
   })
 }
 
-export async function exportImages(paths, format, dpi, outputDir) {
-  return await invoke('export_images', { paths, format, dpi, outputDir })
+export async function exportImages(paths, format, dpi, quality, outputDir) {
+  return await invoke('export_images', { paths, format, dpi, quality, outputDir })
+}
+
+export async function rotate(paths, degrees, outputDir, overwrite) {
+  return await invoke('rotate', { paths, degrees, outputDir, overwrite })
 }
 
 export async function remapColors(

@@ -906,7 +906,7 @@ mod tests {
     #[test]
     fn object_to_f64_negative() {
         assert!((object_to_f64(&Object::Integer(-7)) - (-7.0)).abs() < 1e-10);
-        assert!((object_to_f64(&Object::Real(-2.5)) - (-2.5 as f64)).abs() < 0.01);
+        assert!((object_to_f64(&Object::Real(-2.5)) - (-2.5_f64)).abs() < 0.01);
     }
 
     // ── operands_to_rect ────────────────────────────────────────────

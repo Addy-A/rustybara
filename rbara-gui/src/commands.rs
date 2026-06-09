@@ -446,6 +446,48 @@ pub async fn resize_to_bleed(
     .await
 }
 
+/// Rotates every page of each input PDF by `degrees` (a multiple of 90) and
+/// writes the result. Mirrors the other action commands: acquires the processing
+/// lock and runs the lopdf work off the main thread via `run_blocking_action`.
+#[tauri::command]
+pub async fn rotate(
+    paths: Vec<String>,
+    degrees: i32,
+    output_dir: Option<String>,
+    overwrite: bool,
+    state: State<'_, ProcessingLock>,
+) -> Result<ActionResult, String> {
+    let output_dir = output_dir.map(PathBuf::from);
+    run_blocking_action(&state.0, move || {
+        let mut output_paths = Vec::new();
+        let params = format!("degrees={degrees}");
+        let ts = xmp_timestamp();
+
+        for path_str in &paths {
+            let path = PathBuf::from(path_str);
+            let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
+            let out = output_path(&path, &output_dir, None, overwrite);
+            PdfPipeline::open(&path)
+                .and_then(|mut p| {
+                    p.rotate(degrees)?;
+                    p.embed_metadata(&hash, &ts, &[("rotate", &params)])?;
+                    p.save_pdf(&out)?;
+                    Ok(())
+                })
+                .map_err(friendly_error)?;
+            output_paths.push(out.to_string_lossy().into_owned());
+        }
+
+        Ok(ActionResult {
+            ok: true,
+            message: format!("Rotated {} file(s) by {} degrees", paths.len(), degrees),
+            output_paths,
+            timestamp: now_timestamp(),
+        })
+    })
+    .await
+}
+
 #[tauri::command]
 pub async fn export_images(
     paths: Vec<String>,
@@ -453,6 +495,7 @@ pub async fn export_images(
     dpi: u32,
     output_dir: Option<String>,
     state: State<'_, ProcessingLock>,
+    quality: u8,
 ) -> Result<ActionResult, String> {
     let fmt = match format.as_str() {
         "png" => OutputFormat::Png,
@@ -486,7 +529,7 @@ pub async fn export_images(
                     base
                 };
                 pipeline
-                    .save_page_image(page, &out, &fmt, &config)
+                    .save_page_image(page, &out, &fmt, &config, quality)
                     .map_err(friendly_error)?;
                 output_paths.push(out.to_string_lossy().into_owned());
                 total_images += 1;

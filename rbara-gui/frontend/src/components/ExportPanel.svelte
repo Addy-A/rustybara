@@ -52,6 +52,23 @@
   </div>
 </div>
 
+{#if app.params.exportFormat === 'jpg' || app.params.exportFormat === 'webp'}
+  <div class="param-group">
+    <div class="param-label">Quality</div>
+    <div class="param-row">
+      <input
+        class="quality-slider"
+        type="range"
+        min="1"
+        max="100"
+        step="1"
+        bind:value={app.params.exportQuality}
+      />
+      <span class="quality-val">{app.params.exportQuality}</span>
+    </div>
+  </div>
+{/if}
+
 {#if !app.metadata}
   <Notice ok={false}>Load a file to validate.</Notice>
 {:else}
@@ -128,4 +145,12 @@
     border-color: var(--orange);
   }
   .hint { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .quality-slider { flex: 1; max-width: 220px; accent-color: var(--orange); }
+  .quality-val {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--orange-hi);
+    min-width: 28px;
+    text-align: right;
+  }
 </style>

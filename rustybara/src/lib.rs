@@ -38,7 +38,7 @@
 //! let pipeline = PdfPipeline::open("input.pdf")?;
 //! let config = RenderConfig::prepress(); // 300 DPI
 //!
-//! pipeline.save_page_image(0, "page_1.jpg", &OutputFormat::Jpg, &config)?;
+//! pipeline.save_page_image(0, "page_1.jpg", &OutputFormat::Jpg, &config, 90)?;
 //! # Ok(())
 //! # }
 //! ```
