@@ -446,6 +446,53 @@ pub async fn resize_to_bleed(
     .await
 }
 
+#[tauri::command]
+pub async fn set_media_box(
+    paths: Vec<String>,
+    output_dir: Option<String>,
+    width_inches: f64,
+    height_inches: f64,
+    overwrite: bool,
+    state: State<'_, ProcessingLock>,
+) -> Result<ActionResult, String> {
+    let output_dir = output_dir.map(PathBuf::from);
+    let width_pts = width_inches * 72.0;
+    let height_pts = height_inches * 72.0;
+    run_blocking_action(&state.0, move || {
+        let mut output_paths = Vec::new();
+        let params = format!("w_in={width_inches},h_in={height_inches}");
+        let ts = xmp_timestamp();
+
+        for path_str in &paths {
+            let path = PathBuf::from(path_str);
+            let hash = rustybara::xmp::hash_file(&path).map_err(friendly_error)?;
+            let out = output_path(&path, &output_dir, None, overwrite);
+            PdfPipeline::open(&path)
+                .and_then(|mut p| {
+                    p.set_media_box(width_pts, height_pts)?;
+                    p.embed_metadata(&hash, &ts, &[("set_media_box", &params)])?;
+                    p.save_pdf(&out)?;
+                    Ok(())
+                })
+                .map_err(friendly_error)?;
+            output_paths.push(out.to_string_lossy().into_owned());
+        }
+
+        Ok(ActionResult {
+            ok: true,
+            message: format!(
+                "Resized {} file(s) (width: {}in x height: {}in)",
+                paths.len(),
+                width_inches,
+                height_inches,
+            ),
+            output_paths,
+            timestamp: now_timestamp(),
+        })
+    })
+    .await
+}
+
 /// Rotates every page of each input PDF by `degrees` (a multiple of 90) and
 /// writes the result. Mirrors the other action commands: acquires the processing
 /// lock and runs the lopdf work off the main thread via `run_blocking_action`.

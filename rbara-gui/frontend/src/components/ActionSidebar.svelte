@@ -48,11 +48,19 @@
     { id: 'addtrimbox', icon: '⊞', label: 'Add Trim Box', key: 'b' },
   ]
 
+  const boxesActions = [
+    { id: 'resize',      icon: '⊡', label: 'Resize to Bleed', key: 'r'  },
+    { id: 'setmediabox', icon: '▭', label: 'Set Media Box',   key: '⇧m' },
+  ]
+
+  // Orphaned actions that don't belong to a category live flat in the list.
   const mainActions = [
-    { id: 'resize',       icon: '⊡', label: 'Resize to Bleed', key: 'r'  },
-    { id: 'rotate',       icon: '⟳', label: 'Rotate PDF',      key: ''   },
-    { id: 'export',       icon: '⇲', label: 'Export Images',   key: 'x'  },
-    { id: 'outlinetext',  icon: '⊤', label: 'Outline Text',    key: '⇧t' },
+    { id: 'export',      icon: '⇲', label: 'Export Images',   key: 'x'  },
+  ]
+
+  const miscActions = [
+    { id: 'rotate',      icon: '⟳', label: 'Rotate PDF',   key: '⇧r' },
+    { id: 'outlinetext', icon: '⊤', label: 'Outline Text', key: '⇧t' },
   ]
 
   const pagesActions = [
@@ -68,10 +76,14 @@
   ]
 
   const trimIds = new Set(['trim', 'addtrimbox'])
+  const boxesIds = new Set(['resize', 'setmediabox'])
+  const miscIds = new Set(['rotate', 'outlinetext'])
   const pagesIds = new Set(['splitpages', 'stitchpages', 'extractpages'])
   const colorIds = new Set(['remap', 'colorspace', 'spots'])
 
   let isTrimActive = $derived(trimIds.has(app.activeAction))
+  let isBoxesActive = $derived(boxesIds.has(app.activeAction))
+  let isMiscActive = $derived(miscIds.has(app.activeAction))
   let isPagesActive = $derived(pagesIds.has(app.activeAction))
   let isColorActive = $derived(colorIds.has(app.activeAction))
 </script>
@@ -101,6 +113,34 @@
 
   {#if app.trimExpanded}
     {#each trimActions as a (a.id)}
+      <div
+        class="action-item nested"
+        class:active={app.activeAction === a.id}
+        onclick={() => (app.activeAction = a.id)}
+        role="button"
+        tabindex="0"
+      >
+        <span class="ai-icon">{a.icon}</span>
+        <span class="ai-label">{a.label}</span>
+        <span class="ai-key">{a.key}</span>
+      </div>
+    {/each}
+  {/if}
+
+  <div
+    class="group-header"
+    class:active={isBoxesActive}
+    onclick={() => (app.boxesExpanded = !app.boxesExpanded)}
+    role="button"
+    tabindex="0"
+  >
+    <span class="ai-icon">⬚</span>
+    <span class="ai-label">Boxes</span>
+    <span class="chevron">{app.boxesExpanded ? '▾' : '▸'}</span>
+  </div>
+
+  {#if app.boxesExpanded}
+    {#each boxesActions as a (a.id)}
       <div
         class="action-item nested"
         class:active={app.activeAction === a.id}
@@ -171,6 +211,34 @@
 
   {#if app.colorExpanded}
     {#each colorActions as a (a.id)}
+      <div
+        class="action-item nested"
+        class:active={app.activeAction === a.id}
+        onclick={() => (app.activeAction = a.id)}
+        role="button"
+        tabindex="0"
+      >
+        <span class="ai-icon">{a.icon}</span>
+        <span class="ai-label">{a.label}</span>
+        <span class="ai-key">{a.key}</span>
+      </div>
+    {/each}
+  {/if}
+
+  <div
+    class="group-header"
+    class:active={isMiscActive}
+    onclick={() => (app.miscExpanded = !app.miscExpanded)}
+    role="button"
+    tabindex="0"
+  >
+    <span class="ai-icon">⋯</span>
+    <span class="ai-label">Miscellaneous</span>
+    <span class="chevron">{app.miscExpanded ? '▾' : '▸'}</span>
+  </div>
+
+  {#if app.miscExpanded}
+    {#each miscActions as a (a.id)}
       <div
         class="action-item nested"
         class:active={app.activeAction === a.id}

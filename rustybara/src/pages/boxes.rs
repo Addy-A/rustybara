@@ -138,6 +138,64 @@ impl PageBoxes {
     }
 }
 
+/// Sets every page's `MediaBox` to an exact `width_pts` × `height_pts`
+/// rectangle, centered on the page's current MediaBox. Content that falls
+/// outside the new box is cropped (clipped) by viewers and RIPs, not deleted.
+/// Any existing `CropBox` is rewritten to the same rectangle so it never
+/// exceeds the new MediaBox.
+///
+/// Dimensions are in PDF points (1/72").
+///
+/// # Errors
+///
+/// Returns an error if `width_pts` or `height_pts` is not positive, or if a
+/// page dictionary cannot be accessed.
+pub fn set_media_box(doc: &mut Document, width_pts: f64, height_pts: f64) -> crate::Result<()> {
+    if width_pts <= 0.0 || height_pts <= 0.0 {
+        return Err(crate::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "width and height must be positive",
+        )));
+    }
+    let page_ids: Vec<ObjectId> = doc.get_pages().values().copied().collect();
+
+    let new_boxes: Vec<(ObjectId, [f64; 4], bool)> = page_ids
+        .iter()
+        .map(|&page_id| {
+            let boxes = PageBoxes::read(doc, page_id)?;
+            let m = &boxes.media_box;
+            let cx = m.x + m.width / 2.0;
+            let cy = m.y + m.height / 2.0;
+            Ok((
+                page_id,
+                [
+                    cx - width_pts / 2.0,
+                    cy - height_pts / 2.0,
+                    cx + width_pts / 2.0,
+                    cy + height_pts / 2.0,
+                ],
+                boxes.crop_box.is_some(),
+            ))
+        })
+        .collect::<crate::Result<Vec<_>>>()?;
+
+    for (page_id, [x0, y0, x1, y1], had_cropbox) in new_boxes {
+        let arr = vec![
+            Object::Real(x0 as f32),
+            Object::Real(y0 as f32),
+            Object::Real(x1 as f32),
+            Object::Real(y1 as f32),
+        ];
+        let dict = doc.get_dictionary_mut(page_id)?;
+        dict.set(b"MediaBox", Object::Array(arr.clone()));
+        if had_cropbox {
+            dict.set(b"CropBox", Object::Array(arr));
+        }
+    }
+
+    Ok(())
+}
+
 /// Sets a `TrimBox` on every page by insetting the `MediaBox` by `bleed_pts` on all sides.
 ///
 /// Reads each page's `MediaBox`, shrinks it inward by `bleed_pts`, and writes the result
@@ -145,16 +203,20 @@ impl PageBoxes {
 pub fn set_trim_boxes(doc: &mut Document, bleed_pts: f64) -> crate::Result<()> {
     let page_ids: Vec<ObjectId> = doc.get_pages().values().copied().collect();
 
-    let trim_rects: Vec<(ObjectId, [f64; 4])> = page_ids.iter()
+    let trim_rects: Vec<(ObjectId, [f64; 4])> = page_ids
+        .iter()
         .map(|&page_id| {
             let boxes = PageBoxes::read(doc, page_id)?;
             let m = &boxes.media_box;
-            Ok((page_id, [
-                m.x + bleed_pts,
-                m.y + bleed_pts,
-                m.right() - bleed_pts,
-                m.top() - bleed_pts,
-            ]))
+            Ok((
+                page_id,
+                [
+                    m.x + bleed_pts,
+                    m.y + bleed_pts,
+                    m.right() - bleed_pts,
+                    m.top() - bleed_pts,
+                ],
+            ))
         })
         .collect::<crate::Result<Vec<_>>>()?;
 
@@ -165,7 +227,8 @@ pub fn set_trim_boxes(doc: &mut Document, bleed_pts: f64) -> crate::Result<()> {
             Object::Real(x1 as f32),
             Object::Real(y1 as f32),
         ];
-        doc.get_dictionary_mut(page_id)?.set(b"TrimBox", Object::Array(arr));
+        doc.get_dictionary_mut(page_id)?
+            .set(b"TrimBox", Object::Array(arr));
     }
 
     Ok(())

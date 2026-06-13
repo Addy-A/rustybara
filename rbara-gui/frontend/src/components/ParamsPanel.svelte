@@ -8,6 +8,7 @@
   import ConvertColorSpacePanel from './ConvertColorSpacePanel.svelte'
   import FlattenSpotsPanel from './FlattenSpotsPanel.svelte'
   import AddTrimBoxPanel from './AddTrimBoxPanel.svelte'
+  import SetMediaBoxPanel from './SetMediaBoxPanel.svelte'
   import SplitPagesPanel from './SplitPagesPanel.svelte'
   import StitchPagesPanel from './StitchPagesPanel.svelte'
   import ExtractPagesPanel from './ExtractPagesPanel.svelte'
@@ -34,6 +35,8 @@
     <FlattenSpotsPanel />
   {:else if app.activeAction === 'addtrimbox'}
     <AddTrimBoxPanel />
+  {:else if app.activeAction === 'setmediabox'}
+    <SetMediaBoxPanel />
   {:else if app.activeAction === 'splitpages'}
     <SplitPagesPanel />
   {:else if app.activeAction === 'stitchpages'}

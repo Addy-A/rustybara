@@ -40,7 +40,8 @@
       "Read(//c//**)",
       "Bash(cargo rustc *)",
       "WebFetch(domain:crates.io)",
-      "Bash(cargo check *)"
+      "Bash(cargo check *)",
+      "PowerShell(npm *)"
     ]
   },
   "spinnerTipsEnabled": false

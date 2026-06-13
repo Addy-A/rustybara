@@ -57,6 +57,7 @@ pub struct RenderRequest {
 /// Lives entirely on the main thread — no interior mutability needed.
 /// The actual `skia_safe::Image` tiles live in `SkiaState::tile_images` once
 /// they arrive via `ViewerEvent::TileReady`.
+#[derive(Default)]
 pub struct TileCache {
     queued: std::collections::HashSet<TileKey>,
 }
@@ -138,7 +139,9 @@ impl RenderWorker {
                 // Binding already loaded in this process (e.g. by the main render thread).
                 // Pdfium (unit struct default) reuses the existing global binding.
                 Err(e) => {
-                    on_log(format!("Tile worker: reusing existing pdfium binding ({e})"));
+                    on_log(format!(
+                        "Tile worker: reusing existing pdfium binding ({e})"
+                    ));
                     Pdfium
                 }
             };
@@ -148,7 +151,10 @@ impl RenderWorker {
             // the Arc local — both live for the entire thread scope, so this compiles.
             let pdf_doc = match pdfium.load_pdf_from_byte_slice(&bytes, None) {
                 Ok(d) => {
-                    on_log(format!("Tile worker: doc loaded ({} pages)", d.pages().len()));
+                    on_log(format!(
+                        "Tile worker: doc loaded ({} pages)",
+                        d.pages().len()
+                    ));
                     d
                 }
                 Err(e) => {
@@ -359,7 +365,12 @@ mod tests {
         let page_rect = skia_safe::Rect::from_xywh(10.0, 20.0, 612.0, 792.0);
         let page_pts = (612.0_f32, 792.0_f32);
         let dpi = 300.0_f32;
-        let key = TileKey { page: 0, zoom_bucket: 1, col: 0, row: 0 };
+        let key = TileKey {
+            page: 0,
+            zoom_bucket: 1,
+            col: 0,
+            row: 0,
+        };
         let r = tile_rect_on_screen(&key, &page_rect, page_pts, dpi);
         // Col=0, Row=0 → top-left should be at page_rect origin
         assert!((r.left() - 10.0).abs() < 0.01);

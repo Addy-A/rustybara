@@ -10,6 +10,8 @@
   const ACTION_DEFS = [
     { id: 'trim',         label: 'Trim Marks' },
     { id: 'resize',       label: 'Resize to Bleed' },
+    { id: 'setmediabox',  label: 'Set Media Box' },
+    { id: 'rotate',       label: 'Rotate PDF' },
     { id: 'export',       label: 'Export Images' },
     { id: 'remap',        label: 'Remap Colors' },
     { id: 'colorspace',   label: 'Convert Color Space' },
@@ -57,6 +59,7 @@
     ['Shift + J / K', 'Scope in current, move down / up'],
     ['Ctrl + i', 'Toggle active file scope'],
     [`Ctrl + ${fmtKey(app.actionToKey?.['trim']       ?? 't')}`, 'Toggle Trim category expand'],
+    ['Ctrl + B', 'Toggle Boxes category expand'],
     [`Ctrl + ${fmtKey(app.actionToKey?.['splitpages']  ?? 'p')}`, 'Toggle Pages category expand'],
     [`Ctrl + ${fmtKey(app.actionToKey?.['colorspace']  ?? 'c')}`, 'Toggle Color category expand'],
     ['Ctrl + h / l', 'Scope out current, move left / right'],
@@ -153,11 +156,11 @@
 
   const chords = [
     {
-      chord: 'Ctrl/Cmd + B  →  D',
+      chord: 'Alt/Opt + B  →  D',
       desc: 'Open command bar pre-filled with :bd',
     },
     {
-      chord: 'Ctrl/Cmd + B  →  A',
+      chord: 'Alt/Opt + B  →  A',
       desc: 'Open command bar pre-filled with :ba',
     },
     { chord: 'Ctrl/Cmd + Q', desc: 'Refresh quip directly (no command bar)' },
@@ -260,10 +263,79 @@
     page = 'shortcuts'
     search = ''
   }
+
+  // ── vim-style modal traversal ───────────────────────────────────────────────
+  const TABS = ['shortcuts', 'cmdbar', 'types']
+  let modalEl = $state(null) // the modal root, used to locate the active scroll container
+  let searchInput = $state(null) // the command-bar filter <input>
+
+  function cycleTab(dir) {
+    const i = TABS.indexOf(page)
+    page = TABS[(i + dir + TABS.length) % TABS.length]
+    // Match the tab-click behavior: only the command-bar tab keeps its filter.
+    if (page !== 'cmdbar') search = ''
+  }
+
+  // j/k scroll whichever content region is currently scrollable.
+  function scrollContent(dy) {
+    if (!modalEl) return
+    const regions = modalEl.querySelectorAll('.grid, .cmd-grid, .types-list')
+    let target = null
+    for (const el of regions) {
+      if (el.scrollHeight > el.clientHeight + 1) {
+        target = el
+        break
+      }
+    }
+    ;(target ?? regions[0])?.scrollBy({ top: dy, behavior: 'auto' })
+  }
+
+  function handleKeydown(e) {
+    if (!app.helpVisible) return
+
+    // Tab / Shift+Tab cycle the tabs from anywhere in the modal.
+    if (e.key === 'Tab') {
+      e.preventDefault()
+      cycleTab(e.shiftKey ? -1 : 1)
+      return
+    }
+
+    // While typing in the filter, only Esc (blur back to nav mode) is intercepted
+    // so h/j/k/l/f/i type normally into the search box.
+    if (document.activeElement === searchInput) {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        searchInput.blur()
+      }
+      return
+    }
+
+    switch (e.key) {
+      case 'h': e.preventDefault(); cycleTab(-1); break
+      case 'l': e.preventDefault(); cycleTab(1); break
+      case 'j': e.preventDefault(); scrollContent(60); break
+      case 'k': e.preventDefault(); scrollContent(-60); break
+      case 'f':
+      case 'i':
+        // Command-bar tab only: drop into the filter to start typing.
+        if (page === 'cmdbar') {
+          e.preventDefault()
+          searchInput?.focus()
+        }
+        break
+      case '?':
+      case 'Escape':
+        e.preventDefault()
+        close()
+        break
+    }
+  }
 </script>
 
+<svelte:window onkeydown={handleKeydown} />
+
 <div class="overlay" onclick={close} role="presentation">
-  <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog">
+  <div class="modal" bind:this={modalEl} onclick={(e) => e.stopPropagation()} role="dialog">
     <div class="tabs">
       <button
         class="tab"
@@ -316,7 +388,7 @@
         <kbd>Enter</kbd> to execute — a live preview highlights affected buffers
         before you confirm. Press <kbd>Esc</kbd> to cancel at any time.
         <br /><br />
-        Chord shortcuts (e.g. <kbd>Ctrl+B</kbd> then <kbd>D</kbd>) pre-fill the
+        Chord shortcuts (e.g. <kbd>Alt/Opt+B</kbd> then <kbd>D</kbd>) pre-fill the
         command bar so you always get a preview before anything is deleted.
       </p>
 
@@ -326,6 +398,7 @@
           class="search"
           type="text"
           placeholder="Search commands…"
+          bind:this={searchInput}
           bind:value={search}
           spellcheck="false"
           autocomplete="off"

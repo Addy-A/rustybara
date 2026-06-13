@@ -59,6 +59,7 @@
     { id: 'colorspace',   label: 'Color Space',     default: 'c' },
     { id: 'spots',        label: 'Flatten Spots',   default: 's' },
     { id: 'addtrimbox',   label: 'Add Trim Box',    default: 'b' },
+    { id: 'setmediabox',  label: 'Set Media Box',   default: 'M' },
     { id: 'outlinetext',  label: 'Outline Text',    default: 'T' },
     { id: 'splitpages',   label: 'Split Pages',     default: 'p' },
     { id: 'stitchpages',  label: 'Stitch Pages',    default: 'g' },

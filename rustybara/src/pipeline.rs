@@ -163,6 +163,20 @@ impl PdfPipeline {
         Ok(self)
     }
 
+    /// Crops every page to an exact `width_pts` × `height_pts` MediaBox,
+    /// centered on the current media. Dimensions are in PDF points (1/72").
+    ///
+    /// See [`crate::pages::set_media_box`] for the cropping/centering semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `width_pts` or `height_pts` is not positive, or if a
+    /// page dictionary cannot be accessed.
+    pub fn set_media_box(&mut self, width_pts: f64, height_pts: f64) -> crate::Result<&mut Self> {
+        crate::pages::set_media_box(&mut self.doc, width_pts, height_pts)?;
+        Ok(self)
+    }
+
     /// Rotates every page by `degrees`, which must be a multiple of 90.
     ///
     /// The rotation is applied **additively** to each page's existing `/Rotate`
@@ -866,6 +880,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn set_media_box_sets_exact_size_centered() {
+        let (w, h) = (400.0, 600.0);
+        let mut p = PdfPipeline::open(fixture()).unwrap();
+
+        // Capture the original media center; the new box must stay centered on it.
+        let orig_doc = Document::load(fixture()).unwrap();
+        let orig_id = *orig_doc.get_pages().values().next().unwrap();
+        let orig = PageBoxes::read(&orig_doc, orig_id).unwrap().media_box;
+        let (cx, cy) = (orig.x + orig.width / 2.0, orig.y + orig.height / 2.0);
+
+        p.set_media_box(w, h).unwrap();
+
+        let id = *p.doc.get_pages().values().next().unwrap();
+        let media = PageBoxes::read(&p.doc, id).unwrap().media_box;
+
+        assert!(
+            (media.width - w).abs() < 0.01,
+            "width should equal requested"
+        );
+        assert!(
+            (media.height - h).abs() < 0.01,
+            "height should equal requested"
+        );
+        assert!(
+            (media.x + media.width / 2.0 - cx).abs() < 0.01,
+            "stays centered in X"
+        );
+        assert!(
+            (media.y + media.height / 2.0 - cy).abs() < 0.01,
+            "stays centered in Y"
+        );
+    }
+
+    #[test]
+    fn set_media_box_rejects_nonpositive() {
+        let mut p = PdfPipeline::open(fixture()).unwrap();
+        assert!(p.set_media_box(0.0, 100.0).is_err());
+        assert!(p.set_media_box(100.0, -5.0).is_err());
+    }
     #[test]
     fn save_roundtrip() {
         let mut p = PdfPipeline::open(fixture()).unwrap();

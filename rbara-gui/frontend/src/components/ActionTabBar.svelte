@@ -10,6 +10,7 @@
 
   const mainActions = [
     { id: 'resize', icon: '⊡', label: 'Resize to Bleed', key: 'r' },
+    { id: 'rotate', icon: '⟳', label: 'Rotate', key: '⇧r'},
     { id: 'export', icon: '⇲', label: 'Export Images', key: 'x' },
     { id: 'output', icon: '⊘', label: 'Output', key: '/' },
   ]

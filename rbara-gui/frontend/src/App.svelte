@@ -81,11 +81,13 @@
   const DEFAULT_SHORTCUTS = {
     t: 'trim',
     r: 'resize',
+    R: 'rotate',
     x: 'export',
     m: 'remap',
     c: 'colorspace',
     s: 'spots',
     b: 'addtrimbox',
+    M: 'setmediabox',
     T: 'outlinetext',
     p: 'splitpages',
     g: 'stitchpages',
@@ -122,6 +124,7 @@
     resize: 'resize',
     rotate: 'rotate',
     addtrimbox: 'add_trim_box',
+    setmediabox: 'set_media_box',
     remap: 'remap_color',
     colorspace: 'convert_color_space',
     spots: 'flatten_spots',
@@ -166,6 +169,8 @@
     convertIntent: 'RelativeColorimetric',
     spotIccProfile: null,
     trimBoxBleedInches: 0.125,
+    setMediaBoxWidthInches: 8.5,
+    setMediaBoxHeightInches: 11,
     extractPagesInput: '1',
     splitPanelInches: 5.83,
     stitchSpreadInches: 8.5,
@@ -571,16 +576,22 @@
   }
 
   // ---------- sidebar category expand state ----------
-  const TRIM_IDS = new Set(['trim', 'addtrimbox', 'outlinetext'])
+  const TRIM_IDS = new Set(['trim', 'addtrimbox'])
+  const BOXES_IDS = new Set(['resize', 'setmediabox'])
+  const MISC_IDS = new Set(['rotate', 'outlinetext'])
   const PAGES_IDS = new Set(['splitpages', 'stitchpages', 'extractpages'])
   const COLOR_IDS = new Set(['remap', 'colorspace', 'spots'])
 
   let trimExpanded = $state(TRIM_IDS.has(activeAction))
+  let boxesExpanded = $state(BOXES_IDS.has(activeAction))
+  let miscExpanded = $state(MISC_IDS.has(activeAction))
   let pagesExpanded = $state(PAGES_IDS.has(activeAction))
   let colorExpanded = $state(COLOR_IDS.has(activeAction))
 
   $effect(() => {
     if (TRIM_IDS.has(activeAction)) trimExpanded = true
+    if (BOXES_IDS.has(activeAction)) boxesExpanded = true
+    if (MISC_IDS.has(activeAction)) miscExpanded = true
     if (PAGES_IDS.has(activeAction)) pagesExpanded = true
     if (COLOR_IDS.has(activeAction)) colorExpanded = true
   })
@@ -622,6 +633,7 @@
       case 'rotate':      return api.rotate(paths, params.rotateDegrees, outputDir, overwrite)
       case 'export':      return api.exportImages(paths, params.exportFormat, params.exportDpi, params.exportQuality, outputDir)
       case 'addtrimbox':  return api.addTrimBox(paths, params.trimBoxBleedInches, outputDir, overwrite)
+      case 'setmediabox': return api.setMediaBox(paths, params.setMediaBoxWidthInches, params.setMediaBoxHeightInches, outputDir, overwrite)
       case 'outlinetext': return api.outlineText(paths, outputDir, overwrite)
       case 'splitpages':  return api.splitPages(paths, params.splitPanelInches * 72, outputDir, overwrite)
       case 'stitchpages': return api.stitchPages(paths, params.stitchSpreadInches * 72, outputDir, overwrite)
@@ -659,10 +671,11 @@
       remap: 'RemapColors', colorspace: 'ConvertColorSpace', spots: 'FlattenSpots',
       addtrimbox: 'AddTrimBox', splitpages: 'SplitPages', stitchpages: 'StitchPages',
       extractpages: 'ExtractPages', outlinetext: 'OutlineText', rotate: 'Rotate',
+      setmediabox: 'SetMediaBox',
     }
     const SWAP_ACTIONS = new Set([
       'trim', 'resize', 'rotate', 'remap', 'colorspace', 'spots',
-      'addtrimbox', 'outlinetext', 'extractpages', 'splitpages', 'stitchpages',
+      'addtrimbox', 'setmediabox', 'outlinetext', 'extractpages', 'splitpages', 'stitchpages',
     ])
     const actionLabel = ACTION_LABELS[activeAction]
     if (!actionLabel) { processing = false; return }
@@ -699,17 +712,31 @@
 
   // ---------- keyboard shortcuts ----------
   function handleKey(e) {
+    // While the help modal is open it owns the keyboard (vim-style traversal
+    // lives in HelpOverlay); the global shortcuts stay dormant until it closes.
+    if (helpVisible) return
     const tag = document.activeElement?.tagName
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
     if (cmdBarVisible) return
 
-    // Ctrl/Cmd+B chord initiation
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'b') {
+    // Alt/Option+B chord initiation (buffer ops: →D = :bd, →A = :ba).
+    // Match on e.code so Mac Option+B — which yields e.key '∫' — is caught too.
+    if (e.altKey && !e.ctrlKey && !e.metaKey && e.code === 'KeyB') {
       clearTimeout(chordTimer)
       chordPending = 'b'
       chordTimer = setTimeout(() => {
         chordPending = null
       }, 2000)
+      e.preventDefault()
+      return
+    }
+
+    // Ctrl/Cmd+B — toggle the Boxes category expand.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'b') {
+      clearTimeout(chordTimer)
+      chordTimer = null
+      chordPending = null
+      boxesExpanded = !boxesExpanded
       e.preventDefault()
       return
     }
@@ -1145,6 +1172,18 @@
     },
     set trimExpanded(v) {
       trimExpanded = v
+    },
+    get boxesExpanded() {
+      return boxesExpanded
+    },
+    set boxesExpanded(v) {
+      boxesExpanded = v
+    },
+    get miscExpanded() {
+      return miscExpanded
+    },
+    set miscExpanded(v) {
+      miscExpanded = v
     },
     get pagesExpanded() {
       return pagesExpanded

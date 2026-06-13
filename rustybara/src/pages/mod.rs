@@ -16,7 +16,7 @@ pub mod boxes;
 pub mod extract;
 pub mod spread;
 pub mod stitch;
-pub use boxes::{PageBoxes, set_trim_boxes};
+pub use boxes::{set_media_box, set_trim_boxes, PageBoxes};
 pub use extract::extract_pages;
 pub use spread::split_pages;
 pub use stitch::stitch_pages;

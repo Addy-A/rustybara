@@ -35,6 +35,22 @@ export async function rotate(paths, degrees, outputDir, overwrite) {
   return await invoke('rotate', { paths, degrees, outputDir, overwrite })
 }
 
+export async function setMediaBox(
+  paths,
+  widthInches,
+  heightInches,
+  outputDir,
+  overwrite,
+) {
+  return await invoke('set_media_box', {
+    paths,
+    widthInches,
+    heightInches,
+    outputDir,
+    overwrite,
+  })
+}
+
 export async function remapColors(
   paths,
   from,

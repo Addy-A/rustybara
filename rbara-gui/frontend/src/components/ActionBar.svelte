@@ -10,6 +10,7 @@
 
   const mainActions = [
     { id: 'resize', icon: '⊡', label: 'Resize', key: 'r' },
+    { id: 'rotate', icon: '⟳', label: 'Rotate', key: '⇧r'},
     { id: 'export', icon: '⇲', label: 'Export', key: 'x' },
   ];
 
