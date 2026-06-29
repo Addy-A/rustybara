@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 pub mod box_overlay_style;
 pub mod export;
 pub mod renderer;

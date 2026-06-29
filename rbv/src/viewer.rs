@@ -1228,9 +1228,10 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 // ── Phase 7: draw ─────────────────────────────────────────────
                 let state = self.state.as_mut().unwrap();
                 let overlays = if self.show_overlays {
-                    self.page_boxes
-                        .as_ref()
-                        .map(|b| OverlayData { boxes: b, styles: &self.box_overlay_styles })
+                    self.page_boxes.as_ref().map(|b| OverlayData {
+                        boxes: b,
+                        styles: &self.box_overlay_styles,
+                    })
                 } else {
                     None
                 };
@@ -1379,7 +1380,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                             self.digit_buf.clear();
                             self.push_log("Jump cancelled".to_string());
                         } else {
-                            std::process::exit(0);
+                            event_loop.exit();
                         }
                     }
 

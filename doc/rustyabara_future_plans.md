@@ -2,7 +2,7 @@
 
 # 🦫 Rustybara — Future Plans & Prioritization
 
-**Roadmap triage as of `v0.1.8`** — ordered by priority, weighed against ease of
+**Roadmap triage as of `v0.1.9`** — ordered by priority, weighed against ease of
 implementation and necessity, with notes on how each item touches the existing
 codebase.
 
@@ -29,10 +29,10 @@ codebase.
 
 | # | Feature | Tier | Ease | Necessity |
 | --- | --- | :---: | :---: | :---: |
-| 1 | JPEG quality config | **T1** | 🟢 | Med |
-| 2 | Rotate PDF | **T1** | 🟢 | Med |
-| 3 | Redefine media box | **T1** | 🟢 | Med |
-| 4 | macOS rbv dock-icon bug | **T1** | 🟡 | Med |
+| 1 | ~~JPEG quality config~~ ✅ *shipped v0.1.9* | **T1** | 🟢 | Med |
+| 2 | ~~Rotate PDF~~ ✅ *shipped v0.1.9* | **T1** | 🟢 | Med |
+| 3 | ~~Redefine media box~~ ✅ *shipped v0.1.9* | **T1** | 🟢 | Med |
+| 4 | ~~macOS rbv dock-icon bug~~ ✅ *fixed v0.1.9* | **T1** | 🟡 | Med |
 | 5 | Code signing (macOS / Windows) | **T2** | 🟡 | **High** |
 | 6 | npm library for `rustybara-wasm` | **T2** | 🟡 | Med |
 | 7 | Video tutorials (website) | **T2** | 🟢 | Med |
@@ -52,12 +52,13 @@ codebase.
 
 ---
 
-## 🟢 Tier 1 — Quick wins (ship next)
+## 🟢 Tier 1 — Quick wins ✅ **complete (shipped in v0.1.9)**
 
-Low-risk, high-satisfaction, mostly additive. Good "between big features" work.
+Low-risk, high-satisfaction, mostly additive. **All four items below shipped in
+v0.1.9** — kept here for provenance; the next active band is Tier 2.
 
-### 1. JPEG quality config · 🟢 · Med
-The encoder quality is **hardcoded to `90`** in [`encode/save.rs`](rustybara/src/encode/save.rs#L124)
+### 1. JPEG quality config · 🟢 · Med — ✅ **Shipped in v0.1.9**
+*(Originally:)* The encoder quality was **hardcoded to `90`** in [`encode/save.rs`](rustybara/src/encode/save.rs#L124)
 (`JpegEncoder::new_with_quality(&mut buf, 90)`). Make it configurable by adding a
 `quality` field to [`RenderConfig`](rustybara/src/raster/config.rs), threading it
 through `save()`, the `export_images` command in
@@ -65,8 +66,8 @@ through `save()`, the `export_images` command in
 **Export** panel. Already on the README roadmap. Lowest-effort item on the list —
 a clean warm-up.
 
-### 2. Rotate PDF · 🟢 · Med
-There is **no `/Rotate` handling anywhere** in the core today (verified). A page's
+### 2. Rotate PDF · 🟢 · Med — ✅ **Shipped in v0.1.9**
+*(Originally:)* There was **no `/Rotate` handling anywhere** in the core (verified). A page's
 display rotation is just a `/Rotate` dict entry (0/90/180/270). Add a
 `PdfPipeline::rotate(degrees)` that sets `/Rotate` on each page object, a
 `rotate` command, and a GUI action. Lives naturally beside the other page ops in
@@ -74,19 +75,23 @@ display rotation is just a `/Rotate` dict entry (0/90/180/270). Add a
 note that physically baking rotation into content/boxes is a separate, harder job
 we should explicitly *not* take on here.
 
-### 3. Redefine media box · 🟢 · Med
-Box geometry already has a home: [`pages/boxes.rs`](rustybara/src/pages/boxes.rs)
+### 3. Redefine media box · 🟢 · Med — ✅ **Shipped in v0.1.9**
+Box geometry already had a home: [`pages/boxes.rs`](rustybara/src/pages/boxes.rs)
 (`PageBoxes`, `set_trim_boxes`). Add a `set_media_box` sibling + command + GUI
 field. Pairs conceptually with **#8 (trim marks)** and **#13 (PDF/X)**, both of
 which care about box correctness.
 
-### 4. macOS rbv dock-icon bug · 🟡 · Med
-*(from the bug list)* On macOS, a terminated `rbv` process exits but its dock icon
-lingers. This is a winit/Cocoa app-lifecycle issue in
-[`rbv/src/viewer.rs`](rbv/src/viewer.rs) / [`rbv/src/main.rs`](rbv/src/main.rs) —
-likely the `ApplicationHandler` not clearing the activation policy / not posting a
-clean `terminate` on exit. Platform-specific debugging, but small in scope. Worth
-clearing before more people run rbv on Mac.
+### 4. macOS rbv dock-icon bug · 🟡 · Med — ✅ **Fixed in v0.1.9**
+*(from the bug list)* On macOS, a terminated `rbv` process exited but its dock icon
+lingered (and a zero-mem process could linger). **Re-diagnosed 06/2026** — this was
+*not* in `spawn_render`; the two real culprits were (a) Escape hard-exited via
+`std::process::exit(0)` instead of the clean `event_loop.exit()` the `CloseRequested`
+path uses, and (b) [`open_in_viewer`](rbara-gui/src/commands.rs#L1236) spawned rbv
+fire-and-forget and never reaped the `Child`, leaving a defunct process. **Resolution
+(v0.1.9):** Escape now calls `event_loop.exit()` at
+[`viewer.rs:1383`](rbv/src/viewer.rs#L1383) (no more `process::exit` anywhere in
+`rbv/src`), and `open_in_viewer` spawns a detached reaper thread that blocks on
+`child.wait()`. Shipped alongside the Windows console-window fix (same launch path).
 
 ---
 
@@ -293,7 +298,30 @@ engineering risk) and **3D viewing** (the demo magnet) as separate milestones.
 
 | Bug | Area | Ease | Notes |
 | --- | --- | :---: | --- |
-| rbv dock icon persists after termination (macOS) | [`rbv/src/viewer.rs`](rbv/src/viewer.rs), [`main.rs`](rbv/src/main.rs) | 🟡 | winit/Cocoa lifecycle — clear activation policy / clean terminate on exit. Tracked as **T1 #4**. |
+| ✅ ~~rbv dock icon persists / zero-mem process after termination (macOS)~~ **fixed v0.1.9** | [`rbv/src/viewer.rs`](rbv/src/viewer.rs#L1383), [`rbara-gui/src/commands.rs`](rbara-gui/src/commands.rs#L1242) | 🟡 | **Resolved.** Two culprits fixed: (a) Escape now uses `event_loop.exit()` instead of `std::process::exit(0)` (no `process::exit` left in `rbv/src`); (b) `open_in_viewer` now spawns a detached reaper thread that blocks on `child.wait()`, reaping the `Child`. *Not* in `spawn_render`. Was **T1 #4**. |
+| ✅ ~~rbv pops a console window on launch (Windows)~~ **fixed v0.1.9** | [`rbv/src/main.rs`](rbv/src/main.rs#L1) | 🟢 | **Resolved.** Added `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]` to rbv's `main.rs` (mirroring [`rbara-gui/src/main.rs`](rbara-gui/src/main.rs#L1)), so the windowed `rbara-gui` no longer slides in a console when it spawns rbv. `--listen` unaffected (stdin is a piped handle, not a console). |
+
+### 🔎 Investigation note — the "process multiplexer" lead (06/2026)
+
+A research pass on the note's hypothesis (collapse the two threads in
+`spawn_render` into one "mux" to fix both OS bugs) found the premise doesn't hold:
+
+- **Threads ≠ processes ≠ windows.** `spawn_render` (`viewer.rs:290`) spawns two
+  *OS threads inside the single rbv process*. Threads produce no dock tile, no
+  taskbar entry, no console window — so collapsing them changes nothing about
+  either OS bug. Both bugs live in the process/window lifecycle, not the render
+  threads (see the re-diagnosed table rows above).
+- **The `rmux` reference is a different tool.** [`Helvesec/rmux`](https://github.com/Helvesec/rmux)
+  is a *terminal* multiplexer (tmux-style PTY/session daemon with a typed SDK) — it
+  multiplexes terminal sessions, not render threads in a GUI process. Not applicable.
+- **There *is* a worthwhile "render-mux" refactor — but it's not an OS-bug fix.**
+  `spawn_render`, `spawn_plate_separation`, and the tile worker each detach
+  independent threads, and `spawn_render` can finish a render for a page you've
+  already navigated away from (handled safely by the `page == self.page` guards in
+  `user_event`, but the work is wasted). A single long-lived render worker behind
+  one command channel — with cancellation of superseded requests — would cut thread
+  churn and kill stale renders. Worth doing as a **separate efficiency task**; it
+  does **not** touch the dock icon or the console window.
 
 ---
 

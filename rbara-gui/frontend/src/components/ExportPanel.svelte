@@ -64,7 +64,14 @@
         step="1"
         bind:value={app.params.exportQuality}
       />
-      <span class="quality-val">{app.params.exportQuality}</span>
+      <input 
+        class="param-input"
+        type="number"
+        step="1"
+        min="1"
+        max="100"
+        bind:value={app.params.exportQuality}
+      />
     </div>
   </div>
 {/if}

@@ -1233,12 +1233,16 @@ pub fn open_in_viewer(
         .resource_dir()
         .map_err(|e| format!("Cannot locate resource directory: {e}"))?
         .join(rbv_name);
-    std::process::Command::new(&rbv)
+
+    let mut child = std::process::Command::new(&rbv)
         .arg(&path)
         .arg(page.to_string())
         .args(["--dpi", &dpi.to_string()])
         .spawn()
         .map_err(|e| format!("Failed to launch rbv ({}): {e}", rbv.display()))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(())
 }
 

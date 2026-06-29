@@ -1,5 +1,10 @@
 # Rustybara
 
+<!-- ![rustybara screenshot]() -->
+<p align="center">
+    <img src="./resources/rustybara_screenshot.jpg" alt="rustybara_dashboard" width=80%>
+</p>
+
 **Prepress-focused PDF manipulation toolkit for graphic designers and print operators.**
 
 [![Crates.io](https://img.shields.io/crates/v/rustybara.svg)](https://crates.io/crates/rustybara)
@@ -619,6 +624,12 @@ whole document — is planned for a future release (see Roadmap).
 - [x] XMP provenance metadata embedding and reading (`rbara:` namespace) — v0.1.7
 - [x] Tile rendering system in `rbv` for large pages — v0.1.7
 - [x] Resizable panels and activity log in `rbara-gui` — v0.1.7
+- [x] Rotate PDF (`/Rotate` page action) — v0.1.9
+- [x] Set Media Box action — v0.1.9
+- [x] Configurable JPEG/WebP export quality — v0.1.9
+- [x] System / network print for fast proofs — v0.1.9
+- [x] Fix: macOS `rbv` dock-icon / defunct process on exit (clean `event_loop.exit()` + child reaping) — v0.1.9
+- [x] Fix: Windows `rbv` console window on launch (`windows_subsystem`) — v0.1.9
 - [x] RGB→CMYK conversion (vector graphics + embedded images)
 - [x] Spot color detection service
 - [x] LOD-aware zoom tiling in `rbv`

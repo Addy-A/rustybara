@@ -287,7 +287,8 @@
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow: scroll;
+    scrollbar-width: none;
     position: relative;
   }
   .resize-handle {
