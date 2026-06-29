@@ -1,15 +1,21 @@
-# Rustybara
+<div align="center">
 
-<!-- ![rustybara screenshot]() -->
-<p align="center">
-    <img src="./resources/rustybara_screenshot.jpg" alt="rustybara_dashboard" width=80%>
-</p>
+## <img src="./resources/rustybara_logo_transparent.png" alt="Rustybara logo" width="200">
+
+# Rustybara
 
 **Prepress-focused PDF manipulation toolkit for graphic designers and print operators.**
 
 [![Crates.io](https://img.shields.io/crates/v/rustybara.svg)](https://crates.io/crates/rustybara)
+[![Downloads](https://img.shields.io/crates/d/rustybara.svg)](https://crates.io/crates/rustybara)
 [![Documentation](https://docs.rs/rustybara/badge.svg)](https://docs.rs/rustybara)
 [![License](https://img.shields.io/badge/license-LGPL--3.0-blue.svg)](LICENSE-LGPL-3.0)
+
+<br>
+
+<img src="./resources/rustybara_screenshot.jpg" alt="Rustybara dashboard" width="88%">
+
+</div>
 
 Rustybara is the convergence of three standalone prepress CLI tools into a
 unified Rust library and interactive toolset, built on the same primitives
@@ -592,7 +598,7 @@ approaches the performance of mature tools like Acrobat or PitStop, which use
 lazy/random-access parsing. That experiment has been removed.
 
 For now, `rbara-gui` **hard-blocks files above a configurable size limit**
-(default 200 MB, set in *Settings → Behavior*; `0` disables the limit at your own
+(default 200 MB, set in _Settings → Behavior_; `0` disables the limit at your own
 risk) and surfaces a clear warning rather than freezing. The underlying library
 operations remain available for callers who can afford the memory/time.
 
@@ -693,3 +699,5 @@ The LGPL license on the library allows downstream tools to link against
 binaries remain fully copyleft.
 
 Copyright (c) 2026 Addy Alvarado
+
+<img src="./resources/1477-capybara.gif" alt="capybara chillin" width="100">
