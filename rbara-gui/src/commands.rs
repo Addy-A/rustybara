@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
 use std::sync::{Arc, Mutex};
 
+use rustybara::PdfPipeline;
 use rustybara::encode::OutputFormat;
 use rustybara::pages::PageBoxes;
 use rustybara::raster::RenderConfig;
-use rustybara::PdfPipeline;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -297,6 +297,68 @@ fn output_path(
     dir.join(format!("{}_processed.{}", stem.to_string_lossy(), ext))
 }
 
+fn collision_key(path: &Path) -> String {
+    let key = path.to_string_lossy();
+    if cfg!(windows) {
+        key.to_lowercase()
+    } else {
+        key.into_owned()
+    }
+}
+
+fn ensure_unique_outputs(
+    planned: impl IntoIterator<Item = (PathBuf, PathBuf)>,
+) -> Result<(), String> {
+    let mut seen: HashMap<String, PathBuf> = HashMap::new();
+
+    for (source, output) in planned {
+        if let Some(previous) = seen.insert(collision_key(&output), source.clone()) {
+            return Err(format!(
+                "Output collision: '{}' and '{}' both map to '{}'. Rename one input or choose separate output directories.",
+                previous.display(),
+                source.display(),
+                output.display()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_unique_standard_outputs(
+    paths: &[String],
+    output_dir: &Option<PathBuf>,
+    new_ext: Option<&str>,
+    overwrite: bool,
+) -> Result<(), String> {
+    ensure_unique_outputs(paths.iter().map(|path| {
+        let source = PathBuf::from(path);
+        let output = output_path(&source, output_dir, new_ext, overwrite);
+        (source, output)
+    }))
+}
+
+fn ensure_unique_suffixed_outputs(
+    paths: &[String],
+    output_dir: &Option<PathBuf>,
+    suffix: &str,
+) -> Result<(), String> {
+    ensure_unique_outputs(paths.iter().map(|path| {
+        let source = PathBuf::from(path);
+        let dir = output_dir
+            .as_deref()
+            .or_else(|| {
+                source
+                    .parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+            })
+            .unwrap_or_else(|| Path::new("."));
+        let stem = source.file_stem().unwrap_or_default().to_string_lossy();
+        let output = dir.join(format!("{stem}_{suffix}.pdf"));
+        (source, output)
+    }))
+}
+
 fn friendly_error(e: rustybara::Error) -> String {
     match &e {
         rustybara::Error::Io(ioe) => match ioe.kind() {
@@ -374,6 +436,7 @@ pub async fn trim_marks(
 ) -> Result<ActionResult, String> {
     let output_dir = output_dir.map(PathBuf::from);
     run_blocking_action(&state.0, move || {
+        ensure_unique_standard_outputs(&paths, &output_dir, None, overwrite)?;
         let ts = xmp_timestamp();
         let mut output_paths = Vec::new();
 
@@ -413,6 +476,7 @@ pub async fn resize_to_bleed(
     let output_dir = output_dir.map(PathBuf::from);
     let bleed_pts = bleed_inches * 72.0;
     run_blocking_action(&state.0, move || {
+        ensure_unique_standard_outputs(&paths, &output_dir, None, overwrite)?;
         let mut output_paths = Vec::new();
         let params = format!("bleed_in={bleed_inches}");
         let ts = xmp_timestamp();
@@ -459,6 +523,7 @@ pub async fn set_media_box(
     let width_pts = width_inches * 72.0;
     let height_pts = height_inches * 72.0;
     run_blocking_action(&state.0, move || {
+        ensure_unique_standard_outputs(&paths, &output_dir, None, overwrite)?;
         let mut output_paths = Vec::new();
         let params = format!("w_in={width_inches},h_in={height_inches}");
         let ts = xmp_timestamp();
@@ -506,6 +571,7 @@ pub async fn rotate(
 ) -> Result<ActionResult, String> {
     let output_dir = output_dir.map(PathBuf::from);
     run_blocking_action(&state.0, move || {
+        ensure_unique_standard_outputs(&paths, &output_dir, None, overwrite)?;
         let mut output_paths = Vec::new();
         let params = format!("degrees={degrees}");
         let ts = xmp_timestamp();
@@ -559,6 +625,7 @@ pub async fn export_images(
     let format_label = format.clone();
 
     run_blocking_action(&state.0, move || {
+        ensure_unique_standard_outputs(&paths, &output_dir, Some(fmt.extension()), false)?;
         let mut output_paths = Vec::new();
         let mut total_images = 0u32;
 
@@ -608,6 +675,7 @@ pub async fn remap_colors(
 ) -> Result<ActionResult, String> {
     let output_dir = output_dir.map(PathBuf::from);
     run_blocking_action(&state.0, move || {
+        ensure_unique_standard_outputs(&paths, &output_dir, None, overwrite)?;
         let mut output_paths = Vec::new();
         let ts = xmp_timestamp();
         let params = format!("from={from:?},to={to:?},tol={tolerance}");
@@ -648,6 +716,7 @@ pub async fn add_trim_box(
     let output_dir = output_dir.map(PathBuf::from);
     let bleed_pts = bleed_inches * 72.0;
     run_blocking_action(&state.0, move || {
+        ensure_unique_standard_outputs(&paths, &output_dir, None, overwrite)?;
         let mut output_paths = Vec::new();
         let params = format!("bleed_in={bleed_inches}");
         let ts = xmp_timestamp();
@@ -692,6 +761,7 @@ pub async fn split_pages(
     let _ = overwrite; // path is always _split; overwrite signals intent, not path selection
     let output_dir = output_dir.map(PathBuf::from);
     run_blocking_action(&state.0, move || {
+        ensure_unique_suffixed_outputs(&paths, &output_dir, "split")?;
         let mut output_paths = Vec::new();
         let mut total_pages = 0u32;
         let ts = xmp_timestamp();
@@ -741,6 +811,7 @@ pub async fn extract_pages(
 ) -> Result<ActionResult, String> {
     let output_dir = output_dir.map(PathBuf::from);
     run_blocking_action(&state.0, move || {
+        ensure_unique_standard_outputs(&paths, &output_dir, None, overwrite)?;
         let mut output_paths = Vec::new();
         let ts = xmp_timestamp();
         let params = format!("pages={page_nums:?}");
@@ -798,6 +869,7 @@ pub async fn flatten_spots(
     };
 
     run_blocking_action(&state.0, move || {
+        ensure_unique_standard_outputs(&paths, &output_dir, None, overwrite)?;
         let mut output_paths = Vec::new();
         let mut total_spots = 0u32;
         let ts = xmp_timestamp();
@@ -869,6 +941,7 @@ pub async fn convert_color_space(
     let params = format!("from={from_profile},to={to_profile},intent={intent}");
 
     run_blocking_action(&state.0, move || {
+        ensure_unique_standard_outputs(&paths, &output_dir, None, overwrite)?;
         let mut output_paths = Vec::new();
         let ts = xmp_timestamp();
 
@@ -919,6 +992,8 @@ pub async fn load_icc_profile(
     let Some(file_paths) = files else {
         return Ok(Vec::new());
     };
+    let profile_dir = profiles_dir(&app)
+        .ok_or_else(|| "Could not create the custom ICC profile directory".to_string())?;
 
     let mut results = Vec::new();
     for file_path in file_paths {
@@ -951,10 +1026,10 @@ pub async fn load_icc_profile(
             color_space: color_space.clone(),
         };
 
-        if let Some(dir) = profiles_dir(&app) {
-            let out = dir.join(format!("{}.icc", profile.name));
-            let _ = std::fs::write(out, &*profile.bytes);
-        }
+        let out = profile_dir.join(format!("{}.icc", profile.name));
+        std::fs::write(&out, &*profile.bytes).map_err(|error| {
+            format!("Could not persist ICC profile '{}': {error}", profile.name)
+        })?;
 
         profiles.0.lock().unwrap().insert(
             profile.name,
@@ -1075,6 +1150,7 @@ pub async fn outline_text(
 ) -> Result<ActionResult, String> {
     let output_dir = output_dir.map(PathBuf::from);
     run_blocking_action(&state.0, move || {
+        ensure_unique_standard_outputs(&paths, &output_dir, None, overwrite)?;
         let mut output_paths = Vec::new();
         let ts = xmp_timestamp();
 
@@ -1114,6 +1190,7 @@ pub async fn stitch_pages(
     let _ = overwrite; // path is always _stitch; overwrite controls replacement, not source
     let output_dir = output_dir.map(PathBuf::from);
     run_blocking_action(&state.0, move || {
+        ensure_unique_suffixed_outputs(&paths, &output_dir, "stitch")?;
         let mut output_paths = Vec::new();
         let ts = xmp_timestamp();
         let params = format!("spread_width_pts={spread_width_pts}");
@@ -1425,6 +1502,19 @@ pub fn save_settings(
 #[cfg(test)]
 mod settings_tests {
     use super::*;
+
+    #[test]
+    fn common_output_directory_rejects_same_stem_collisions() {
+        let paths = vec![
+            "first/report.pdf".to_string(),
+            "second/report.pdf".to_string(),
+        ];
+        let result =
+            ensure_unique_standard_outputs(&paths, &Some(PathBuf::from("output")), None, false);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Output collision"));
+    }
 
     #[test]
     fn settings_dto_default_version_is_one() {

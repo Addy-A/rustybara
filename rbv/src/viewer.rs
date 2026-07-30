@@ -1,20 +1,20 @@
 use crate::export::export_wireframe;
 use crate::renderer::{
-    image_to_skia, ColorPanel, DebugOverlay, OverlayData, PageWireframe, SkiaRenderer,
-    TelemetryOverlay,
+    ColorPanel, DebugOverlay, OverlayData, PageWireframe, SkiaRenderer, TelemetryOverlay,
+    image_to_skia,
 };
-use crate::separation::{build_icc_transform as sep_build_icc_transform, PlateChannel};
-use crate::ui_state::{extract_spot_names, PlateMode};
+use crate::separation::{PlateChannel, build_icc_transform as sep_build_icc_transform};
+use crate::ui_state::{PlateMode, extract_spot_names};
 use image::{DynamicImage, GenericImageView};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use rustybara::PdfPipeline;
 use rustybara::objects::{
-    build_object_tree, filter_by_ink, hit_test, CmykChannel, ObjectKind, ObjectTree, PageObject,
-    PdfColor,
+    CmykChannel, ObjectKind, ObjectTree, PageObject, PdfColor, build_object_tree, filter_by_ink,
+    hit_test,
 };
-use rustybara::outline::paths::{outline_page_text, PositionedGlyph};
+use rustybara::outline::paths::{PositionedGlyph, outline_page_text};
 use rustybara::pages::PageBoxes;
 use rustybara::raster::RenderConfig;
-use rustybara::PdfPipeline;
 use rustybara_icc::{ColorTransform, RenderingIntent};
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -40,21 +40,30 @@ pub enum IpcCmd {
 pub enum ViewerEvent {
     PreviewReady {
         page: u32,
+        generation: u64,
         image: DynamicImage,
     },
     PageReady {
         page: u32,
+        generation: u64,
         image: DynamicImage,
+    },
+    RenderFailed {
+        page: u32,
+        generation: u64,
+        message: String,
     },
     /// A plate separation render has finished.  The `plate` snapshot allows the
     /// viewer to discard stale results when the user changes plates mid-render.
     PlateReady {
         page: u32,
+        generation: u64,
         plate: PlateMode,
         image: DynamicImage,
     },
     /// A single tile has finished rendering in the background worker.
     TileReady {
+        generation: u64,
         key: crate::tiles::TileKey,
         image: DynamicImage,
     },
@@ -62,6 +71,7 @@ pub enum ViewerEvent {
     TileLog(String),
     /// Performance metrics from the worker after a full-page render at a given DPI.
     TileMetrics {
+        generation: u64,
         dpi: f32,
         render_ms: u64,
         img_w: u32,
@@ -69,6 +79,61 @@ pub enum ViewerEvent {
     },
     FileChanged,
     IpcCommand(IpcCmd),
+}
+
+fn spawn_render_task(
+    pipeline: Arc<PdfPipeline>,
+    proxy: EventLoopProxy<ViewerEvent>,
+    page: u32,
+    generation: u64,
+    preview: RenderConfig,
+    full: RenderConfig,
+) {
+    std::thread::spawn(move || {
+        match pipeline.render_page(page, &preview) {
+            Ok(image) => {
+                let _ = proxy.send_event(ViewerEvent::PreviewReady {
+                    page,
+                    generation,
+                    image,
+                });
+            }
+            Err(error) => {
+                let _ = proxy.send_event(ViewerEvent::RenderFailed {
+                    page,
+                    generation,
+                    message: error.to_string(),
+                });
+                return;
+            }
+        }
+
+        match pipeline.render_page(page, &full) {
+            Ok(image) => {
+                let _ = proxy.send_event(ViewerEvent::PageReady {
+                    page,
+                    generation,
+                    image,
+                });
+            }
+            Err(error) => {
+                let _ = proxy.send_event(ViewerEvent::RenderFailed {
+                    page,
+                    generation,
+                    message: error.to_string(),
+                });
+            }
+        }
+    });
+}
+
+fn render_result_is_current(
+    event_page: u32,
+    event_generation: u64,
+    current_page: u32,
+    current_generation: u64,
+) -> bool {
+    event_page == current_page && event_generation == current_generation
 }
 
 struct SkiaState {
@@ -173,6 +238,11 @@ struct Viewer {
     /// Latest full-page render timing per DPI level, keyed by `dpi as u32`.
     /// Updated each time the worker completes a new full-page render.
     tile_perf: std::collections::HashMap<u32, (u64, u32, u32)>,
+    /// Monotonically increasing token attached to asynchronous render results.
+    /// Results from an older page, file reload, or tile worker are discarded.
+    render_generation: u64,
+    /// User-visible failure for the current render generation.
+    render_error: Option<String>,
 }
 
 impl Viewer {
@@ -192,16 +262,22 @@ impl Viewer {
         let proxy = self.proxy.clone();
         let log_proxy = self.proxy.clone();
         let metrics_proxy = self.proxy.clone();
+        let generation = self.render_generation;
         let sender = crate::tiles::RenderWorker::spawn(
             std::sync::Arc::clone(&bytes),
             move |key, image| {
-                let _ = proxy.send_event(ViewerEvent::TileReady { key, image });
+                let _ = proxy.send_event(ViewerEvent::TileReady {
+                    generation,
+                    key,
+                    image,
+                });
             },
             move |msg| {
                 let _ = log_proxy.send_event(ViewerEvent::TileLog(msg));
             },
             move |dpi, render_ms, img_w, img_h| {
                 let _ = metrics_proxy.send_event(ViewerEvent::TileMetrics {
+                    generation,
                     dpi,
                     render_ms,
                     img_w,
@@ -287,22 +363,24 @@ impl Viewer {
         self.pan[1] = self.pan[1] * r + (cy - win_h / 2.0) * (1.0 - r);
     }
 
-    fn spawn_render(&self, page: u32) {
+    fn spawn_render(&mut self, page: u32) {
+        self.render_generation = self.render_generation.wrapping_add(1);
+        self.render_error = None;
+        if let Some(state) = self.state.as_ref() {
+            state
+                .window
+                .set_title(&format!("rbv — {}/{}", page + 1, self.page_count));
+            state.window.request_redraw();
+        }
         let pipeline = self.pipeline.clone();
         let proxy = self.proxy.clone();
+        let generation = self.render_generation;
         let preview = RenderConfig {
             dpi: 72,
             ..self.config.clone()
         };
         let full = self.config.clone();
-        std::thread::spawn(move || {
-            if let Ok(img) = pipeline.render_page(page, &preview) {
-                let _ = proxy.send_event(ViewerEvent::PreviewReady { page, image: img });
-            }
-            if let Ok(img) = pipeline.render_page(page, &full) {
-                let _ = proxy.send_event(ViewerEvent::PageReady { page, image: img });
-            }
-        });
+        spawn_render_task(pipeline, proxy, page, generation, preview, full);
     }
 
     // ── Plate separation ──────────────────────────────────────────────────────
@@ -319,6 +397,7 @@ impl Viewer {
     fn spawn_plate_separation(&self) {
         let plate = self.active_plate.clone();
         let page = self.page;
+        let generation = self.render_generation;
         let tinted = self.plate_tinted;
         let proxy = self.proxy.clone();
 
@@ -368,6 +447,7 @@ impl Viewer {
                     );
                     let _ = proxy.send_event(ViewerEvent::PlateReady {
                         page,
+                        generation,
                         plate: PlateMode::Cmyk(ch),
                         image,
                     });
@@ -407,6 +487,7 @@ impl Viewer {
                     );
                     let _ = proxy.send_event(ViewerEvent::PlateReady {
                         page,
+                        generation,
                         plate: PlateMode::Spot(name),
                         image,
                     });
@@ -891,7 +972,7 @@ impl Viewer {
 /// Returns `None` if no valid RGB profile was found, in which case the caller
 /// should fall back to the bundled `AdobeRGB1998` profile.
 fn find_system_srgb() -> Option<rustybara_icc::profiles::IccProfile> {
-    use rustybara_icc::{profiles::IccProfile, ColorSpaceKind};
+    use rustybara_icc::{ColorSpaceKind, profiles::IccProfile};
 
     #[cfg(target_os = "windows")]
     let candidates: &[&str] = &[
@@ -1110,6 +1191,7 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                         &self.plate_spot_names,
                         self.selected_object.as_ref(),
                         self.color_info.as_ref(),
+                        self.render_error.as_deref(),
                         &mut self.show_tools_panel,
                         self.zoom,
                         &mut self.zoom_hud_expanded,
@@ -1537,7 +1619,12 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: ViewerEvent) {
         match event {
-            ViewerEvent::PreviewReady { page, image } if page == self.page => {
+            ViewerEvent::PreviewReady {
+                page,
+                generation,
+                image,
+            } if render_result_is_current(page, generation, self.page, self.render_generation) => {
+                self.render_error = None;
                 let skia_img = image_to_skia(&image);
                 if let Some(state) = self.state.as_mut() {
                     state.page_image = Some(skia_img);
@@ -1551,7 +1638,12 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 }
                 self.push_log(format!("Preview ready, page {page}"));
             }
-            ViewerEvent::PageReady { page, image } if page == self.page => {
+            ViewerEvent::PageReady {
+                page,
+                generation,
+                image,
+            } if render_result_is_current(page, generation, self.page, self.render_generation) => {
+                self.render_error = None;
                 let skia_img = image_to_skia(&image);
                 if let Some(state) = self.state.as_mut() {
                     state.page_image = Some(skia_img);
@@ -1573,8 +1665,27 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 self.spawn_tile_worker();
                 self.enqueue_visible_tiles();
             }
-            ViewerEvent::PlateReady { page, plate, image }
-                if page == self.page && plate == self.active_plate =>
+            ViewerEvent::RenderFailed {
+                page,
+                generation,
+                message,
+            } if render_result_is_current(page, generation, self.page, self.render_generation) => {
+                let message = format!("Page {} render failed: {message}", page + 1);
+                eprintln!("{message}");
+                self.push_log(message.clone());
+                self.render_error = Some(message);
+                if let Some(state) = self.state.as_ref() {
+                    state.window.set_title("rbv — render failed");
+                    state.window.request_redraw();
+                }
+            }
+            ViewerEvent::PlateReady {
+                page,
+                generation,
+                plate,
+                image,
+            } if render_result_is_current(page, generation, self.page, self.render_generation)
+                && plate == self.active_plate =>
             {
                 let skia_img = image_to_skia(&image);
                 self.plate_image_for = plate;
@@ -1584,9 +1695,13 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 }
                 self.push_log("Plate separation ready".to_string());
             }
-            ViewerEvent::TileReady { key, image }
-                if key.page == self.page
-                    && key.zoom_bucket == crate::tiles::zoom_bucket(self.zoom).0 =>
+            ViewerEvent::TileReady {
+                generation,
+                key,
+                image,
+            } if generation == self.render_generation
+                && key.page == self.page
+                && key.zoom_bucket == crate::tiles::zoom_bucket(self.zoom).0 =>
             {
                 let cached = if let Some(state) = self.state.as_mut() {
                     state.tile_images.insert(key, image_to_skia(&image));
@@ -1600,11 +1715,15 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                     key.page, key.zoom_bucket, key.col, key.row, cached
                 ));
             }
-            ViewerEvent::TileReady { key, .. } => {
+            ViewerEvent::TileReady {
+                generation, key, ..
+            } => {
                 self.push_log(format!(
-                    "Tile stale: p{}b{} (cur p{}b{})",
+                    "Tile stale: g{} p{}b{} (cur g{} p{}b{})",
+                    generation,
                     key.page,
                     key.zoom_bucket,
+                    self.render_generation,
                     self.page,
                     crate::tiles::zoom_bucket(self.zoom).0
                 ));
@@ -1613,11 +1732,12 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 self.push_log(msg);
             }
             ViewerEvent::TileMetrics {
+                generation,
                 dpi,
                 render_ms,
                 img_w,
                 img_h,
-            } => {
+            } if generation == self.render_generation => {
                 self.tile_perf.insert(dpi as u32, (render_ms, img_w, img_h));
                 if self.telemetry_mode {
                     if let Some(state) = self.state.as_ref() {
@@ -1626,36 +1746,48 @@ impl ApplicationHandler<ViewerEvent> for Viewer {
                 }
             }
             ViewerEvent::FileChanged => {
-                if let Ok(new_pipeline) = PdfPipeline::open(&self.file) {
-                    // Compute page_id once; it's Copy so it can be used twice.
-                    let page_id = new_pipeline
-                        .doc()
-                        .get_pages()
-                        .values()
-                        .nth(self.page as usize)
-                        .copied();
+                let new_pipeline = match PdfPipeline::open(&self.file) {
+                    Ok(pipeline) => pipeline,
+                    Err(error) => {
+                        self.push_log(format!(
+                            "File reload deferred — replacement is not readable yet: {error}"
+                        ));
+                        return;
+                    }
+                };
+                self.page_count = new_pipeline.doc().get_pages().len() as u32;
+                self.page = self.page.min(self.page_count.saturating_sub(1));
+                // Compute page_id once; it's Copy so it can be used three times.
+                let page_id = new_pipeline
+                    .doc()
+                    .get_pages()
+                    .values()
+                    .nth(self.page as usize)
+                    .copied();
 
-                    self.page_boxes =
-                        page_id.and_then(|id| PageBoxes::read(new_pipeline.doc(), id).ok());
-                    self.object_tree =
-                        page_id.and_then(|id| build_object_tree(new_pipeline.doc(), id).ok());
-                    self.glyph_outlines =
-                        page_id.and_then(|id| outline_page_text(new_pipeline.doc(), id).ok());
-                    self.plate_spot_names = self
-                        .object_tree
-                        .as_ref()
-                        .map(extract_spot_names)
-                        .unwrap_or_default();
+                self.page_boxes =
+                    page_id.and_then(|id| PageBoxes::read(new_pipeline.doc(), id).ok());
+                self.object_tree =
+                    page_id.and_then(|id| build_object_tree(new_pipeline.doc(), id).ok());
+                self.glyph_outlines =
+                    page_id.and_then(|id| outline_page_text(new_pipeline.doc(), id).ok());
+                self.plate_spot_names = self
+                    .object_tree
+                    .as_ref()
+                    .map(extract_spot_names)
+                    .unwrap_or_default();
 
-                    self.pipeline = Arc::new(new_pipeline);
-                }
+                self.pipeline = Arc::new(new_pipeline);
                 // Page content changed — clear stale selection, plate data, and tiles.
                 self.selected_object = None;
                 self.color_info = None;
                 self.sampling_pdf_pos = None;
+                self.pending_image = None;
+                self.current_image = None;
                 self.tile_sender = None; // drop → worker channel closes → worker exits
                 self.tile_cache.clear();
                 if let Some(state) = self.state.as_mut() {
+                    state.page_image = None;
                     state.plate_image = None;
                     state.tile_images.clear();
                 }
@@ -1778,14 +1910,7 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig, listen: bool) {
             ..config.clone()
         };
         let full = config.clone();
-        std::thread::spawn(move || {
-            if let Ok(img) = pipeline.render_page(page, &preview) {
-                let _ = proxy.send_event(ViewerEvent::PreviewReady { page, image: img });
-            }
-            if let Ok(img) = pipeline.render_page(page, &full) {
-                let _ = proxy.send_event(ViewerEvent::PageReady { page, image: img });
-            }
-        });
+        spawn_render_task(pipeline, proxy, page, 0, preview, full);
     }
 
     let proxy_watch = proxy.clone();
@@ -1874,6 +1999,8 @@ pub fn run(file: PathBuf, page: u32, config: RenderConfig, listen: bool) {
         tile_sender: None,
         telemetry_mode: false,
         tile_perf: std::collections::HashMap::new(),
+        render_generation: 0,
+        render_error: None,
     };
 
     event_loop.run_app(&mut viewer).expect("run app");
@@ -1895,6 +2022,7 @@ fn build_egui_ui(
     spot_names: &[String],
     selected: Option<&PageObject>,
     color_info: Option<&ColorPanel>,
+    render_error: Option<&str>,
     show_panel: &mut bool,
     zoom: f32,
     zoom_hud_expanded: &mut bool,
@@ -1904,6 +2032,19 @@ fn build_egui_ui(
     // Used to test whether the pointer is over any egui surface this frame so
     // the caller can gate PDF pan/selection next frame.
     let ptr = ctx.pointer_hover_pos();
+
+    let error_response = render_error.and_then(|message| {
+        egui::Window::new("Render failed")
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.colored_label(ui.visuals().error_fg_color, message);
+            })
+    });
+    let over_error = error_response
+        .as_ref()
+        .is_some_and(|response| ptr.is_some_and(|p| response.response.rect.contains(p)));
 
     // ── Zoom HUD — always visible at bottom-left ──────────────────────────────
     let hud_resp = egui::Area::new(egui::Id::new("zoom_hud"))
@@ -1994,7 +2135,7 @@ fn build_egui_ui(
 
     // ── Side panel — only when the toggle is active ───────────────────────────
     if !*show_panel {
-        return over_btn || over_hud;
+        return over_btn || over_hud || over_error;
     }
 
     let panel_resp = egui::Panel::right("prepress_tools")
@@ -2251,7 +2392,7 @@ fn build_egui_ui(
 
     // Return true if the pointer was inside the panel this frame.
     let over_panel = ptr.map_or(false, |p| panel_resp.response.rect.contains(p));
-    over_btn || over_panel
+    over_btn || over_hud || over_error || over_panel
 }
 
 fn show_pdf_color(ui: &mut egui::Ui, color: &PdfColor) {
@@ -2292,6 +2433,13 @@ fn show_pdf_color(ui: &mut egui::Ui, color: &PdfColor) {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+
+    #[test]
+    fn stale_render_generations_are_rejected_even_on_the_same_page() {
+        assert!(super::render_result_is_current(2, 8, 2, 8));
+        assert!(!super::render_result_is_current(2, 7, 2, 8));
+        assert!(!super::render_result_is_current(1, 8, 2, 8));
+    }
 
     // ── Navigation helpers (mirrors Viewer::navigate_to_page / take_digit_step) ─
 
