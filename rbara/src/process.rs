@@ -2,8 +2,9 @@ use crate::tui::app::{ActionLogEntry, LogStatus};
 use crate::tui::app::{App, ColorSpaceInfo, MenuAction};
 use chrono;
 use core::f64;
-use rustybara::pages::PageBoxes;
 use rustybara::PdfPipeline;
+use rustybara::pages::PageBoxes;
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -29,13 +30,51 @@ pub fn output_path(
     dir.join(format!("{}_processed.{}", (stem).to_string_lossy(), ext))
 }
 
+fn collision_key(path: &Path) -> String {
+    let key = path.to_string_lossy();
+    if cfg!(windows) {
+        key.to_lowercase()
+    } else {
+        key.into_owned()
+    }
+}
+
+fn plan_output_paths(
+    input: &[PathBuf],
+    output_dir: &Option<PathBuf>,
+    new_ext: Option<&str>,
+    overwrite: bool,
+) -> rustybara::Result<Vec<PathBuf>> {
+    let outputs: Vec<PathBuf> = input
+        .iter()
+        .map(|path| output_path(path, output_dir, new_ext, overwrite))
+        .collect();
+    let mut seen: HashMap<String, &Path> = HashMap::new();
+
+    for (source, output) in input.iter().zip(&outputs) {
+        if let Some(previous) = seen.insert(collision_key(output), source) {
+            return Err(rustybara::Error::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "output collision: '{}' and '{}' both map to '{}'",
+                    previous.display(),
+                    source.display(),
+                    output.display()
+                ),
+            )));
+        }
+    }
+
+    Ok(outputs)
+}
+
 pub fn run_trim(
     input: Vec<PathBuf>,
     output: Option<PathBuf>,
     overwrite: bool,
 ) -> rustybara::Result<()> {
-    for path in &input {
-        let out = output_path(path, &output, None, overwrite);
+    let outputs = plan_output_paths(&input, &output, None, overwrite)?;
+    for (path, out) in input.iter().zip(outputs) {
         PdfPipeline::open(path)?.trim()?.save_pdf(&out)?;
         println!("{} → {}", path.display(), out.display());
     }
@@ -48,8 +87,8 @@ pub fn run_resize(
     output: Option<PathBuf>,
     overwrite: bool,
 ) -> rustybara::Result<()> {
-    for path in &input {
-        let out = output_path(path, &output, None, overwrite);
+    let outputs = plan_output_paths(&input, &output, None, overwrite)?;
+    for (path, out) in input.iter().zip(outputs) {
         PdfPipeline::open(path)?.resize(bleed)?.save_pdf(&out)?;
         println!("{} → {}", path.display(), out.display());
     }
@@ -68,8 +107,8 @@ pub fn run_remap_color(
         .try_into()
         .expect("--from requires exactly 4 values");
     let to: [f64; 4] = to_vec.try_into().expect("--to requires exactly 4 values");
-    for path in &input {
-        let out = output_path(path, &output, None, overwrite);
+    let outputs = plan_output_paths(&input, &output, None, overwrite)?;
+    for (path, out) in input.iter().zip(outputs) {
         PdfPipeline::open(path)?
             .remap_color(from, to, tolerance)?
             .save_pdf(&out)?;
@@ -101,15 +140,25 @@ pub fn run_image(
         render_form_data: false,
     };
 
-    for path in &input {
+    if overwrite {
+        return Err(rustybara::Error::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "image export cannot overwrite a PDF source; choose an output directory instead",
+        )));
+    }
+
+    let base_outputs = plan_output_paths(&input, &output, Some(fmt.extension()), false)?;
+    for (path, base_output) in input.iter().zip(base_outputs) {
         let pipeline = PdfPipeline::open(path)?;
         for page in 0..pipeline.page_count() as u32 {
-            let out = output_path(path, &output, Some(fmt.extension()), overwrite);
             let out = if pipeline.page_count() > 1 {
-                let stem = out.file_stem().unwrap_or_default().to_string_lossy();
-                out.with_file_name(format!("{}_{}.{}", stem, page + 1, fmt.extension()))
+                let stem = base_output
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                base_output.with_file_name(format!("{}_{}.{}", stem, page + 1, fmt.extension()))
             } else {
-                out
+                base_output.clone()
             };
             pipeline.save_page_image(page, &out, &fmt, &config, 90)?;
             print!("{} page {} → {}", path.display(), page + 1, out.display());
@@ -198,31 +247,19 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>, Act
 
     match app.selected_action {
         MenuAction::TrimMarks => {
-            let mut out_paths = Vec::new();
-            for path in &input {
-                let out = if overwrite {
-                    path.clone()
-                } else {
-                    output_path(path, output_dir, None, false)
-                };
-                PdfPipeline::open(path)?.trim()?.save_pdf(&out)?;
-                out_paths.push(out);
+            let out_paths = plan_output_paths(&input, output_dir, None, overwrite)?;
+            for (path, out) in input.iter().zip(&out_paths) {
+                PdfPipeline::open(path)?.trim()?.save_pdf(out)?;
             }
             action_entry.action = "TrimMarks".to_string();
             Ok((format!("Trimmed {count} file(s)"), out_paths, action_entry))
         }
         MenuAction::ResizeToBleed => {
-            let mut out_paths = Vec::new();
-            for path in &input {
-                let out = if overwrite {
-                    path.clone()
-                } else {
-                    output_path(path, output_dir, None, false)
-                };
+            let out_paths = plan_output_paths(&input, output_dir, None, overwrite)?;
+            for (path, out) in input.iter().zip(&out_paths) {
                 PdfPipeline::open(path)?
                     .resize(app.params.bleed_pts)?
-                    .save_pdf(&out)?;
-                out_paths.push(out);
+                    .save_pdf(out)?;
             }
             action_entry.action = format!("ResizeToBleed ({})", app.params.bleed_pts);
             let bleed_inch = app.params.bleed_pts / 72.0;
@@ -248,16 +285,24 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>, Act
                 render_annotations: false,
                 render_form_data: false,
             };
+            let base_outputs = plan_output_paths(&input, output_dir, Some(fmt.extension()), false)?;
             let mut total = 0u32;
-            for path in &input {
+            for (path, base_output) in input.iter().zip(base_outputs) {
                 let pipeline = PdfPipeline::open(path)?;
                 for page in 0..pipeline.page_count() as u32 {
-                    let out = output_path(path, output_dir, Some(fmt.extension()), false);
                     let out = if pipeline.page_count() > 1 {
-                        let stem = out.file_stem().unwrap_or_default().to_string_lossy();
-                        out.with_file_name(format!("{}_{}.{}", stem, page + 1, fmt.extension()))
+                        let stem = base_output
+                            .file_stem()
+                            .unwrap_or_default()
+                            .to_string_lossy();
+                        base_output.with_file_name(format!(
+                            "{}_{}.{}",
+                            stem,
+                            page + 1,
+                            fmt.extension()
+                        ))
                     } else {
-                        out
+                        base_output.clone()
                     };
                     pipeline.save_page_image(page, &out, &fmt, &config, 90)?;
                     total += 1;
@@ -274,21 +319,15 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>, Act
             ))
         }
         MenuAction::RemapColors => {
-            let mut out_paths = Vec::new();
-            for path in &input {
-                let out = if overwrite {
-                    path.clone()
-                } else {
-                    output_path(path, output_dir, None, false)
-                };
+            let out_paths = plan_output_paths(&input, output_dir, None, overwrite)?;
+            for (path, out) in input.iter().zip(&out_paths) {
                 PdfPipeline::open(path)?
                     .remap_color(
                         app.params.remap_from,
                         app.params.remap_to,
                         app.params.remap_tolerance,
                     )?
-                    .save_pdf(&out)?;
-                out_paths.push(out);
+                    .save_pdf(out)?;
             }
             action_entry.action = "RemapColors".to_string();
             Ok((format!("Remapped {count} file(s)"), out_paths, action_entry))
@@ -302,5 +341,36 @@ pub fn run_tui_action(app: &App) -> rustybara::Result<(String, Vec<PathBuf>, Act
             ))
         }
         _ => Ok(("Unknown action".into(), Vec::new(), action_entry)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_overwrite_is_rejected_before_opening_the_source() {
+        let result = run_image(
+            vec![PathBuf::from("single-page.pdf")],
+            None,
+            Some("png".to_string()),
+            150,
+            true,
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("cannot overwrite"));
+    }
+
+    #[test]
+    fn common_output_directory_rejects_same_stem_collisions() {
+        let inputs = vec![
+            PathBuf::from("first/report.pdf"),
+            PathBuf::from("second/report.pdf"),
+        ];
+        let result = plan_output_paths(&inputs, &Some(PathBuf::from("output")), None, false);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("output collision"));
     }
 }

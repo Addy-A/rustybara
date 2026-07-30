@@ -1,5 +1,7 @@
 use crate::geometry::Rect;
 use lopdf::{Document, Object, ObjectId};
+use std::collections::HashSet;
+use std::io;
 
 /// Represents the various bounding boxes that define the dimensions and boundaries of a PDF page.
 ///
@@ -72,25 +74,15 @@ impl PageBoxes {
     /// println!("MediaBox: {:?}", page_boxes.media_box);
     /// ```
     pub fn read(doc: &Document, page_id: ObjectId) -> crate::Result<Self> {
-        let page_dict = doc.get_dictionary(page_id)?;
-        let media_box = arr_to_rect(page_dict.get(b"MediaBox")?.as_array()?);
-        let trim_box = page_dict
-            .get(b"TrimBox")
-            .and_then(|obj| obj.as_array())
-            .map(|a| arr_to_rect(a))
-            .ok();
-
-        let bleed_box = page_dict
-            .get(b"BleedBox")
-            .and_then(|obj| obj.as_array())
-            .map(|a| arr_to_rect(a))
-            .ok();
-
-        let crop_box = page_dict
-            .get(b"CropBox")
-            .and_then(|obj| obj.as_array())
-            .map(|a| arr_to_rect(a))
-            .ok();
+        let media_box = read_page_box(doc, page_id, b"MediaBox", true)?.ok_or_else(|| {
+            crate::Error::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "PDF page has no MediaBox in its page-tree ancestry",
+            ))
+        })?;
+        let trim_box = read_page_box(doc, page_id, b"TrimBox", false)?;
+        let bleed_box = read_page_box(doc, page_id, b"BleedBox", false)?;
+        let crop_box = read_page_box(doc, page_id, b"CropBox", true)?;
 
         Ok(PageBoxes {
             media_box,
@@ -234,19 +226,127 @@ pub fn set_trim_boxes(doc: &mut Document, bleed_pts: f64) -> crate::Result<()> {
     Ok(())
 }
 
-fn arr_to_rect(arr: &[Object]) -> Rect {
-    Rect::from_corners(
-        object_to_f64(&arr[0]),
-        object_to_f64(&arr[1]),
-        object_to_f64(&arr[2]),
-        object_to_f64(&arr[3]),
-    )
+fn read_page_box(
+    doc: &Document,
+    page_id: ObjectId,
+    key: &[u8],
+    inheritable: bool,
+) -> crate::Result<Option<Rect>> {
+    let mut current_id = page_id;
+    let mut visited = HashSet::new();
+
+    loop {
+        if !visited.insert(current_id) {
+            return Err(crate::Error::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "cycle detected in PDF page-tree ancestry",
+            )));
+        }
+
+        let dictionary = doc.get_dictionary(current_id)?;
+        if let Ok(value) = dictionary.get(key) {
+            let (_, resolved) = doc.dereference(value)?;
+            return Ok(Some(arr_to_rect(resolved.as_array()?)?));
+        }
+        if !inheritable {
+            return Ok(None);
+        }
+
+        current_id = match dictionary.get(b"Parent").and_then(Object::as_reference) {
+            Ok(parent_id) => parent_id,
+            Err(_) => return Ok(None),
+        };
+    }
+}
+
+fn arr_to_rect(arr: &[Object]) -> crate::Result<Rect> {
+    if arr.len() != 4 {
+        return Err(crate::Error::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "page box must contain exactly four numbers, found {}",
+                arr.len()
+            ),
+        )));
+    }
+
+    Ok(Rect::from_corners(
+        try_object_to_f64(&arr[0])?,
+        try_object_to_f64(&arr[1])?,
+        try_object_to_f64(&arr[2])?,
+        try_object_to_f64(&arr[3])?,
+    ))
+}
+
+fn try_object_to_f64(obj: &lopdf::Object) -> crate::Result<f64> {
+    match obj {
+        lopdf::Object::Integer(i) => Ok(*i as f64),
+        lopdf::Object::Real(r) => Ok(*r as f64),
+        _ => Err(crate::Error::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("page box contains a non-numeric value: {obj:?}"),
+        ))),
+    }
 }
 
 pub(crate) fn object_to_f64(obj: &lopdf::Object) -> f64 {
     match obj {
-        lopdf::Object::Integer(i) => *i as f64,
-        lopdf::Object::Real(r) => *r as f64,
-        _ => panic!("expected numeric object, got {:?}", obj),
+        lopdf::Object::Integer(value) => *value as f64,
+        lopdf::Object::Real(value) => *value as f64,
+        _ => panic!("expected numeric object, got {obj:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lopdf::{Object, dictionary};
+
+    fn document_with_page(
+        page_entries: lopdf::Dictionary,
+        media_box: Object,
+    ) -> (Document, ObjectId) {
+        let mut document = Document::with_version("1.5");
+        let pages_id = document.new_object_id();
+        let page_id = document.add_object(Object::Dictionary(page_entries));
+        document.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![Object::Reference(page_id)],
+                "Count" => 1,
+                "MediaBox" => media_box,
+            }),
+        );
+        document
+            .get_dictionary_mut(page_id)
+            .unwrap()
+            .set("Parent", Object::Reference(pages_id));
+        (document, page_id)
+    }
+
+    #[test]
+    fn media_box_is_inherited_from_pages_ancestor() {
+        let (document, page_id) = document_with_page(
+            dictionary! { "Type" => "Page" },
+            Object::Array(vec![0.into(), 0.into(), 612.into(), 792.into()]),
+        );
+
+        let boxes = PageBoxes::read(&document, page_id).unwrap();
+        assert_eq!(boxes.media_box.x, 0.0);
+        assert_eq!(boxes.media_box.y, 0.0);
+        assert_eq!(boxes.media_box.width, 612.0);
+        assert_eq!(boxes.media_box.height, 792.0);
+    }
+
+    #[test]
+    fn malformed_page_box_returns_error_instead_of_panicking() {
+        let (document, page_id) = document_with_page(
+            dictionary! { "Type" => "Page" },
+            Object::Array(vec![0.into(), 0.into(), 612.into()]),
+        );
+
+        let error = PageBoxes::read(&document, page_id).err().unwrap();
+        assert!(error.to_string().contains("exactly four"));
     }
 }

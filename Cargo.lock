@@ -5191,6 +5191,7 @@ dependencies = [
  "rayon",
  "rustybara-icc",
  "sha2 0.11.0",
+ "tempfile",
  "ttf-parser",
  "uuid",
  "webp",

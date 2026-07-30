@@ -1,6 +1,13 @@
 /// Tile size in pixels for both width and height.
 pub const TILE_SIZE: u32 = 512;
 
+fn can_reuse_pdfium_binding(error: &pdfium_render::prelude::PdfiumError) -> bool {
+    matches!(
+        error,
+        pdfium_render::prelude::PdfiumError::PdfiumLibraryBindingsAlreadyInitialized
+    )
+}
+
 /// Map a viewer zoom level to a render DPI bucket.
 ///
 /// Returns `(bucket_index, dpi)`. Bucket 0 is the base level (no tiling);
@@ -138,11 +145,15 @@ impl RenderWorker {
                 }
                 // Binding already loaded in this process (e.g. by the main render thread).
                 // Pdfium (unit struct default) reuses the existing global binding.
-                Err(e) => {
+                Err(error) if can_reuse_pdfium_binding(&error) => {
                     on_log(format!(
-                        "Tile worker: reusing existing pdfium binding ({e})"
+                        "Tile worker: reusing existing pdfium binding ({error})"
                     ));
                     Pdfium
+                }
+                Err(error) => {
+                    on_log(format!("Tile worker: pdfium binding failed — {error}"));
+                    return;
                 }
             };
 
@@ -335,6 +346,16 @@ mod tests {
         assert_eq!(zoom_bucket(39.99).0, 6);
         assert_eq!(zoom_bucket(40.0).0, 7);
         assert_eq!(zoom_bucket(50.0).0, 7);
+    }
+
+    #[test]
+    fn only_an_initialized_pdfium_binding_can_be_reused() {
+        use pdfium_render::prelude::PdfiumError;
+
+        assert!(can_reuse_pdfium_binding(
+            &PdfiumError::PdfiumLibraryBindingsAlreadyInitialized
+        ));
+        assert!(!can_reuse_pdfium_binding(&PdfiumError::UnrecognizedPath));
     }
 
     #[test]

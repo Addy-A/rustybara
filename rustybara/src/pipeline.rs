@@ -9,6 +9,42 @@ use image::DynamicImage;
 use lopdf::Document;
 use std::path::Path;
 
+#[cfg(not(target_arch = "wasm32"))]
+fn atomic_write_file(
+    path: &Path,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".rustybara-")
+        .tempfile_in(parent)?;
+
+    if let Ok(metadata) = std::fs::metadata(path) {
+        temporary
+            .as_file()
+            .set_permissions(metadata.permissions())?;
+    }
+
+    write(temporary.as_file_mut())?;
+    temporary.as_file_mut().flush()?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+#[cfg(feature = "raster")]
+fn can_reuse_pdfium_binding(error: &pdfium_render::prelude::PdfiumError) -> bool {
+    matches!(
+        error,
+        pdfium_render::prelude::PdfiumError::PdfiumLibraryBindingsAlreadyInitialized
+    )
+}
+
 /// Describes the overall color operator usage found across a PDF document's content streams.
 ///
 /// Returned by [`PdfPipeline::detect_color_space`]. Distinct from ICC profile classification,
@@ -25,6 +61,146 @@ pub enum DocumentColorKind {
     PureRGB,
     Mixed,
     Unknown,
+}
+
+#[derive(Default)]
+struct DocumentColorUsage {
+    has_cmyk: bool,
+    has_rgb: bool,
+}
+
+impl DocumentColorUsage {
+    fn classify_name(&mut self, name: &[u8]) {
+        match name {
+            b"DeviceCMYK" => self.has_cmyk = true,
+            b"DeviceRGB" | b"CalRGB" => self.has_rgb = true,
+            _ => {}
+        }
+    }
+
+    fn kind(&self) -> DocumentColorKind {
+        match (self.has_cmyk, self.has_rgb) {
+            (true, true) => DocumentColorKind::Mixed,
+            (true, false) => DocumentColorKind::PureCMYK,
+            (false, true) => DocumentColorKind::PureRGB,
+            (false, false) => DocumentColorKind::Unknown,
+        }
+    }
+}
+
+fn classify_color_space_object(
+    doc: &Document,
+    object: &lopdf::Object,
+    usage: &mut DocumentColorUsage,
+) {
+    let Ok((_, resolved)) = doc.dereference(object) else {
+        return;
+    };
+
+    match resolved {
+        lopdf::Object::Name(name) => usage.classify_name(name),
+        lopdf::Object::Array(items) => {
+            let Some(first) = items.first() else { return };
+            let Ok((_, lopdf::Object::Name(family))) = doc.dereference(first) else {
+                return;
+            };
+            match family.as_slice() {
+                b"ICCBased" => {
+                    if let Some(profile) = items.get(1)
+                        && let Ok((_, lopdf::Object::Stream(stream))) = doc.dereference(profile)
+                    {
+                        match stream.dict.get(b"N").and_then(lopdf::Object::as_i64) {
+                            Ok(3) => usage.has_rgb = true,
+                            Ok(4) => usage.has_cmyk = true,
+                            _ => {}
+                        }
+                    }
+                }
+                b"Indexed" | b"Pattern" => {
+                    if let Some(base) = items.get(1) {
+                        classify_color_space_object(doc, base, usage);
+                    }
+                }
+                b"Separation" | b"DeviceN" => {
+                    if let Some(alternate) = items.get(2) {
+                        classify_color_space_object(doc, alternate, usage);
+                    }
+                }
+                other => usage.classify_name(other),
+            }
+        }
+        _ => {}
+    }
+}
+
+fn scan_resource_colors(
+    doc: &Document,
+    resources: &lopdf::Dictionary,
+    usage: &mut DocumentColorUsage,
+    visited: &mut std::collections::HashSet<lopdf::ObjectId>,
+) {
+    if let Ok(color_spaces) = resources.get(b"ColorSpace")
+        && let Ok((_, resolved)) = doc.dereference(color_spaces)
+        && let Ok(dictionary) = resolved.as_dict()
+    {
+        for (_, color_space) in dictionary.iter() {
+            classify_color_space_object(doc, color_space, usage);
+        }
+    }
+
+    if let Ok(xobjects) = resources.get(b"XObject")
+        && let Ok((_, resolved)) = doc.dereference(xobjects)
+        && let Ok(dictionary) = resolved.as_dict()
+    {
+        for (_, xobject) in dictionary.iter() {
+            let Ok((object_id, lopdf::Object::Stream(stream))) = doc.dereference(xobject) else {
+                continue;
+            };
+            if let Some(object_id) = object_id
+                && !visited.insert(object_id)
+            {
+                continue;
+            }
+
+            match stream.dict.get(b"Subtype").and_then(lopdf::Object::as_name) {
+                Ok(b"Image") => {
+                    if let Ok(color_space) = stream.dict.get(b"ColorSpace") {
+                        classify_color_space_object(doc, color_space, usage);
+                    }
+                }
+                Ok(b"Form") => {
+                    if let Ok(form_resources) = stream.dict.get(b"Resources")
+                        && let Ok((_, resolved)) = doc.dereference(form_resources)
+                        && let Ok(dictionary) = resolved.as_dict()
+                    {
+                        scan_resource_colors(doc, dictionary, usage, visited);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if let Ok(shadings) = resources.get(b"Shading")
+        && let Ok((_, resolved)) = doc.dereference(shadings)
+        && let Ok(dictionary) = resolved.as_dict()
+    {
+        for (_, shading) in dictionary.iter() {
+            let Ok((_, resolved)) = doc.dereference(shading) else {
+                continue;
+            };
+            let shading_dictionary = match resolved {
+                lopdf::Object::Dictionary(dictionary) => Some(dictionary),
+                lopdf::Object::Stream(stream) => Some(&stream.dict),
+                _ => None,
+            };
+            if let Some(dictionary) = shading_dictionary
+                && let Ok(color_space) = dictionary.get(b"ColorSpace")
+            {
+                classify_color_space_object(doc, color_space, usage);
+            }
+        }
+    }
 }
 
 /// High-level pipeline for PDF preprocessing operations.
@@ -427,8 +603,8 @@ impl PdfPipeline {
     pub fn outline_text(&mut self) -> crate::Result<&mut Self> {
         use crate::outline::paths::outline_page_text;
         use crate::outline::writer::glyphs_to_content_stream;
-        use lopdf::content::Content;
         use lopdf::Object;
+        use lopdf::content::Content;
 
         let page_ids: Vec<lopdf::ObjectId> = self.doc.get_pages().values().copied().collect();
         for page_id in page_ids {
@@ -518,32 +694,34 @@ impl PdfPipeline {
     ///
     /// # Notes
     ///
-    /// Pages whose content stream cannot be decoded are silently skipped.
+    /// Scans direct RGB/CMYK painting operators plus page color-space, image,
+    /// form, and shading resources. Content streams that cannot be decoded are
+    /// skipped while their resources are still inspected.
     pub fn detect_color_space(doc: &Document) -> DocumentColorKind {
-        let mut has_cmyk = false;
-        let mut has_rgb = false;
+        let mut usage = DocumentColorUsage::default();
+        let mut visited_resources = std::collections::HashSet::new();
 
         for &page_id in doc.get_pages().values() {
-            let Ok(content) = doc.get_and_decode_page_content(page_id) else {
-                continue;
-            };
-            for op in &content.operations {
-                match op.operator.as_str() {
-                    "k" | "K" => has_cmyk = true,
-                    "rg" | "RG" => has_rgb = true,
-                    _ => {}
+            if let Ok(content) = doc.get_and_decode_page_content(page_id) {
+                for op in &content.operations {
+                    match op.operator.as_str() {
+                        "k" | "K" => usage.has_cmyk = true,
+                        "rg" | "RG" => usage.has_rgb = true,
+                        _ => {}
+                    }
                 }
-                if has_cmyk && has_rgb {
-                    return DocumentColorKind::Mixed;
-                }
+            }
+
+            if let Ok((Some(resources), _)) = doc.get_page_resources(page_id) {
+                scan_resource_colors(doc, resources, &mut usage, &mut visited_resources);
+            }
+
+            if usage.has_cmyk && usage.has_rgb {
+                return DocumentColorKind::Mixed;
             }
         }
 
-        match (has_cmyk, has_rgb) {
-            (true, false) => DocumentColorKind::PureCMYK,
-            (false, true) => DocumentColorKind::PureRGB,
-            _ => DocumentColorKind::Unknown,
-        }
+        usage.kind()
     }
 
     /// Remaps a specific CMYK color to another color throughout the document.
@@ -605,8 +783,8 @@ impl PdfPipeline {
     /// Returns an error if any page's content stream cannot be decoded or re-encoded.
     #[cfg(feature = "color")]
     pub fn flatten_spots(&mut self) -> crate::Result<u32> {
-        use rustybara_icc::pdf::flatten_spot_colors;
         use rustybara_icc::RenderingIntent;
+        use rustybara_icc::pdf::flatten_spot_colors;
         Ok(flatten_spot_colors(
             &mut self.doc,
             None,
@@ -620,8 +798,8 @@ impl PdfPipeline {
     /// that profile. When `None`, falls back to the bundled US Web Coated SWOP v2 profile.
     #[cfg(feature = "color")]
     pub fn flatten_spots_with_icc(&mut self, dst_icc: Option<&[u8]>) -> crate::Result<u32> {
-        use rustybara_icc::pdf::flatten_spot_colors;
         use rustybara_icc::RenderingIntent;
+        use rustybara_icc::pdf::flatten_spot_colors;
         Ok(flatten_spot_colors(
             &mut self.doc,
             dst_icc,
@@ -654,7 +832,7 @@ impl PdfPipeline {
         intent: &str,
     ) -> crate::Result<()> {
         use rustybara_icc::pdf::PdfColorConverter;
-        use rustybara_icc::{profiles, ColorTransform, IccError, RenderingIntent};
+        use rustybara_icc::{ColorTransform, IccError, RenderingIntent, profiles};
 
         let from = profiles::by_name(from_profile)
             .ok_or_else(|| IccError::Profile(format!("unknown source profile: {from_profile}")))?;
@@ -712,6 +890,10 @@ impl PdfPipeline {
     ///
     /// Returns an error if the file cannot be written or the document cannot be serialized.
     pub fn save_pdf(&mut self, path: impl AsRef<Path>) -> crate::Result<()> {
+        let path = path.as_ref();
+        #[cfg(not(target_arch = "wasm32"))]
+        atomic_write_file(path, |file| self.doc.save_to(file)).map_err(crate::Error::Io)?;
+        #[cfg(target_arch = "wasm32")]
         self.doc.save(path)?;
         Ok(())
     }
@@ -762,7 +944,15 @@ impl PdfPipeline {
             .and_then(|lib| Pdfium::bind_to_library(lib).ok())
             .map_or_else(|| Pdfium::bind_to_system_library(), Ok);
 
-        let pdfium = Pdfium::new(bindings_result.map_err(crate::Error::Render)?);
+        let pdfium = match bindings_result {
+            Ok(bindings) => Pdfium::new(bindings),
+            // Pdfium can only be bound once per process. Reuse that known-good
+            // global binding, but propagate every other error (including a
+            // missing runtime library) instead of waiting on an uninitialized
+            // global binding forever.
+            Err(error) if can_reuse_pdfium_binding(&error) => Pdfium,
+            Err(error) => return Err(error.into()),
+        };
 
         let pdf_doc = pdfium.load_pdf_from_byte_vec(buf, None)?;
         let page = pdf_doc.pages().get(page_num as PdfPageIndex)?;
@@ -817,10 +1007,58 @@ impl PdfPipeline {
 mod tests {
     use super::*;
     use crate::pages::PageBoxes;
+    use lopdf::{Object, Stream, dictionary};
 
     fn fixture() -> std::path::PathBuf {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/pdf_test_data_print_v2.pdf")
+    }
+
+    fn document_with_image_color_spaces(color_spaces: &[&[u8]]) -> Document {
+        let mut document = Document::with_version("1.5");
+        let mut xobjects = lopdf::Dictionary::new();
+        for (index, color_space) in color_spaces.iter().enumerate() {
+            let image_id = document.add_object(Stream::new(
+                dictionary! {
+                    "Type" => "XObject",
+                    "Subtype" => "Image",
+                    "Width" => 1,
+                    "Height" => 1,
+                    "BitsPerComponent" => 8,
+                    "ColorSpace" => Object::Name(color_space.to_vec()),
+                },
+                vec![0, 0, 0, 0],
+            ));
+            xobjects.set(
+                format!("Im{index}").into_bytes(),
+                Object::Reference(image_id),
+            );
+        }
+
+        let resources = dictionary! {
+            "XObject" => Object::Dictionary(xobjects),
+        };
+        let pages_id = document.new_object_id();
+        let page_id = document.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => Object::Reference(pages_id),
+            "MediaBox" => vec![0.into(), 0.into(), 100.into(), 100.into()],
+            "Resources" => Object::Dictionary(resources),
+        });
+        document.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => vec![Object::Reference(page_id)],
+                "Count" => 1,
+            }),
+        );
+        let catalog_id = document.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => Object::Reference(pages_id),
+        });
+        document.trailer.set("Root", Object::Reference(catalog_id));
+        document
     }
 
     #[test]
@@ -833,6 +1071,24 @@ mod tests {
     fn open_nonexistent_fails() {
         let err = PdfPipeline::open("no_such_file.pdf");
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn detects_rgb_in_image_only_pdf() {
+        let document = document_with_image_color_spaces(&[b"DeviceRGB"]);
+        assert!(matches!(
+            PdfPipeline::detect_color_space(&document),
+            DocumentColorKind::PureRGB
+        ));
+    }
+
+    #[test]
+    fn detects_mixed_color_spaces_across_image_resources() {
+        let document = document_with_image_color_spaces(&[b"DeviceRGB", b"DeviceCMYK"]);
+        assert!(matches!(
+            PdfPipeline::detect_color_space(&document),
+            DocumentColorKind::Mixed
+        ));
     }
 
     #[test]
@@ -947,6 +1203,24 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn atomic_write_failure_preserves_existing_file() {
+        use std::io::{Error, Write};
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("document.pdf");
+        std::fs::write(&target, b"original").unwrap();
+
+        let result = atomic_write_file(&target, |file| {
+            file.write_all(b"partial replacement")?;
+            Err(Error::other("simulated serialization failure"))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"original");
+    }
+
+    #[test]
     fn trim_then_resize_pipeline() {
         let mut p = PdfPipeline::open(fixture()).unwrap();
         let out = std::env::temp_dir().join("rustybara_pipeline_trim_resize.pdf");
@@ -1025,5 +1299,43 @@ mod tests {
         let img = p.render_page(0, &config).unwrap();
         assert!(img.width() > 0);
         assert!(img.height() > 0);
+    }
+
+    /// Regression guard for the pdfium binding fallback (v0.1.9 pages>1 bug).
+    ///
+    /// pdfium can only be bound once per process, so the *second* `render_page`
+    /// call must fall back to reusing the existing global binding instead of
+    /// erroring. The v0.1.9 regression made a re-binding failure fatal, which
+    /// broke every render after the first — export stopped after page 1 and rbv
+    /// could only display the first page.
+    #[test]
+    #[cfg(feature = "raster")]
+    #[ignore = "requires pdfium runtime library"]
+    fn render_page_twice_in_one_process() {
+        let p = PdfPipeline::open(fixture()).unwrap();
+        let config = RenderConfig::default();
+
+        let first = p.render_page(0, &config).unwrap();
+        assert!(first.width() > 0);
+
+        let second = p
+            .render_page(0, &config)
+            .expect("second render must reuse the existing pdfium binding");
+        assert_eq!(
+            (second.width(), second.height()),
+            (first.width(), first.height()),
+            "repeat render of the same page must produce identical dimensions"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "raster")]
+    fn only_an_initialized_pdfium_binding_can_be_reused() {
+        use pdfium_render::prelude::PdfiumError;
+
+        assert!(can_reuse_pdfium_binding(
+            &PdfiumError::PdfiumLibraryBindingsAlreadyInitialized
+        ));
+        assert!(!can_reuse_pdfium_binding(&PdfiumError::UnrecognizedPath));
     }
 }
