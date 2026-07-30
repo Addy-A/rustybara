@@ -11,8 +11,10 @@ on:
 jobs:
   build-wasm:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust wasm32 target
         run: |
@@ -26,11 +28,15 @@ jobs:
         working-directory: rustybara-wasm
         run: wasm-pack build --target web --out-dir pkg --release
 
+      - name: Checkout website repository
+        uses: actions/checkout@v5
+        with:
+          repository: Addy-A/rustybara-website
+          token: ${{ secrets.WEBSITE_DEPLOY_TOKEN }}
+          path: _website
+
       - name: Deploy wasm artifact to website repo
-        env:
-          DEPLOY_TOKEN: ${{ secrets.WEBSITE_DEPLOY_TOKEN }}
         run: |
-          git clone --depth=1 https://x-access-token:${DEPLOY_TOKEN}@github.com/Addy-A/rustybara-website.git _website
           mkdir -p _website/static/wasm _website/static/samples
           cp rustybara-wasm/pkg/rustybara_wasm.js      _website/static/wasm/
           cp rustybara-wasm/pkg/rustybara_wasm_bg.wasm _website/static/wasm/
