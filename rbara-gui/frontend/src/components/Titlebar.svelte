@@ -6,7 +6,7 @@
 <div class="titlebar">
   <span class="app-name">rustybara</span>
   <span class="app-sub">— Prepress Toolkit</span>
-  <span class="version-badge">v0.1.8-alpha</span>
+  <span class="version-badge">v0.1.9-alpha</span>
 </div>
 
 <style>

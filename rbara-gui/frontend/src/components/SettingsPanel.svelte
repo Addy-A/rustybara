@@ -1,5 +1,6 @@
 <script>
   import { useAppState } from '../lib/context.js'
+  import { RESERVED_KEYS } from '../lib/shortcuts.js'
   import { themes, sansFonts, monoFonts, applyTheme } from '../lib/themes.js'
   const app = useAppState()
 
@@ -83,6 +84,7 @@
 
   function conflictFor(id, key) {
     if (!key) return null
+    if (RESERVED_KEYS.includes(key)) return 'reserved key'
     for (const def of ACTION_DEFS) {
       if (def.id === id) continue
       if (effectiveKey(def.id) === key) return def.label

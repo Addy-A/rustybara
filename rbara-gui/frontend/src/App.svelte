@@ -4,6 +4,7 @@
   import * as api from './lib/api.js'
   import { sizeExceedsLimit } from './lib/resource.js'
   import { quips as builtinQuips, randomQuip } from './lib/quips.js'
+  import { RESERVED_KEYS } from './lib/shortcuts.js'
   import { applyTheme } from './lib/themes.js'
   import Titlebar from './components/Titlebar.svelte'
   import Toolbar from './components/Toolbar.svelte'
@@ -36,16 +37,20 @@
   let helpVisible = $state(false)
   // theme_preset bootstraps from localStorage so the first render is correct
   // before settings load. Falls back to ember-dark which matches :root defaults.
-  let theme = $state(localStorage.getItem('rbara-theme') === 'light' ? 'ember-light' : 'ember-dark')
+  let theme = $state(
+    localStorage.getItem('rbara-theme') === 'light'
+      ? 'ember-light'
+      : 'ember-dark',
+  )
   let cmdBarVisible = $state(false)
   let cmdBarInput = $state('')
   let chordPending = $state(null)
   let chordTimer = null
   let dragOver = $state(false)
   let quip = $state(randomQuip())
-  let largeFileBlock = $state(null)       // { name, sizeKb } | null — file refused as too large
-  let forNotice = $state(null)            // { message: string } | null
-  let hasProcessedInOverwrite = false     // session flag, not reactive
+  let largeFileBlock = $state(null) // { name, sizeKb } | null — file refused as too large
+  let forNotice = $state(null) // { message: string } | null
+  let hasProcessedInOverwrite = false // session flag, not reactive
 
   // ---------- settings ----------
   let settings = $state(null)
@@ -64,14 +69,14 @@
   $effect(() => {
     if (!settings?.defaults) return
     const d = settings.defaults
-    params.bleedInches         = d.bleed_inches
-    params.exportFormat        = d.export_format
-    params.exportDpi           = d.export_dpi
-    params.remapTolerance      = d.remap_tolerance
-    params.trimBoxBleedInches  = d.trim_box_bleed_inches
-    params.splitPanelInches    = d.split_panel_inches
-    params.stitchSpreadInches  = d.stitch_spread_inches
-    params.convertIntent       = d.color_intent
+    params.bleedInches = d.bleed_inches
+    params.exportFormat = d.export_format
+    params.exportDpi = d.export_dpi
+    params.remapTolerance = d.remap_tolerance
+    params.trimBoxBleedInches = d.trim_box_bleed_inches
+    params.splitPanelInches = d.split_panel_inches
+    params.stitchSpreadInches = d.stitch_spread_inches
+    params.convertIntent = d.color_intent
   })
 
   // ---- Rebindable action shortcut map ----------------------------------------
@@ -99,12 +104,19 @@
   // DEFAULT_SHORTCUTS stores {key → action_id} (dispatch format).
   // Build the final dispatch map by converting user overrides and removing
   // the superseded default key so old and new key never both trigger the action.
+  // Reserved direct-command keys are skipped so a stale/hand-edited
+  // settings.json can never shadow the hardcoded commands.
   let shortcuts = $derived.by(() => {
     const result = { ...DEFAULT_SHORTCUTS }
-    for (const [actionId, newKey] of Object.entries(settings?.shortcuts ?? {})) {
-      if (!newKey) continue
+    for (const [actionId, newKey] of Object.entries(
+      settings?.shortcuts ?? {},
+    )) {
+      if (!newKey || RESERVED_KEYS.includes(newKey)) continue
       for (const k of Object.keys(result)) {
-        if (result[k] === actionId) { delete result[k]; break }
+        if (result[k] === actionId) {
+          delete result[k]
+          break
+        }
       }
       result[newKey] = actionId
     }
@@ -113,7 +125,7 @@
 
   // Reverse map: action_id → key — used by HelpOverlay and Ctrl+key handlers.
   let actionToKey = $derived(
-    Object.fromEntries(Object.entries(shortcuts).map(([k, v]) => [v, k]))
+    Object.fromEntries(Object.entries(shortcuts).map(([k, v]) => [v, k])),
   )
 
   let fileXmp = $state(null) // rbara XMP block for the active file, or null
@@ -145,12 +157,17 @@
       return
     }
     let cancelled = false
-    api.readXmpMetadata(path).then((xmp) => {
-      if (!cancelled) fileXmp = xmp
-    }).catch(() => {
-      if (!cancelled) fileXmp = null
-    })
-    return () => { cancelled = true }
+    api
+      .readXmpMetadata(path)
+      .then((xmp) => {
+        if (!cancelled) fileXmp = xmp
+      })
+      .catch(() => {
+        if (!cancelled) fileXmp = null
+      })
+    return () => {
+      cancelled = true
+    }
   })
 
   let customProfiles = $state([]) // [{name, description, color_space}]
@@ -181,11 +198,11 @@
   let windowHeight = $state(window.innerHeight)
   let layout = $derived(
     settings?.layout_override ??
-    (windowWidth > (settings?.wide_breakpoint_px ?? 900)
-      ? 'wide'
-      : windowHeight > windowWidth
-        ? 'vertical'
-        : 'square'),
+      (windowWidth > (settings?.wide_breakpoint_px ?? 900)
+        ? 'wide'
+        : windowHeight > windowWidth
+          ? 'vertical'
+          : 'square'),
   )
 
   // ---------- preflight ----------
@@ -239,7 +256,8 @@
       try {
         const meta = await api.loadMetadata(path)
         const fileObj = {
-          path, name,
+          path,
+          name,
           colorSpace: meta.color_space,
           sizeKb: meta.file_size_kb,
           metadata: meta,
@@ -289,7 +307,9 @@
     // Files are size-gated on add, so this only triggers when the block is
     // disabled/raised and a large file got in anyway — rbv opens the PDF
     // synchronously on its own main thread, freezing the viewer while it parses.
-    if (sizeExceedsLimit(fileObj.sizeKb, settings?.resource_warn_size_mb ?? 200)) {
+    if (
+      sizeExceedsLimit(fileObj.sizeKb, settings?.resource_warn_size_mb ?? 200)
+    ) {
       const ok = window.confirm(
         `"${fileObj.name}" is large (${api.formatSize(fileObj.sizeKb ?? 0)}).\n\n` +
           `Opening it in rbv loads the entire document and can freeze the viewer ` +
@@ -335,7 +355,9 @@
 
   function refreshQuip() {
     if (settings?.quips_enabled === false) return
-    const pool = settings?.custom_quips?.length ? settings.custom_quips : builtinQuips
+    const pool = settings?.custom_quips?.length
+      ? settings.custom_quips
+      : builtinQuips
     quip = pool[Math.floor(Math.random() * pool.length)]
   }
 
@@ -491,9 +513,10 @@
     if (settings?.for_enabled === false) return
     if (forNotice) return // already visible
     if (trigger === 'scope' && !hasProcessedInOverwrite) return
-    const label = names.length === 1
-      ? `"${names[0]}" will be modified in place if you run now.`
-      : `${names.length} files are scoped and will be modified in place if you run now.`
+    const label =
+      names.length === 1
+        ? `"${names[0]}" will be modified in place if you run now.`
+        : `${names.length} files are scoped and will be modified in place if you run now.`
     forNotice = { message: `Overwrite is on — ${label}` }
   }
 
@@ -511,7 +534,10 @@
   }
   function scopeAll() {
     files = files.map((f) => ({ ...f, scoped: true }))
-    maybeShowFor('scope', files.map((f) => f.name))
+    maybeShowFor(
+      'scope',
+      files.map((f) => f.name),
+    )
   }
   function scopeNone() {
     files = files.map((f) => ({ ...f, scoped: false }))
@@ -628,20 +654,93 @@
   // Run an action against a list of paths, returning a consolidated ActionResult.
   async function runActionOnPaths(paths) {
     switch (activeAction) {
-      case 'trim':        return api.trimMarks(paths, outputDir, overwrite)
-      case 'resize':      return api.resizeToBleed(paths, params.bleedInches, outputDir, overwrite)
-      case 'rotate':      return api.rotate(paths, params.rotateDegrees, outputDir, overwrite)
-      case 'export':      return api.exportImages(paths, params.exportFormat, params.exportDpi, params.exportQuality, outputDir)
-      case 'addtrimbox':  return api.addTrimBox(paths, params.trimBoxBleedInches, outputDir, overwrite)
-      case 'setmediabox': return api.setMediaBox(paths, params.setMediaBoxWidthInches, params.setMediaBoxHeightInches, outputDir, overwrite)
-      case 'outlinetext': return api.outlineText(paths, outputDir, overwrite)
-      case 'splitpages':  return api.splitPages(paths, params.splitPanelInches * 72, outputDir, overwrite)
-      case 'stitchpages': return api.stitchPages(paths, params.stitchSpreadInches * 72, outputDir, overwrite)
-      case 'extractpages':return api.extractPages(paths, api.parsePageNums(params.extractPagesInput), outputDir, overwrite)
-      case 'remap':       return api.remapColors(paths, params.remapFrom, params.remapTo, params.remapTolerance, outputDir, overwrite)
-      case 'colorspace':  return api.convertColorSpace(paths, params.fromProfile, params.toProfile, params.convertIntent, outputDir, overwrite)
-      case 'spots':       return api.flattenSpots(paths, outputDir, overwrite, params.spotIccProfile)
-      default:            return null
+      case 'trim':
+        return api.trimMarks(paths, outputDir, overwrite)
+      case 'resize':
+        return api.resizeToBleed(
+          paths,
+          params.bleedInches,
+          outputDir,
+          overwrite,
+        )
+      case 'rotate':
+        return api.rotate(paths, params.rotateDegrees, outputDir, overwrite)
+      case 'export':
+        return api.exportImages(
+          paths,
+          params.exportFormat,
+          params.exportDpi,
+          Math.min(
+            100,
+            Math.max(1, Math.round(Number(params.exportQuality) || 90)),
+          ),
+          outputDir,
+        )
+      case 'addtrimbox':
+        return api.addTrimBox(
+          paths,
+          params.trimBoxBleedInches,
+          outputDir,
+          overwrite,
+        )
+      case 'setmediabox':
+        return api.setMediaBox(
+          paths,
+          params.setMediaBoxWidthInches,
+          params.setMediaBoxHeightInches,
+          outputDir,
+          overwrite,
+        )
+      case 'outlinetext':
+        return api.outlineText(paths, outputDir, overwrite)
+      case 'splitpages':
+        return api.splitPages(
+          paths,
+          params.splitPanelInches * 72,
+          outputDir,
+          overwrite,
+        )
+      case 'stitchpages':
+        return api.stitchPages(
+          paths,
+          params.stitchSpreadInches * 72,
+          outputDir,
+          overwrite,
+        )
+      case 'extractpages':
+        return api.extractPages(
+          paths,
+          api.parsePageNums(params.extractPagesInput),
+          outputDir,
+          overwrite,
+        )
+      case 'remap':
+        return api.remapColors(
+          paths,
+          params.remapFrom,
+          params.remapTo,
+          params.remapTolerance,
+          outputDir,
+          overwrite,
+        )
+      case 'colorspace':
+        return api.convertColorSpace(
+          paths,
+          params.fromProfile,
+          params.toProfile,
+          params.convertIntent,
+          outputDir,
+          overwrite,
+        )
+      case 'spots':
+        return api.flattenSpots(
+          paths,
+          outputDir,
+          overwrite,
+          params.spotIccProfile,
+        )
+      default:
+        return null
     }
   }
 
@@ -656,9 +755,16 @@
 
     // Double-processing guard: warn if the active file already has this op applied.
     const opName = ACTION_TO_OP[activeAction]
-    if (opName && fileXmp?.ops?.some((op) => op === opName || op.startsWith(opName + '('))) {
+    if (
+      opName &&
+      fileXmp?.ops?.some((op) => op === opName || op.startsWith(opName + '('))
+    ) {
       const label = opName.replace(/_/g, ' ')
-      if (!window.confirm(`"${label}" has already been applied to this file. Run again?`)) {
+      if (
+        !window.confirm(
+          `"${label}" has already been applied to this file. Run again?`,
+        )
+      ) {
         return
       }
     }
@@ -667,18 +773,39 @@
     forNotice = null // dismiss any pending FOR when the user commits to running
 
     const ACTION_LABELS = {
-      trim: 'TrimMarks', resize: 'ResizeToBleed', export: 'ExportImages',
-      remap: 'RemapColors', colorspace: 'ConvertColorSpace', spots: 'FlattenSpots',
-      addtrimbox: 'AddTrimBox', splitpages: 'SplitPages', stitchpages: 'StitchPages',
-      extractpages: 'ExtractPages', outlinetext: 'OutlineText', rotate: 'Rotate',
+      trim: 'TrimMarks',
+      resize: 'ResizeToBleed',
+      export: 'ExportImages',
+      remap: 'RemapColors',
+      colorspace: 'ConvertColorSpace',
+      spots: 'FlattenSpots',
+      addtrimbox: 'AddTrimBox',
+      splitpages: 'SplitPages',
+      stitchpages: 'StitchPages',
+      extractpages: 'ExtractPages',
+      outlinetext: 'OutlineText',
+      rotate: 'Rotate',
       setmediabox: 'SetMediaBox',
     }
     const SWAP_ACTIONS = new Set([
-      'trim', 'resize', 'rotate', 'remap', 'colorspace', 'spots',
-      'addtrimbox', 'setmediabox', 'outlinetext', 'extractpages', 'splitpages', 'stitchpages',
+      'trim',
+      'resize',
+      'rotate',
+      'remap',
+      'colorspace',
+      'spots',
+      'addtrimbox',
+      'setmediabox',
+      'outlinetext',
+      'extractpages',
+      'splitpages',
+      'stitchpages',
     ])
     const actionLabel = ACTION_LABELS[activeAction]
-    if (!actionLabel) { processing = false; return }
+    if (!actionLabel) {
+      processing = false
+      return
+    }
 
     try {
       const result = await runActionOnPaths(paths)
@@ -686,7 +813,8 @@
         if (overwrite) hasProcessedInOverwrite = true
         actionLog = [{ ...result, action: actionLabel }, ...actionLog]
         if (SWAP_ACTIONS.has(activeAction) && result.output_paths.length > 0) {
-          const activeWasScoped = activeFile !== null && files[activeFile]?.scoped
+          const activeWasScoped =
+            activeFile !== null && files[activeFile]?.scoped
           await replaceProcessedFiles(result.output_paths)
           if (activeWasScoped && activeFile !== null) {
             const updatedPath = files[activeFile]?.path
@@ -885,16 +1013,16 @@
         return
       }
       {
-        const trimKey  = (actionToKey['trim']       ?? 't').toLowerCase()
-        const pagesKey = (actionToKey['splitpages']  ?? 'p').toLowerCase()
-        const colorKey = (actionToKey['colorspace']  ?? 'c').toLowerCase()
+        const trimKey = (actionToKey['trim'] ?? 't').toLowerCase()
+        const pagesKey = (actionToKey['splitpages'] ?? 'p').toLowerCase()
+        const colorKey = (actionToKey['colorspace'] ?? 'c').toLowerCase()
         if (k === trimKey || k === pagesKey || k === colorKey) {
           clearTimeout(chordTimer)
           chordTimer = null
           chordPending = null
-          if      (k === trimKey)  trimExpanded  = !trimExpanded
+          if (k === trimKey) trimExpanded = !trimExpanded
           else if (k === pagesKey) pagesExpanded = !pagesExpanded
-          else                     colorExpanded = !colorExpanded
+          else colorExpanded = !colorExpanded
           e.preventDefault()
           return
         }
@@ -952,7 +1080,10 @@
         break
       case 'o':
         overwrite = !overwrite
-        if (!overwrite) { hasProcessedInOverwrite = false; forNotice = null }
+        if (!overwrite) {
+          hasProcessedInOverwrite = false
+          forNotice = null
+        }
         break
       case 'f':
         addFiles()
@@ -994,7 +1125,9 @@
 
     api
       .loadSettings()
-      .then((s) => { settings = s })
+      .then((s) => {
+        settings = s
+      })
       .catch(() => {})
 
     api
@@ -1061,7 +1194,10 @@
     },
     set overwrite(v) {
       overwrite = v
-      if (!v) { hasProcessedInOverwrite = false; forNotice = null }
+      if (!v) {
+        hasProcessedInOverwrite = false
+        forNotice = null
+      }
     },
     get outputDir() {
       return outputDir
@@ -1209,8 +1345,14 @@
 {#if forNotice}
   <ForNotice
     message={forNotice.message}
-    onTurnOff={() => { overwrite = false; hasProcessedInOverwrite = false; forNotice = null }}
-    onKeep={() => { forNotice = null }}
+    onTurnOff={() => {
+      overwrite = false
+      hasProcessedInOverwrite = false
+      forNotice = null
+    }}
+    onKeep={() => {
+      forNotice = null
+    }}
   />
 {/if}
 

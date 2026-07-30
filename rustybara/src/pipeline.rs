@@ -762,7 +762,13 @@ impl PdfPipeline {
             .and_then(|lib| Pdfium::bind_to_library(lib).ok())
             .map_or_else(|| Pdfium::bind_to_system_library(), Ok);
 
-        let pdfium = Pdfium::new(bindings_result.map_err(crate::Error::Render)?);
+        let pdfium = match bindings_result {
+            Ok(bindings) => Pdfium::new(bindings),
+            // Binding fails when pdfium is already loaded in this process (it can
+            // only be bound once); the unit struct reuses the existing global
+            // binding. Making this fatal breaks every render after the first.
+            Err(_) => Pdfium,
+        };
 
         let pdf_doc = pdfium.load_pdf_from_byte_vec(buf, None)?;
         let page = pdf_doc.pages().get(page_num as PdfPageIndex)?;
@@ -1025,5 +1031,32 @@ mod tests {
         let img = p.render_page(0, &config).unwrap();
         assert!(img.width() > 0);
         assert!(img.height() > 0);
+    }
+
+    /// Regression guard for the pdfium binding fallback (v0.1.9 pages>1 bug).
+    ///
+    /// pdfium can only be bound once per process, so the *second* `render_page`
+    /// call must fall back to reusing the existing global binding instead of
+    /// erroring. The v0.1.9 regression made a re-binding failure fatal, which
+    /// broke every render after the first — export stopped after page 1 and rbv
+    /// could only display the first page.
+    #[test]
+    #[cfg(feature = "raster")]
+    #[ignore = "requires pdfium runtime library"]
+    fn render_page_twice_in_one_process() {
+        let p = PdfPipeline::open(fixture()).unwrap();
+        let config = RenderConfig::default();
+
+        let first = p.render_page(0, &config).unwrap();
+        assert!(first.width() > 0);
+
+        let second = p
+            .render_page(0, &config)
+            .expect("second render must reuse the existing pdfium binding");
+        assert_eq!(
+            (second.width(), second.height()),
+            (first.width(), first.height()),
+            "repeat render of the same page must produce identical dimensions"
+        );
     }
 }
