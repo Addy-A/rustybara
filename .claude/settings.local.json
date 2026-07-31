@@ -42,7 +42,9 @@
       "WebFetch(domain:crates.io)",
       "Bash(cargo check *)",
       "PowerShell(npm *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(cargo clippy *)",
+      "Bash(sed -E 's/^warning: //')"
     ]
   },
   "spinnerTipsEnabled": false
