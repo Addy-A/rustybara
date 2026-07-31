@@ -5,9 +5,17 @@ use std::path::PathBuf;
 pub enum MenuAction {
     TrimMarks,
     ResizeToBleed,
+    AddTrimBox,
+    SetMediaBox,
+    Rotate,
     ExportImages,
+    ExtractPages,
+    SplitPages,
+    StitchPages,
     RemapColors,
-    PreviewPage,
+    ConvertColorSpace,
+    FlattenSpots,
+    OutlineText,
     ToggleOverwrite,
     OutputPath,
     ChangeFiles,
@@ -106,9 +114,17 @@ impl MenuAction {
     pub const ALL: &[MenuAction] = &[
         Self::TrimMarks,
         Self::ResizeToBleed,
+        Self::AddTrimBox,
+        Self::SetMediaBox,
+        Self::Rotate,
         Self::ExportImages,
+        Self::ExtractPages,
+        Self::SplitPages,
+        Self::StitchPages,
         Self::RemapColors,
-        Self::PreviewPage,
+        Self::ConvertColorSpace,
+        Self::FlattenSpots,
+        Self::OutlineText,
         Self::ToggleOverwrite,
         Self::OutputPath,
         Self::ChangeFiles,
@@ -119,9 +135,17 @@ impl MenuAction {
         match self {
             Self::TrimMarks => "Trim Marks",
             Self::ResizeToBleed => "Resize to Bleed",
+            Self::AddTrimBox => "Add TrimBox",
+            Self::SetMediaBox => "Set MediaBox",
+            Self::Rotate => "Rotate Pages",
             Self::ExportImages => "Export Images",
+            Self::ExtractPages => "Extract Pages",
+            Self::SplitPages => "Split Pages",
+            Self::StitchPages => "Stitch Pages",
             Self::RemapColors => "Remap Colors",
-            Self::PreviewPage => "Preview Page",
+            Self::ConvertColorSpace => "Convert Color Space",
+            Self::FlattenSpots => "Flatten Spot Colors",
+            Self::OutlineText => "Outline Text",
             Self::ToggleOverwrite => "Toggle Overwrite",
             Self::OutputPath => "Output Path",
             Self::ChangeFiles => "Change Files",
@@ -133,9 +157,17 @@ impl MenuAction {
         match self {
             Self::TrimMarks => Some('t'),
             Self::ResizeToBleed => Some('r'),
+            Self::AddTrimBox => Some('b'),
+            Self::SetMediaBox => Some('s'),
+            Self::Rotate => Some('g'),
             Self::ExportImages => Some('x'),
+            Self::ExtractPages => Some('e'),
+            Self::SplitPages => Some('p'),
+            Self::StitchPages => Some('h'),
             Self::RemapColors => Some('m'),
-            Self::PreviewPage => Some('p'),
+            Self::ConvertColorSpace => Some('c'),
+            Self::FlattenSpots => Some('k'),
+            Self::OutlineText => Some('l'),
             Self::ToggleOverwrite => Some('o'),
             Self::OutputPath => Some('/'),
             Self::ChangeFiles => Some('f'),
@@ -146,29 +178,67 @@ impl MenuAction {
     pub fn needs_params(self) -> bool {
         matches!(
             self,
-            Self::ResizeToBleed | Self::ExportImages | Self::RemapColors
+            Self::ResizeToBleed
+                | Self::AddTrimBox
+                | Self::SetMediaBox
+                | Self::Rotate
+                | Self::ExportImages
+                | Self::ExtractPages
+                | Self::SplitPages
+                | Self::StitchPages
+                | Self::RemapColors
+                | Self::ConvertColorSpace
+                | Self::FlattenSpots
         )
     }
 }
 
 pub struct ActionParams {
     pub bleed_pts: f64,
+    pub trim_box_bleed_pts: f64,
+    pub media_width_inches: f64,
+    pub media_height_inches: f64,
+    pub rotate_degrees: i32,
     pub export_format: String,
     pub export_dpi: u32,
+    pub export_quality: u8,
+    pub render_annotations: bool,
+    pub render_forms: bool,
+    pub extract_pages: String,
+    pub panel_width_inches: f64,
+    pub spread_width_inches: f64,
     pub remap_from: [f64; 4],
     pub remap_to: [f64; 4],
     pub remap_tolerance: f64,
+    pub from_profile: String,
+    pub to_profile: String,
+    pub rendering_intent: String,
+    pub flatten_icc_path: String,
 }
 
 impl Default for ActionParams {
     fn default() -> Self {
         Self {
             bleed_pts: 9.0,
+            trim_box_bleed_pts: 9.0,
+            media_width_inches: 8.5,
+            media_height_inches: 11.0,
+            rotate_degrees: 90,
             export_format: "jpg".into(),
             export_dpi: 150,
+            export_quality: 90,
+            render_annotations: false,
+            render_forms: false,
+            extract_pages: "1".into(),
+            panel_width_inches: 5.83,
+            spread_width_inches: 8.5,
             remap_from: [1.0, 1.0, 1.0, 1.0],
             remap_to: [0.6, 0.4, 0.2, 1.0],
             remap_tolerance: 1.0,
+            from_profile: "AdobeRGB1998".into(),
+            to_profile: "USWebCoatedSWOP".into(),
+            rendering_intent: "RelativeColorimetric".into(),
+            flatten_icc_path: String::new(),
         }
     }
 }
@@ -331,9 +401,25 @@ impl App {
             a if a.needs_params() => {
                 self.input_buffer = match a {
                     MenuAction::ResizeToBleed => format!("{:.4}", self.params.bleed_pts / 72.0),
-                    MenuAction::ExportImages => {
-                        format!("{},{}", self.params.export_format, self.params.export_dpi,)
+                    MenuAction::AddTrimBox => {
+                        format!("{:.4}", self.params.trim_box_bleed_pts / 72.0)
                     }
+                    MenuAction::SetMediaBox => format!(
+                        "{},{}",
+                        self.params.media_width_inches, self.params.media_height_inches
+                    ),
+                    MenuAction::Rotate => self.params.rotate_degrees.to_string(),
+                    MenuAction::ExportImages => {
+                        format!(
+                            "{},{},{}",
+                            self.params.export_format,
+                            self.params.export_dpi,
+                            self.params.export_quality
+                        )
+                    }
+                    MenuAction::ExtractPages => self.params.extract_pages.clone(),
+                    MenuAction::SplitPages => self.params.panel_width_inches.to_string(),
+                    MenuAction::StitchPages => self.params.spread_width_inches.to_string(),
                     MenuAction::RemapColors => {
                         let from = self.params.remap_from;
                         let to = self.params.remap_to;
@@ -351,6 +437,13 @@ impl App {
                             tolerance,
                         )
                     }
+                    MenuAction::ConvertColorSpace => format!(
+                        "{},{},{}",
+                        self.params.from_profile,
+                        self.params.to_profile,
+                        self.params.rendering_intent
+                    ),
+                    MenuAction::FlattenSpots => self.params.flatten_icc_path.clone(),
                     _ => String::new(),
                 };
                 self.navigate(Screen::ParamInput);
@@ -398,6 +491,11 @@ impl App {
             Err(e) => {
                 self.result_message = friendly_error(e);
                 self.last_result_ok = false;
+                self.action_log.push(ActionLogEntry {
+                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                    action: self.selected_action.label().to_string(),
+                    status: LogStatus::Failed,
+                });
             }
         }
         self.navigate(Screen::Result);
@@ -422,5 +520,23 @@ fn friendly_error(e: rustybara::Error) -> String {
         ),
         rustybara::Error::Image(_) => format!("Image encoding failed: {e}"),
         rustybara::Error::Color(_) => format!("Color conversion failed: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn every_menu_action_has_a_unique_hotkey() {
+        let hotkeys: Vec<char> = MenuAction::ALL
+            .iter()
+            .filter_map(|action| action.hotkey())
+            .collect();
+        let unique: HashSet<char> = hotkeys.iter().copied().collect();
+
+        assert_eq!(hotkeys.len(), MenuAction::ALL.len());
+        assert_eq!(unique.len(), hotkeys.len());
     }
 }
