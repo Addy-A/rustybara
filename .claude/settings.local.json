@@ -41,7 +41,8 @@
       "Bash(cargo rustc *)",
       "WebFetch(domain:crates.io)",
       "Bash(cargo check *)",
-      "PowerShell(npm *)"
+      "PowerShell(npm *)",
+      "Bash(git commit -m ' *)"
     ]
   },
   "spinnerTipsEnabled": false
