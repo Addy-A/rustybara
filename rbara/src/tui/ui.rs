@@ -63,10 +63,18 @@ fn draw_main(frame: &mut Frame, app: &App) {
         .block(Block::default().borders(Borders::BOTTOM));
     frame.render_widget(title, outer[0]);
 
-    let items: Vec<ListItem> = MenuAction::ALL
+    let visible_rows = columns[0].height.saturating_sub(1).max(1) as usize;
+    let max_start = MenuAction::ALL.len().saturating_sub(visible_rows);
+    let start = app
+        .menu_index
+        .saturating_sub(visible_rows.saturating_sub(1))
+        .min(max_start);
+    let end = (start + visible_rows).min(MenuAction::ALL.len());
+    let items: Vec<ListItem> = MenuAction::ALL[start..end]
         .iter()
         .enumerate()
-        .map(|(i, action)| {
+        .map(|(offset, action)| {
+            let i = start + offset;
             let style = if i == app.menu_index {
                 Style::default()
                     .fg(Color::Black)
@@ -75,7 +83,14 @@ fn draw_main(frame: &mut Frame, app: &App) {
             } else {
                 Style::default()
             };
-            ListItem::new(format!(" {}", action.label())).style(style)
+            let marker = if i == start && start > 0 {
+                "^"
+            } else if i + 1 == end && end < MenuAction::ALL.len() {
+                "v"
+            } else {
+                " "
+            };
+            ListItem::new(format!("{marker} {}", action.label())).style(style)
         })
         .collect();
     let menu = List::new(items).block(Block::default().padding(Padding::top(1)));
@@ -98,12 +113,8 @@ fn draw_main(frame: &mut Frame, app: &App) {
         outer[2],
     );
 
-    let footer_parts: Vec<String> = MenuAction::ALL
-        .iter()
-        .filter_map(|a| a.hotkey().map(|k| format!("[{k}]{}", &a.label()[1..])))
-        .collect();
     frame.render_widget(
-        Paragraph::new(format!(" {} [?]help", footer_parts.join(" ")))
+        Paragraph::new(" Up/Down navigate  Enter run  hotkeys select  [?] help  [q] quit")
             .style(Style::default().fg(Color::DarkGray)),
         outer[3],
     );
@@ -243,8 +254,10 @@ fn draw_file_select(frame: &mut Frame, app: &App) {
 
     let orange: Color = AppColor::PrimaryOrange.into();
     let local_items: Vec<ListItem> = if app.local_files.is_empty() {
-        vec![ListItem::new(" No PDFs found in current directory")
-            .style(Style::default().fg(Color::DarkGray))]
+        vec![
+            ListItem::new(" No PDFs found in current directory")
+                .style(Style::default().fg(Color::DarkGray)),
+        ]
     } else {
         app.local_files
             .iter()
@@ -322,7 +335,7 @@ fn draw_output_input(frame: &mut Frame, app: &App) {
         .unwrap_or_default();
 
     let items = vec![
-        ListItem::new(format!(" Same location (_processed suffix){current}")).style(same_style),
+        ListItem::new(format!(" Same location (safe suffix){current}")).style(same_style),
         ListItem::new(" New location").style(new_style),
     ];
     let mut list_area = chunks[1];
@@ -354,8 +367,16 @@ fn draw_param_input(frame: &mut Frame, app: &App) {
 
     let prompt = match app.selected_action {
         MenuAction::ResizeToBleed => " Bleed size (inches)",
-        MenuAction::ExportImages => " Export settings (format,dpi)",
-        MenuAction::RemapColors => " Remap colors (C M Y K)",
+        MenuAction::AddTrimBox => " TrimBox inset (inches)",
+        MenuAction::SetMediaBox => " MediaBox size (width,height in inches)",
+        MenuAction::Rotate => " Clockwise rotation (degrees)",
+        MenuAction::ExportImages => " Export settings (format,dpi,quality)",
+        MenuAction::ExtractPages => " Pages to extract (one-based)",
+        MenuAction::SplitPages => " Panel width (inches)",
+        MenuAction::StitchPages => " Spread width (inches)",
+        MenuAction::RemapColors => " Remap colors (from-CMYK,to-CMYK,tolerance)",
+        MenuAction::ConvertColorSpace => " Color profiles (source,destination,intent)",
+        MenuAction::FlattenSpots => " Destination ICC profile (optional)",
         _ => " Parameters",
     };
     let title = Paragraph::new(prompt)
@@ -364,7 +385,15 @@ fn draw_param_input(frame: &mut Frame, app: &App) {
     frame.render_widget(title, chunks[0]);
     let hint_label = match app.selected_action {
         MenuAction::ResizeToBleed => " e.g. 0.125  (1/8 inch standard bleed)",
-        MenuAction::ExportImages => " e.g. jpg,150 | formats: jpg, png, webp, tiff",
+        MenuAction::AddTrimBox => " e.g. 0.125  (1/8 inch standard bleed)",
+        MenuAction::SetMediaBox => " e.g. 8.5,11",
+        MenuAction::Rotate => " e.g. 90 | must be a multiple of 90",
+        MenuAction::ExportImages => " e.g. jpg,150,90 | formats: jpg, png, webp, tiff",
+        MenuAction::ExtractPages => " e.g. 1,3-5,8",
+        MenuAction::SplitPages => " e.g. 5.83",
+        MenuAction::StitchPages => " e.g. 8.5",
+        MenuAction::ConvertColorSpace => " e.g. AdobeRGB1998,USWebCoatedSWOP,relative",
+        MenuAction::FlattenSpots => " leave empty for the bundled default profile",
         MenuAction::RemapColors => {
             " e.g. 1.0 1.0 1.0 1.0,0.6 0.4 0.2 1.0,1 | CMYK → CMYK (tolerance)"
         }
@@ -425,7 +454,8 @@ fn draw_help(frame: &mut Frame) {
             .title(" Keyboard Reference ")
             .padding(Padding::uniform(1)),
     );
-    let area = centered_rect(36, 16, frame.area());
+    let height = (lines.len() as u16 + 4).min(frame.area().height);
+    let area = centered_rect(46, height, frame.area());
     frame.render_widget(Clear, area);
     frame.render_widget(popup, area);
 }

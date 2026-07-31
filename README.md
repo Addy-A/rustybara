@@ -215,15 +215,39 @@ fn main() -> rustybara::Result<()> {
 # Trim print marks
 rbara trim input.pdf
 
-# Resize to 9pt bleed
-rbara resize --bleed 9.0 input.pdf
+# Resize to 1/8-inch bleed (--bleed remains available for point-based scripts)
+rbara resize --bleed-inches 0.125 input.pdf
 
-# Export pages as 300 DPI PNGs
-rbara image --format png --dpi 300 input.pdf
+# Add a TrimBox, set page size, or rotate pages
+rbara add-trim-box --bleed-inches 0.125 input.pdf
+rbara set-media-box --width-inches 8.5 --height-inches 11 input.pdf
+rbara rotate --degrees 90 input.pdf
+
+# Export pages as 300 DPI PNGs at quality 90
+rbara image --format png --dpi 300 --quality 90 input.pdf
+
+# Extract, split, or stitch pages
+rbara extract-pages --pages "1,3-5" input.pdf
+rbara split-pages --panel-width 5.83 input.pdf
+rbara stitch-pages --spread-width 8.5 input.pdf
 
 # Remap a CMYK color (rich black → 60/40/20/100)
 rbara remap-color --from 1.0 1.0 1.0 1.0 --to 0.6 0.4 0.2 1.0 input.pdf
+
+# Convert or flatten colors, and outline text
+rbara convert-color-space --from-profile AdobeRGB1998 --to-profile USWebCoatedSWOP input.pdf
+rbara flatten-spots input.pdf
+rbara outline-text input.pdf
+
+# Inspect page boxes, document color usage, and Rustybara provenance
+rbara info input.pdf
 ```
+
+Every PDF-writing command accepts multiple input files, `--output <DIR>`, and
+`--overwrite`. Without `--overwrite`, outputs receive an operation suffix such
+as `_processed`, `_extracted`, `_split`, or `_stitch`. Image export never
+overwrites a PDF source and also supports `--annotations` and `--forms`.
+PDF outputs include a Rustybara XMP provenance block.
 
 ### TUI
 
@@ -233,8 +257,8 @@ Launch `rbara` with no arguments to enter the interactive terminal interface:
 rbara
 ```
 
-Arrow keys navigate, Enter selects, Esc goes back. Single-letter shortcuts are
-shown in the footer bar. Press `?` for the full keyboard reference.
+Arrow keys navigate, Enter selects, and Esc goes back. The menu scrolls on
+smaller terminals; press `?` for the full keyboard reference.
 
 ---
 
@@ -472,21 +496,22 @@ flag-based CLI for scripting and a TUI for guided workflows.
 | --------------- | -------------------------- |
 | `t`             | Trim print marks           |
 | `r`             | Resize to bleed            |
+| `b`             | Add TrimBox                |
+| `s`             | Set MediaBox               |
+| `g`             | Rotate pages               |
 | `x`             | Export to image            |
+| `e`             | Extract pages              |
+| `p`             | Split pages                |
+| `h`             | Stitch pages               |
 | `m`             | Remap colors               |
 | `c`             | Convert color space        |
-| `s`             | Flatten spot colors        |
-| `b`             | Add trim box               |
-| `p`             | Split pages                |
-| `g`             | Stitch pages               |
-| `e`             | Extract pages              |
+| `k`             | Flatten spot colors        |
+| `l`             | Outline text               |
 | `/`             | Output path                |
 | `o`             | Toggle overwrite mode      |
-| `f`             | Add files                  |
-| `a` / `n` / `i` | Scope all / none / invert  |
-| `v`             | View active file in rbv    |
-| `Enter`         | Run active action          |
-| `:`             | Open command bar           |
+| `f`             | Change files               |
+| `q`             | Quit                       |
+| `Enter`         | Run selected action        |
 | `?`             | Keyboard reference overlay |
 
 ### UX Model
