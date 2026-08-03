@@ -172,6 +172,19 @@ export const quips = [
   "Watching the bee movie",
   "Do you like Jazz?",
   "According to all known laws of aviation...",
+  "Doing a side-gig",
+  "Blessed the rains down in Africa",
+  "Watched Tom Holland as Spiderman",
+  "Watched Tobey McGuire as Spiderman",
+  "Watched Andrew Garfield as Spiderman",
+  "Watched Nicolas Cage as Spiderman",
+  "Ripped my pants again",
+  "Made a comment",
+  "Posted a Tweet",
+  "Watched Adam Sandler's 'Click'",
+  "Jousted at the Ren Faire",
+  "Pulled an overnighter",
+  "Waiting for things to get better",
 ];
 
 export function randomQuip() {
