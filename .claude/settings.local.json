@@ -44,7 +44,10 @@
       "PowerShell(npm *)",
       "Bash(git commit -m ' *)",
       "Bash(cargo clippy *)",
-      "Bash(sed -E 's/^warning: //')"
+      "Bash(sed -E 's/^warning: //')",
+      "Bash(git check-ignore *)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(git push *)"
     ]
   },
   "spinnerTipsEnabled": false
