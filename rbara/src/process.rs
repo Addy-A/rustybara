@@ -1,4 +1,4 @@
-use crate::cli::{ImageFormat, RenderingIntent};
+use crate::cli::{ImageFormat, PanelAxis, RenderingIntent};
 use crate::tui::app::{ActionLogEntry, App, ColorSpaceInfo, LogStatus, MenuAction};
 use rustybara::PdfPipeline;
 use rustybara::pages::PageBoxes;
@@ -460,8 +460,50 @@ pub fn run_split_pages(
     output: Option<PathBuf>,
     overwrite: bool,
 ) -> rustybara::Result<()> {
+    run_split_pages_with_layout(
+        input,
+        panel_width_inches,
+        &[],
+        PanelAxis::Horizontal,
+        output,
+        overwrite,
+    )
+}
+
+pub fn run_split_pages_with_layout(
+    input: Vec<PathBuf>,
+    panel_width_inches: f64,
+    panel_widths_inches: &[f64],
+    axis: PanelAxis,
+    output: Option<PathBuf>,
+    overwrite: bool,
+) -> rustybara::Result<()> {
     let width = positive(panel_width_inches, "panel width")? * POINTS_PER_INCH;
-    let params = format!("panel_width_in={panel_width_inches}");
+    let explicit = panel_widths_inches
+        .iter()
+        .map(|value| positive(*value, "explicit panel width").map(|value| value * POINTS_PER_INCH))
+        .collect::<rustybara::Result<Vec<_>>>()?;
+    if !explicit.is_empty() && explicit.len() < 2 {
+        return Err(invalid_input(
+            "explicit panel plan needs at least two widths",
+        ));
+    }
+    let axis_name = match axis {
+        PanelAxis::Horizontal => "horizontal",
+        PanelAxis::Vertical => "vertical",
+    };
+    let params = if explicit.is_empty() {
+        format!("panel_width_in={panel_width_inches};axis={axis_name}")
+    } else {
+        format!(
+            "panel_widths_in={};axis={axis_name}",
+            panel_widths_inches
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
     let outputs = apply_pdf_derivation(
         &input,
         &output,
@@ -469,7 +511,17 @@ pub fn run_split_pages(
         "split",
         "split_pages",
         &params,
-        |pipeline, _| pipeline.split_pages(width),
+        |pipeline, _| {
+            if explicit.is_empty() {
+                pipeline.split_pages(width)
+            } else {
+                let split_axis = match axis {
+                    PanelAxis::Horizontal => rustybara::pages::SplitAxis::Horizontal,
+                    PanelAxis::Vertical => rustybara::pages::SplitAxis::Vertical,
+                };
+                pipeline.split_pages_explicit(&explicit, split_axis)
+            }
+        },
     )?;
     print_outputs(&input, &outputs);
     Ok(())

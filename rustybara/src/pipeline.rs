@@ -422,6 +422,16 @@ impl PdfPipeline {
         Ok(Self { doc })
     }
 
+    /// Splits each page using an explicit ordered set of panel sizes.
+    pub fn split_pages_explicit(
+        &self,
+        panel_sizes_pts: &[f64],
+        axis: crate::pages::SplitAxis,
+    ) -> crate::Result<Self> {
+        let doc = crate::pages::split_pages_explicit(&self.doc, panel_sizes_pts, axis)?;
+        Ok(Self { doc })
+    }
+
     /// Stitches adjacent page pairs into spreads of `spread_width_pts`.
     ///
     /// Returns a new pipeline whose pages are the stitched spreads, in document order.

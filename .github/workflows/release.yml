@@ -6,6 +6,10 @@ name: release
 # if on powershell use the below
 # git tag v0.1.3 ; if ($LASTEXITCODE -eq 0) { git push --tags }
 #
+# Stable tags produce the full artifact suite. Hyphenated compatibility
+# iteration tags (for example v0.2.0-1) produce only rbara installers and its
+# Docker image so unrelated package versions are not relabeled.
+#
 # Artifacts produced (one tag → one Release):
 #   rbara-setup-<version>-x64.exe                    (Windows, Inno Setup)
 #   rbara-<version>-linux-x64.tar.gz                 (Linux glibc, x86_64)
@@ -211,6 +215,9 @@ jobs:
   # -------------------------------------------------------------------------
   build-gui-windows:
     name: GUI — Windows installer
+    # Hyphenated tags are scoped rbara compatibility iterations (for example
+    # v0.2.0-1), not full-suite releases.
+    if: ${{ !contains(github.event.inputs.tag || github.ref_name, '-') }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -321,6 +328,7 @@ jobs:
 
   build-gui-linux:
     name: GUI — Linux AppImage + deb
+    if: ${{ !contains(github.event.inputs.tag || github.ref_name, '-') }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -422,6 +430,7 @@ jobs:
 
   build-gui-macos:
     name: GUI — macOS dmg (${{ matrix.arch }})
+    if: ${{ !contains(github.event.inputs.tag || github.ref_name, '-') }}
     strategy:
       fail-fast: false
       matrix:
@@ -531,6 +540,7 @@ jobs:
   # -------------------------------------------------------------------------
   build-icc-cli:
     name: rustybara-icc CLI (${{ matrix.label }})
+    if: ${{ !contains(github.event.inputs.tag || github.ref_name, '-') }}
     strategy:
       fail-fast: false
       matrix:
@@ -612,6 +622,9 @@ jobs:
         build-gui-macos,
         build-icc-cli,
       ]
+    # Skipped GUI/ICC jobs are expected for rbara-only iteration tags. Still
+    # block publication if any job that did run failed or was cancelled.
+    if: ${{ always() && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -643,39 +656,48 @@ jobs:
           tag="${{ github.event.inputs.tag || github.ref_name }}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
+      - name: Generate release body
+        shell: bash
+        run: |
+          tag="${{ steps.tag.outputs.tag }}"
+          if [[ "$tag" == *-* ]]; then
+            cat > RELEASE_BODY.md <<EOF
+          ## rbara $tag
+
+          Compatibility iteration containing the self-contained rbara CLI/TUI
+          artifacts only. GUI and rustybara-icc artifacts retain their existing
+          versions and are intentionally excluded.
+
+          | Platform | Asset |
+          |---|---|
+          | Windows | \`rbara-setup-*-x64.exe\` |
+          | Linux (glibc x86_64) | \`rbara-*-linux-x64.tar.gz\` |
+          | macOS (Apple silicon) | \`rbara-*-macos-arm64.tar.gz\` |
+          | macOS (Intel) | \`rbara-*-macos-x86_64.tar.gz\` |
+          | Docker | \`ghcr.io/addy-a/rbara:${tag#v}\` |
+
+          See \`SHA256SUMS.txt\` for checksums.
+          EOF
+          else
+            cat > RELEASE_BODY.md <<EOF
+          ## rbara $tag
+
+          Full-suite release with self-contained rbara installers, rbara-gui
+          desktop packages, rustybara-icc binaries, and the rbara Docker image.
+
+          See \`SHA256SUMS.txt\` for checksums and the
+          [README](https://github.com/${{ github.repository }}#installation) for
+          platform-specific installation instructions.
+          EOF
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: rbara ${{ steps.tag.outputs.tag }}
           generate_release_notes: true
+          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
           files: |
             release-files/*
-          body: |
-            ## rbara ${{ steps.tag.outputs.tag }}
-
-            Pre-built installers for Windows, Linux, and macOS — each bundles
-            pdfium (chromium/${{ env.PDFIUM_CHROMIUM }}) and is fully self-contained.
-
-            ### Install
-
-            | Platform | Asset |
-            |---|---|
-            | Windows | `rbara-setup-*-x64.exe` (Inno Setup, per-user) |
-            | Linux (glibc x86_64) | `rbara-*-linux-x64.tar.gz` |
-            | macOS (Apple silicon) | `rbara-*-macos-arm64.tar.gz` |
-            | macOS (Intel) | `rbara-*-macos-x86_64.tar.gz` |
-            | Docker | `ghcr.io/addy-a/rbara:${{ steps.tag.outputs.tag }}` |
-            | Windows (GUI) | `rbara-gui-*-windows-x64-setup.exe` or `rbara-gui-*-windows-x64.msi` |
-            | Linux (GUI) | `rbara-gui-*-linux-x64.AppImage` or `rbara-gui-*-linux-x64.deb` |
-            | macOS Apple silicon (GUI) | `rbara-gui-*-macos-arm64.dmg` |
-            | macOS Intel (GUI) | `rbara-gui-*-macos-x86_64.dmg` |
-            | Windows (ICC CLI) | `rustybara-icc-*-windows-x64.exe` |
-            | Linux (ICC CLI) | `rustybara-icc-*-linux-x64.tar.gz` |
-            | macOS Apple silicon (ICC CLI) | `rustybara-icc-*-macos-arm64.tar.gz` |
-            | macOS Intel (ICC CLI) | `rustybara-icc-*-macos-x86_64.tar.gz` |
-
-            See `SHA256SUMS.txt` for checksums.
-
-            See the [README](https://github.com/${{ github.repository }}#installation)
-            for per-platform install instructions and uninstallers.
+          body_path: RELEASE_BODY.md

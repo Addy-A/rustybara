@@ -2,7 +2,22 @@ use crate::pages::PageBoxes;
 use lopdf::content::{Content, Operation};
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 
-/// Splits every page wider than `panel_width_pts` into left/right panels, returning a new document.
+/// Direction in which panel slots advance across a flattened source page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SplitAxis {
+    /// Left-to-right panels separated by vertical fold lines.
+    Horizontal,
+    /// Bottom-to-top panels separated by horizontal fold lines.
+    Vertical,
+}
+
+enum PanelLayout<'a> {
+    Uniform(f64),
+    Explicit(&'a [f64]),
+}
+
+/// Splits every page into equal target-width panels. A final remainder panel is
+/// retained for backward compatibility with the original `split-pages` command.
 pub fn split_pages(src: &Document, panel_width_pts: f64) -> crate::Result<Document> {
     if panel_width_pts <= 0.0 {
         return Err(crate::Error::Io(std::io::Error::new(
@@ -10,7 +25,39 @@ pub fn split_pages(src: &Document, panel_width_pts: f64) -> crate::Result<Docume
             "panel width must be positive",
         )));
     }
+    split_pages_internal(
+        src,
+        PanelLayout::Uniform(panel_width_pts),
+        SplitAxis::Horizontal,
+    )
+}
 
+/// Splits every page using an explicit ordered panel-size plan. The sizes must
+/// cover the selected TrimBox dimension within half a PDF point; this prevents
+/// silently losing a fold flap or manufacturing a convincing, incorrect panel.
+pub fn split_pages_explicit(
+    src: &Document,
+    panel_sizes_pts: &[f64],
+    axis: SplitAxis,
+) -> crate::Result<Document> {
+    if panel_sizes_pts.len() < 2
+        || panel_sizes_pts
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+    {
+        return Err(crate::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "explicit panel plan needs at least two positive sizes",
+        )));
+    }
+    split_pages_internal(src, PanelLayout::Explicit(panel_sizes_pts), axis)
+}
+
+fn split_pages_internal(
+    src: &Document,
+    layout: PanelLayout<'_>,
+    axis: SplitAxis,
+) -> crate::Result<Document> {
     let mut new_doc = src.clone();
 
     let pages_id: ObjectId = {
@@ -42,44 +89,89 @@ pub fn split_pages(src: &Document, panel_width_pts: f64) -> crate::Result<Docume
         let boxes = PageBoxes::read(src, sp.id)?;
         let media = boxes.media_box;
         let trim = *boxes.trim_or_media();
-        let n_panels = ((trim.width / panel_width_pts).ceil() as u32).max(1);
+        let extent = match axis {
+            SplitAxis::Horizontal => trim.width,
+            SplitAxis::Vertical => trim.height,
+        };
+        let panel_sizes = match layout {
+            PanelLayout::Uniform(panel_size) => {
+                let count = ((extent / panel_size).ceil() as usize).max(1);
+                (0..count)
+                    .map(|index| {
+                        if index + 1 < count {
+                            panel_size
+                        } else {
+                            extent - panel_size * index as f64
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }
+            PanelLayout::Explicit(sizes) => {
+                let total = sizes.iter().sum::<f64>();
+                if (total - extent).abs() > 0.5 {
+                    return Err(crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!(
+                            "explicit panel sizes total {total:.3} points but page trim extent is {extent:.3} points"
+                        ),
+                    )));
+                }
+                sizes.to_vec()
+            }
+        };
 
         // Bleed margins: how much the MediaBox extends beyond the TrimBox on each side.
         // Zero when no TrimBox is present (trim == media).
         let left_bleed = trim.x - media.x;
         let right_bleed = media.right() - trim.right();
+        let bottom_bleed = trim.y - media.y;
+        let top_bleed = media.top() - trim.top();
 
         let source_ops = src
             .get_and_decode_page_content(sp.id)
             .map(|c| c.operations)
             .unwrap_or_default();
 
-        for i in 0..n_panels {
-            let offset_x = i as f64 * panel_width_pts;
-            let panel_min_x = trim.x + offset_x;
-            let panel_w = if i < n_panels - 1 {
-                panel_width_pts
-            } else {
-                trim.right() - panel_min_x
+        let mut offset = 0.0;
+        for panel_size in panel_sizes {
+            let (panel_min_x, panel_min_y, panel_max_x, panel_max_y) = match axis {
+                SplitAxis::Horizontal => (
+                    trim.x + offset,
+                    trim.y,
+                    trim.x + offset + panel_size,
+                    trim.top(),
+                ),
+                SplitAxis::Vertical => (
+                    trim.x,
+                    trim.y + offset,
+                    trim.right(),
+                    trim.y + offset + panel_size,
+                ),
             };
-
-            let panel_max_x = panel_min_x + panel_w;
-
-            // Expand each panel's bounds by the bleed margin on all sides so the
-            // output MediaBox carries the bleed area from the source spread.
-            let panel_media_x_min = panel_min_x - left_bleed;
-            let panel_media_x_max = panel_max_x + right_bleed;
-            let panel_media_w = panel_media_x_max - panel_media_x_min;
+            let (media_min_x, media_min_y, media_max_x, media_max_y) = match axis {
+                SplitAxis::Horizontal => (
+                    panel_min_x - left_bleed,
+                    media.y,
+                    panel_max_x + right_bleed,
+                    media.top(),
+                ),
+                SplitAxis::Vertical => (
+                    media.x,
+                    panel_min_y - bottom_bleed,
+                    media.right(),
+                    panel_max_y + top_bleed,
+                ),
+            };
 
             let mut ops: Vec<Operation> = Vec::with_capacity(source_ops.len() + 5);
             ops.push(Operation::new("q", vec![]));
             ops.push(Operation::new(
                 "re",
                 vec![
-                    Object::Real(panel_media_x_min as f32),
-                    Object::Real(media.y as f32),
-                    Object::Real(panel_media_w as f32),
-                    Object::Real(media.height as f32),
+                    Object::Real(media_min_x as f32),
+                    Object::Real(media_min_y as f32),
+                    Object::Real((media_max_x - media_min_x) as f32),
+                    Object::Real((media_max_y - media_min_y) as f32),
                 ],
             ));
             ops.push(Operation::new("W", vec![]));
@@ -90,24 +182,29 @@ pub fn split_pages(src: &Document, panel_width_pts: f64) -> crate::Result<Docume
             let bytes = Content { operations: ops }.encode()?;
             let mut stream = Stream::new(Dictionary::new(), bytes);
             stream.compress()?;
-            let stream_id =
-                new_doc.add_object(Object::Stream(stream));
+            let stream_id = new_doc.add_object(Object::Stream(stream));
 
             let mut page = Dictionary::new();
             page.set("Type", Object::Name(b"Page".to_vec()));
             page.set("Parent", Object::Reference(pages_id));
-            page.set("MediaBox", Object::Array(vec![
-                Object::Real(panel_media_x_min as f32),
-                Object::Real(media.y as f32),
-                Object::Real(panel_media_x_max as f32),
-                Object::Real(media.top() as f32),
-            ]));
-            page.set("TrimBox", Object::Array(vec![
-                Object::Real(panel_min_x as f32),
-                Object::Real(trim.y as f32),
-                Object::Real(panel_max_x as f32),
-                Object::Real(trim.top() as f32),
-            ]));
+            page.set(
+                "MediaBox",
+                Object::Array(vec![
+                    Object::Real(media_min_x as f32),
+                    Object::Real(media_min_y as f32),
+                    Object::Real(media_max_x as f32),
+                    Object::Real(media_max_y as f32),
+                ]),
+            );
+            page.set(
+                "TrimBox",
+                Object::Array(vec![
+                    Object::Real(panel_min_x as f32),
+                    Object::Real(panel_min_y as f32),
+                    Object::Real(panel_max_x as f32),
+                    Object::Real(panel_max_y as f32),
+                ]),
+            );
             page.set("Contents", Object::Reference(stream_id));
             if let Some(res) = &sp.resources {
                 page.set("Resources", res.clone());
@@ -115,6 +212,7 @@ pub fn split_pages(src: &Document, panel_width_pts: f64) -> crate::Result<Docume
 
             let panel_id = new_doc.add_object(Object::Dictionary(page));
             new_kids.push(Object::Reference(panel_id));
+            offset += panel_size;
         }
     }
 
@@ -298,10 +396,10 @@ mod tests {
         let out = split_pages(&doc, 100.0).unwrap();
         for (&_, &pid) in out.get_pages().iter() {
             let dict = out.get_dictionary(pid).unwrap();
-                assert!(
-                    matches!(dict.get(b"Contents"), Ok(Object::Reference(_))),
-                    "Contents should have at least start+end wrapper"
-                );
+            assert!(
+                matches!(dict.get(b"Contents"), Ok(Object::Reference(_))),
+                "Contents should have at least start+end wrapper"
+            );
         }
     }
 
@@ -315,5 +413,41 @@ mod tests {
         let trim = page_trim(&out, pid);
         assert!((trim[2] - 100.0_f32).abs() < 0.01);
         assert!((trim[3] - 100.0_f32).abs() < 0.01);
+    }
+
+    #[test]
+    fn explicit_unequal_panels_preserve_operator_plan() {
+        let doc = make_doc(&[(264.0, 612.0)]);
+        let out = split_pages_explicit(&doc, &[88.0, 90.0, 86.0], SplitAxis::Horizontal).unwrap();
+        let widths = out
+            .get_pages()
+            .values()
+            .map(|&pid| {
+                let trim = page_trim(&out, pid);
+                trim[2] - trim[0]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(widths, vec![88.0, 90.0, 86.0]);
+    }
+
+    #[test]
+    fn explicit_vertical_panels_split_page_height() {
+        let doc = make_doc(&[(612.0, 300.0)]);
+        let out = split_pages_explicit(&doc, &[120.0, 180.0], SplitAxis::Vertical).unwrap();
+        let heights = out
+            .get_pages()
+            .values()
+            .map(|&pid| {
+                let trim = page_trim(&out, pid);
+                trim[3] - trim[1]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(heights, vec![120.0, 180.0]);
+    }
+
+    #[test]
+    fn explicit_panel_plan_must_cover_trim_extent() {
+        let doc = make_doc(&[(300.0, 200.0)]);
+        assert!(split_pages_explicit(&doc, &[100.0, 100.0], SplitAxis::Horizontal).is_err());
     }
 }

@@ -1,5 +1,5 @@
 use rustybara::geometry::Rect;
-use rustybara::pages::PageBoxes;
+use rustybara::pages::{PageBoxes, SplitAxis, split_pages_explicit};
 
 // ── PageBoxes unit tests (constructed directly, no PDF needed) ──────
 // Ported from: pdf-trim-or-bleed-resizer, pdf-mark-removal
@@ -96,9 +96,49 @@ fn page_boxes_read_has_media_box() {
     let boxes = PageBoxes::read(&doc, page_id).expect("read page boxes");
 
     // MediaBox should always exist
-    assert!(boxes.media_box.width > 0.0, "MediaBox should have positive width");
+    assert!(
+        boxes.media_box.width > 0.0,
+        "MediaBox should have positive width"
+    );
     assert!(
         boxes.media_box.height > 0.0,
         "MediaBox should have positive height"
     );
+}
+
+#[test]
+fn explicit_panel_layout_is_available_through_the_public_api() {
+    let fixture = fixture_path();
+    if !fixture.exists() {
+        return;
+    }
+    let file = std::fs::File::open(&fixture).expect("open fixture");
+    let doc = lopdf::Document::load_from(file).expect("parse PDF");
+    let source_pages = doc.get_pages();
+    let first_page = *source_pages.values().next().expect("fixture page");
+    let extent = PageBoxes::read(&doc, first_page)
+        .expect("read page boxes")
+        .trim_or_media()
+        .width;
+    let panel_sizes = [extent * 0.3, extent * 0.4, extent * 0.3];
+
+    for &page_id in source_pages.values() {
+        let page_extent = PageBoxes::read(&doc, page_id)
+            .expect("read page boxes")
+            .trim_or_media()
+            .width;
+        assert!((page_extent - extent).abs() < 0.01);
+    }
+
+    let output = split_pages_explicit(&doc, &panel_sizes, SplitAxis::Horizontal)
+        .expect("split explicit panel layout");
+    assert_eq!(output.get_pages().len(), source_pages.len() * 3);
+
+    for (index, &page_id) in output.get_pages().values().enumerate() {
+        let width = PageBoxes::read(&output, page_id)
+            .expect("read output page boxes")
+            .trim_or_media()
+            .width;
+        assert!((width - panel_sizes[index % 3]).abs() < 0.01);
+    }
 }

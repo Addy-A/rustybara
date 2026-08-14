@@ -1,8 +1,11 @@
 [package]
 name = "rbara"
-version = "0.2.0"
+version = "0.2.0-1"
 edition = "2024"
 license = "GPL-3.0-only"
+description = "CLI and terminal interface for the RustyBara prepress PDF toolkit"
+repository = "https://github.com/Addy-A/rustybara"
+homepage = "https://rustybara.com"
 
 [dependencies]
 rustybara = { path = "../rustybara", version = "0.2.0", features = ["color"] }

@@ -7,7 +7,7 @@ use cli::{Cli, Command};
 use process::{
     bleed_points, run_add_trim_box, run_convert_color_space, run_extract_pages, run_flatten_spots,
     run_image, run_info, run_outline_text, run_remap_color, run_resize, run_rotate,
-    run_set_media_box, run_split_pages, run_stitch_pages, run_trim,
+    run_set_media_box, run_split_pages_with_layout, run_stitch_pages, run_trim,
 };
 
 fn main() {
@@ -95,9 +95,19 @@ fn run_command(command: Command) -> rustybara::Result<()> {
         Command::ExtractPages { files, pages } => {
             run_extract_pages(files.input, &pages, files.output, files.overwrite)
         }
-        Command::SplitPages { files, panel_width } => {
-            run_split_pages(files.input, panel_width, files.output, files.overwrite)
-        }
+        Command::SplitPages {
+            files,
+            panel_width,
+            panel_widths,
+            axis,
+        } => run_split_pages_with_layout(
+            files.input,
+            panel_width,
+            &panel_widths,
+            axis,
+            files.output,
+            files.overwrite,
+        ),
         Command::StitchPages {
             files,
             spread_width,

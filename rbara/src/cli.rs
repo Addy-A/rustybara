@@ -62,6 +62,12 @@ pub enum RenderingIntent {
     AbsoluteColorimetric,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum PanelAxis {
+    Horizontal,
+    Vertical,
+}
+
 impl RenderingIntent {
     pub fn as_pipeline_str(self) -> &'static str {
         match self {
@@ -175,6 +181,20 @@ pub enum Command {
         /// Target panel width in inches.
         #[arg(long, default_value_t = 5.83, value_name = "INCHES")]
         panel_width: f64,
+
+        /// Explicit ordered panel sizes in inches, for example 3.625,3.6875,3.6875.
+        /// When supplied this replaces the uniform panel width.
+        #[arg(long, value_delimiter = ',', value_name = "INCHES")]
+        panel_widths: Vec<f64>,
+
+        /// Direction in which panels advance across the page.
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = PanelAxis::Horizontal,
+            requires = "panel_widths"
+        )]
+        axis: PanelAxis,
     },
 
     /// Stitch adjacent pages into spreads.
@@ -291,5 +311,71 @@ mod tests {
         ]);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parses_explicit_vertical_panel_layout() {
+        let cli = Cli::try_parse_from([
+            "rustybara",
+            "split-pages",
+            "sample.pdf",
+            "--panel-widths",
+            "3.625,3.6875,3.6875",
+            "--axis",
+            "vertical",
+            "--overwrite",
+        ])
+        .unwrap();
+
+        let Some(Command::SplitPages {
+            panel_widths,
+            axis,
+            files,
+            ..
+        }) = cli.command
+        else {
+            panic!("split-pages command was not parsed");
+        };
+        assert_eq!(panel_widths, vec![3.625, 3.6875, 3.6875]);
+        assert_eq!(axis, PanelAxis::Vertical);
+        assert!(files.overwrite);
+    }
+
+    #[test]
+    fn rejects_axis_without_explicit_panel_layout() {
+        let result = Cli::try_parse_from([
+            "rustybara",
+            "split-pages",
+            "sample.pdf",
+            "--axis",
+            "vertical",
+        ]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn keeps_legacy_uniform_panel_layout() {
+        let cli = Cli::try_parse_from([
+            "rustybara",
+            "split-pages",
+            "sample.pdf",
+            "--panel-width",
+            "5.83",
+        ])
+        .unwrap();
+
+        let Some(Command::SplitPages {
+            panel_width,
+            panel_widths,
+            axis,
+            ..
+        }) = cli.command
+        else {
+            panic!("split-pages command was not parsed");
+        };
+        assert_eq!(panel_width, 5.83);
+        assert!(panel_widths.is_empty());
+        assert_eq!(axis, PanelAxis::Horizontal);
     }
 }

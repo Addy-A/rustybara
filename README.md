@@ -229,6 +229,7 @@ rbara image --format png --dpi 300 --quality 90 input.pdf
 # Extract, split, or stitch pages
 rbara extract-pages --pages "1,3-5" input.pdf
 rbara split-pages --panel-width 5.83 input.pdf
+rbara split-pages --panel-widths 3.625,3.6875,3.6875 --axis horizontal input.pdf
 rbara stitch-pages --spread-width 8.5 input.pdf
 
 # Remap a CMYK color (rich black → 60/40/20/100)
@@ -247,6 +248,12 @@ Every PDF-writing command accepts multiple input files, `--output <DIR>`, and
 `--overwrite`. Without `--overwrite`, outputs receive an operation suffix such
 as `_processed`, `_extracted`, `_split`, or `_stitch`. Image export never
 overwrites a PDF source and also supports `--annotations` and `--forms`.
+
+`split-pages --panel-widths` accepts an ordered, comma-separated plan containing
+at least two positive sizes in inches. The sizes must total the source page's
+TrimBox extent (within half a PDF point). `--axis horizontal` emits panels left
+to right; `--axis vertical` emits them bottom to top. The existing singular
+`--panel-width` behavior remains unchanged and defaults to the horizontal axis.
 PDF outputs include a Rustybara XMP provenance block.
 
 ### TUI
@@ -381,6 +388,10 @@ pipeline.save_page_image(0, path, &format, &config)?;       // → file
 // Page operations
 let new_pipeline = pipeline.extract_pages(&[0, 2, 4])?;    // → new pipeline
 let spreads      = pipeline.split_pages(panel_width_pts)?;  // → new pipeline
+let panels       = pipeline.split_pages_explicit(
+    &[261.0, 265.5, 265.5],
+    rustybara::pages::SplitAxis::Horizontal,
+)?;                                                        // → new pipeline
 let stitched     = pipeline.stitch_pages(spread_width_pts)?;// → new pipeline
 
 // Page inspection
@@ -699,6 +710,11 @@ To cut a new version:
 4. The workflow will build the Windows installer, the Linux tarball, both
    macOS tarballs (Apple silicon + Intel), and the Docker image, then create
    a GitHub Release with all artifacts and a `SHA256SUMS.txt` attached.
+
+Hyphenated compatibility-iteration tags such as `v0.2.0-1` create a prerelease
+containing only the `rbara` CLI/TUI installers and Docker image. The GUI and ICC
+packages are left at their existing versions. Tags without a hyphen continue to
+produce the full release suite.
 
 The pdfium chromium build is pinned via `PDFIUM_CHROMIUM` env var in the
 workflow (currently `7776`). Bump it there to refresh pdfium across all
