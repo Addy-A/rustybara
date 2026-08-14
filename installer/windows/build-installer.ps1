@@ -47,7 +47,12 @@ $cargoLines = Get-Content $CargoToml
 $versionLine = $cargoLines | Select-String -Pattern '^\s*version\s*=\s*"([^"]+)"' | Select-Object -First 1
 if (-not $versionLine) { throw "Could not find version in $CargoToml" }
 $AppVersion = $versionLine.Matches[0].Groups[1].Value
+$FileVersion = $AppVersion -replace '-', '.'
+if ($FileVersion -notmatch '^\d+(\.\d+){0,3}$') {
+    throw "Cannot convert rbara version '$AppVersion' to a numeric Windows file version."
+}
 Write-Host "    rbara version: $AppVersion"
+Write-Host "    Windows file version: $FileVersion"
 Write-Host "    pdfium chromium build: $PdfiumChromium"
 
 # --- 2. Build rbara release with static CRT ----------------------------------
@@ -114,7 +119,7 @@ Write-Host "    iscc: $iscc"
 
 # --- 5. Compile installer ----------------------------------------------------
 Write-Host '==> Compiling installer' -ForegroundColor Cyan
-cmd /c "`"$iscc`" `"/DAppVersion=$AppVersion`" `"/DPdfiumChromium=$PdfiumChromium`" `"$IssScript`" 2>&1"
+cmd /c "`"$iscc`" `"/DAppVersion=$AppVersion`" `"/DFileVersion=$FileVersion`" `"/DPdfiumChromium=$PdfiumChromium`" `"$IssScript`" 2>&1"
 if ($LASTEXITCODE -ne 0) { throw "iscc failed (exit $LASTEXITCODE)" }
 
 $Output = Join-Path $DistDir "rbara-setup-$AppVersion-x64.exe"

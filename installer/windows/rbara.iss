@@ -17,6 +17,9 @@
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
+#ifndef FileVersion
+  #define FileVersion AppVersion
+#endif
 #ifndef PdfiumChromium
   #define PdfiumChromium "unknown"
 #endif
@@ -33,7 +36,7 @@ AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#FileVersion}
 VersionInfoDescription=rbara prepress CLI/TUI (bundles pdfium chromium/{#PdfiumChromium})
 
 DefaultDirName={autopf}\rbara
