@@ -115,6 +115,11 @@ The [`rustybara-wasm`](rustybara-wasm/) crate and
 and a publish step. Unlocks browser/Node adoption and demos. Reuses the same core
 API, so it tracks core releases.
 
+The repository now builds and smoke-tests a typed Node package artifact on every
+WASM workflow run. Tags named `rustybara-wasm-v<version>` publish it to npm with
+provenance once the `NPM_TOKEN` repository secret is configured; the first registry
+release is the remaining distribution step.
+
 ### 7. Video tutorials (website) · 🟢 · Med
 Non-code, parallelizable, and a real adoption lever for a niche prepress tool. Lives
 in [`rustybara-website`](rustybara-website/). Cheap to start; the cost is content

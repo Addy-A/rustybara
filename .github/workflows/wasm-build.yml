@@ -24,9 +24,39 @@ jobs:
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
-      - name: Build wasm
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Build browser package
         working-directory: rustybara-wasm
         run: wasm-pack build --target web --out-dir pkg --release
+
+      - name: Build Node package
+        working-directory: rustybara-wasm
+        run: wasm-pack build --target nodejs --out-dir pkg-node --release
+
+      - name: Add package documentation and license
+        run: |
+          cp rustybara-wasm/README.md rustybara-wasm/pkg-node/README.md
+          cp LICENSE-LGPL-3.0 rustybara-wasm/pkg-node/LICENSE
+
+      - name: Test Node package
+        run: node rustybara-wasm/tests/node-smoke.cjs
+
+      - name: Pack npm tarball
+        run: |
+          mkdir -p rustybara-wasm/dist
+          npm pack ./rustybara-wasm/pkg-node --pack-destination ./rustybara-wasm/dist
+
+      - name: Upload npm package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustybara-wasm-npm
+          path: rustybara-wasm/dist/*.tgz
+          if-no-files-found: error
 
       - name: Checkout website repository
         uses: actions/checkout@v5

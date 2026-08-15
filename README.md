@@ -279,11 +279,13 @@ with no native dependencies.
 
 - `trim()` — strip content outside TrimBox
 - `resize(bleed_pts)` — expand page boxes by a bleed margin
+- `split_pages_explicit(panel_widths_pts, axis)` — split panels by exact widths
 - `remap_color(from, to, tolerance)` — substitute CMYK values in content streams
 - `to_pdf_bytes()` — serialize result as bytes for download or further processing
 
-Rasterization (pdfium), XMP embedding, object tree, and ICC color transforms (lcms2)
-require the native crate and are not available in the wasm build.
+Rasterization (pdfium), object tree rendering, and ICC color transforms (lcms2)
+require the native crate and are not available in the wasm build. XMP provenance
+metadata is supported by the WASM package.
 
 ### Browser quickstart
 
@@ -310,8 +312,28 @@ wasm-pack build --target web --out-dir pkg --release
 
 ### npm
 
-npm distribution coming soon. Pre-built artifacts are available via the
-[rustybara playground](https://rustybara.com/playground) on the marketing site.
+The Node.js package is built as `rustybara-wasm`, with generated TypeScript
+declarations and no native runtime dependency. After the first registry release:
+
+```sh
+npm install rustybara-wasm
+```
+
+```js
+const fs = require('node:fs')
+const { PanelAxis, PipelineHandle } = require('rustybara-wasm')
+
+const input = fs.readFileSync('input.pdf')
+const pdf = new PipelineHandle(input).split_pages_explicit(
+  Float64Array.from([261, 265.5, 265.5]),
+  PanelAxis.Vertical,
+)
+fs.writeFileSync('output.pdf', pdf.to_pdf_bytes())
+```
+
+See [`rustybara-wasm/README.md`](rustybara-wasm/README.md) for the complete Node
+API and local packaging instructions. The browser build remains available via the
+[rustybara playground](https://rustybara.com/playground).
 
 ---
 

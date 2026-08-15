@@ -1,6 +1,7 @@
+use rustybara::pages::SplitAxis;
+use rustybara::{DocumentColorKind, PdfPipeline};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
-use rustybara::{DocumentColorKind, PdfPipeline};
 
 #[wasm_bindgen(start)]
 pub fn init() {
@@ -28,6 +29,23 @@ struct XmpBlockJs {
     source_hash: String,
     parent_id: String,
     ops: Vec<String>,
+}
+
+/// Axis used by [`PipelineHandle::split_pages_explicit`].
+#[wasm_bindgen]
+#[derive(Clone, Copy)]
+pub enum PanelAxis {
+    Horizontal,
+    Vertical,
+}
+
+impl From<PanelAxis> for SplitAxis {
+    fn from(value: PanelAxis) -> Self {
+        match value {
+            PanelAxis::Horizontal => SplitAxis::Horizontal,
+            PanelAxis::Vertical => SplitAxis::Vertical,
+        }
+    }
 }
 
 /// In-browser PDF pipeline handle.
@@ -79,16 +97,23 @@ impl PipelineHandle {
 
     /// Substitute a CMYK color throughout content streams.
     /// All channel values are in the 0.0–1.0 range. Consumes the handle and returns a new one.
+    #[allow(clippy::too_many_arguments)]
     pub fn remap_color(
         mut self,
-        from_c: f64, from_m: f64, from_y: f64, from_k: f64,
-        to_c: f64,   to_m: f64,   to_y: f64,   to_k: f64,
+        from_c: f64,
+        from_m: f64,
+        from_y: f64,
+        from_k: f64,
+        to_c: f64,
+        to_m: f64,
+        to_y: f64,
+        to_k: f64,
         tolerance: f64,
     ) -> Result<PipelineHandle, JsValue> {
         self.inner
             .remap_color(
                 [from_c, from_m, from_y, from_k],
-                [to_c,   to_m,   to_y,   to_k],
+                [to_c, to_m, to_y, to_k],
                 tolerance,
             )
             .map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?;
@@ -98,7 +123,8 @@ impl PipelineHandle {
     /// Extract a subset of pages into a new handle. Page indices are zero-based.
     /// Out-of-range indices are silently ignored. Does not consume this handle.
     pub fn extract_pages(&self, page_nums: Vec<u32>) -> Result<PipelineHandle, JsValue> {
-        let inner = self.inner
+        let inner = self
+            .inner
             .extract_pages(&page_nums)
             .map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?;
         Ok(PipelineHandle { inner })
@@ -107,8 +133,27 @@ impl PipelineHandle {
     /// Split each wide page at `panel_width_pts` into left/right halves.
     /// Does not consume this handle; returns a new one containing the split pages.
     pub fn split_pages(&self, panel_width_pts: f64) -> Result<PipelineHandle, JsValue> {
-        let inner = self.inner
+        let inner = self
+            .inner
             .split_pages(panel_width_pts)
+            .map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?;
+        Ok(PipelineHandle { inner })
+    }
+
+    /// Split every page into explicitly sized panels.
+    ///
+    /// `panel_widths_pts` contains panel sizes in PDF points. The values must be
+    /// positive and their sum must match the page's TrimBox along `axis` within
+    /// half a point. Horizontal panels are emitted left-to-right; vertical
+    /// panels are emitted bottom-to-top. Does not consume this handle.
+    pub fn split_pages_explicit(
+        &self,
+        panel_widths_pts: Vec<f64>,
+        axis: PanelAxis,
+    ) -> Result<PipelineHandle, JsValue> {
+        let inner = self
+            .inner
+            .split_pages_explicit(&panel_widths_pts, axis.into())
             .map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?;
         Ok(PipelineHandle { inner })
     }
@@ -116,7 +161,8 @@ impl PipelineHandle {
     /// Stitch adjacent page pairs into spreads of `spread_width_pts`.
     /// Does not consume this handle; returns a new one containing the stitched spreads.
     pub fn stitch_pages(&self, spread_width_pts: f64) -> Result<PipelineHandle, JsValue> {
-        let inner = self.inner
+        let inner = self
+            .inner
             .stitch_pages(spread_width_pts)
             .map_err(|e| JsValue::from(js_sys::Error::new(&e.to_string())))?;
         Ok(PipelineHandle { inner })
@@ -136,9 +182,9 @@ impl PipelineHandle {
     pub fn detect_color_space(&self) -> String {
         match PdfPipeline::detect_color_space(self.inner.doc()) {
             DocumentColorKind::PureCMYK => "CMYK".to_string(),
-            DocumentColorKind::PureRGB  => "RGB".to_string(),
-            DocumentColorKind::Mixed    => "Mixed".to_string(),
-            DocumentColorKind::Unknown  => "Unknown".to_string(),
+            DocumentColorKind::PureRGB => "RGB".to_string(),
+            DocumentColorKind::Mixed => "Mixed".to_string(),
+            DocumentColorKind::Unknown => "Unknown".to_string(),
         }
     }
 
@@ -187,10 +233,7 @@ impl PipelineHandle {
         op_names: Vec<String>,
         op_params: Vec<String>,
     ) -> Result<PipelineHandle, JsValue> {
-        let pairs: Vec<(String, String)> = op_names
-            .into_iter()
-            .zip(op_params.into_iter())
-            .collect();
+        let pairs: Vec<(String, String)> = op_names.into_iter().zip(op_params).collect();
         let ops: Vec<(&str, &str)> = pairs
             .iter()
             .map(|(n, p)| (n.as_str(), p.as_str()))
@@ -213,8 +256,7 @@ impl PipelineHandle {
 mod tests {
     use super::*;
 
-    const PDF: &[u8] =
-        include_bytes!("../../rustybara/tests/fixtures/pdf_test_data_print_v2.pdf");
+    const PDF: &[u8] = include_bytes!("../../rustybara/tests/fixtures/pdf_test_data_print_v2.pdf");
 
     #[test]
     fn new_from_valid_bytes() {
@@ -261,9 +303,11 @@ mod tests {
     #[test]
     fn remap_color_succeeds() {
         let handle = PipelineHandle::new(PDF).unwrap();
-        assert!(handle
-            .remap_color(1.0, 1.0, 1.0, 1.0, 0.6, 0.4, 0.2, 1.0, 0.05)
-            .is_ok());
+        assert!(
+            handle
+                .remap_color(1.0, 1.0, 1.0, 1.0, 0.6, 0.4, 0.2, 1.0, 0.05)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -337,5 +381,25 @@ mod tests {
     fn outline_text_succeeds() {
         let handle = PipelineHandle::new(PDF).unwrap();
         assert!(handle.outline_text().is_ok());
+    }
+
+    #[test]
+    fn split_pages_explicit_horizontal_succeeds() {
+        let handle = PipelineHandle::new(PDF).unwrap();
+        let original_pages = handle.page_count();
+        let split = handle
+            .split_pages_explicit(vec![306.0, 306.0], PanelAxis::Horizontal)
+            .unwrap();
+        assert_eq!(split.page_count(), original_pages * 2);
+    }
+
+    #[test]
+    fn split_pages_explicit_vertical_succeeds() {
+        let handle = PipelineHandle::new(PDF).unwrap();
+        let original_pages = handle.page_count();
+        let split = handle
+            .split_pages_explicit(vec![261.0, 265.5, 265.5], PanelAxis::Vertical)
+            .unwrap();
+        assert_eq!(split.page_count(), original_pages * 3);
     }
 }
