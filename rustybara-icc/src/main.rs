@@ -83,8 +83,9 @@ fn main() {
     });
 
     println!(
-        "done: {} page(s), {} spot color(s) flattened → {}",
+        "done: {} page(s), {} image(s) converted, {} spot color(s) flattened → {}",
         report.pages_processed,
+        report.images_converted,
         report.spot_colors_flattened,
         output.display()
     );

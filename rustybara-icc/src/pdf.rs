@@ -13,14 +13,14 @@ use crate::transform::ColorTransform;
 /// # Fields
 ///
 /// * `pages_processed` — Number of pages visited by the converter
-/// * `images_converted` — Number of image XObjects whose pixel data was ICC-transformed (not yet implemented)
+/// * `images_converted` — Number of unique image XObjects whose pixel data was ICC-transformed
 /// * `spot_colors_flattened` — Number of Separation spot color uses flattened to device CMYK
 /// * `color_spaces_rewritten` — Number of color space resource dictionary entries rewritten (not yet implemented)
 /// * `warnings` — Non-fatal warnings encountered during conversion (e.g., skipped DeviceN color spaces)
 pub struct ConversionReport {
     /// Number of pages visited by the converter.
     pub pages_processed: u32,
-    /// Number of image XObjects whose pixel data was ICC-transformed (Phase 4c — not yet implemented).
+    /// Number of unique image XObjects whose pixel data was ICC-transformed.
     pub images_converted: u32,
     /// Number of `Separation` spot color uses flattened to device CMYK.
     pub spot_colors_flattened: u32,
@@ -84,6 +84,12 @@ impl<'a> PdfColorConverter<'a> {
     /// pre-pass followed by the ICC color transform to each page's content stream, and
     /// aggregates the results into a [`ConversionReport`].
     ///
+    /// Image conversion supports 8-bit device-color XObjects with raw or FlateDecode
+    /// samples and default Decode arrays. Shared images are converted once, including
+    /// images in Form resources. Other image encodings return an error. Form painting
+    /// operators, inline images, shadings, ICCBased resources and OutputIntents are not
+    /// rewritten; this is not yet a general whole-document color normalization pass.
+    ///
     /// **DeviceN limitation:** `DeviceN` color spaces (multi-channel inks, Hexachrome, etc.)
     /// are detected but not correctly flattened in this version. Their `scn`/`SCN` operators
     /// carry one tint value per ink channel, which the current single-channel tint evaluator
@@ -114,6 +120,9 @@ impl<'a> PdfColorConverter<'a> {
             color_spaces_rewritten: 0,
             warnings: Vec::new(),
         };
+        // Process shared images once for the document, not once for each page using them.
+        // Validate and prepare the image replacements before rewriting page content.
+        report.images_converted = convert_image_xobjects(self.doc, &self.transform)?;
         let page_ids: Vec<lopdf::ObjectId> = self.doc.get_pages().values().copied().collect();
 
         for page_id in page_ids {
@@ -125,10 +134,10 @@ impl<'a> PdfColorConverter<'a> {
         Ok(report)
     }
 
-    /// Convert a single page identified by its lopdf `ObjectId`.
+    /// Convert the painting operators in a single page's content streams.
     ///
     /// Returns the number of spot color uses flattened on this page.
-    /// Prefer [`Self::convert_document`] for whole-document conversion.
+    /// Use [`Self::convert_document`] to also convert image XObjects.
     pub fn convert_page(&mut self, page_id: lopdf::ObjectId) -> crate::Result<u32> {
         let content = self.doc.get_and_decode_page_content(page_id)?;
 
@@ -174,6 +183,182 @@ impl<'a> PdfColorConverter<'a> {
         }
         Ok(spots_counts)
     }
+}
+
+/// Convert image XObjects whose declared color space matches the transform input.
+///
+/// Supports 8-bit DeviceRGB/DeviceCMYK/DeviceGray, raw or FlateDecode data, and
+/// default Decode arrays. Unsupported image encodings return an error rather than
+/// silently producing a partially converted document. Masks are not color images.
+/// Image replacements are prepared before committing any of them.
+fn convert_image_xobjects(doc: &mut Document, transform: &ColorTransform) -> crate::Result<u32> {
+    let mut replacements = Vec::new();
+    for id in reachable_images(doc)? {
+        let image = doc.get_object(id)?.as_stream()?;
+        let fail = |reason: &str| crate::IccError::Image(format!("image {id:?}: {reason}"));
+        if image
+            .dict
+            .get(b"ImageMask")
+            .and_then(Object::as_bool)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let (_, cs) = doc.dereference(image.dict.get(b"ColorSpace")?)?;
+        let source = match cs.as_name().ok() {
+            Some(b"DeviceRGB") => ColorSpaceKind::Rgb,
+            Some(b"DeviceCMYK") => ColorSpaceKind::Cmyk,
+            Some(b"DeviceGray") => ColorSpaceKind::Gray,
+            _ => {
+                return Err(fail(
+                    "only device color spaces are supported for image conversion",
+                ));
+            }
+        };
+        if &source != transform.input_color_space() {
+            continue;
+        }
+        if image.dict.get(b"BitsPerComponent")?.as_i64()? != 8 {
+            return Err(fail("only 8-bit image samples are supported"));
+        }
+        // Color-key masks and premultiplied soft masks depend on the original samples.
+        if let Ok(mask) = image.dict.get(b"Mask") {
+            if doc.dereference(mask)?.1.as_array().is_ok() {
+                return Err(fail("color-key masks require separate conversion"));
+            }
+        }
+        if let Ok(mask) = image.dict.get(b"SMask") {
+            if let Object::Stream(mask) = doc.dereference(mask)?.1 {
+                if mask.dict.get(b"Matte").is_ok() {
+                    return Err(fail("premultiplied soft masks require separate conversion"));
+                }
+            }
+        }
+        if let Ok(decode) = image.dict.get(b"Decode") {
+            let decode = doc.dereference(decode)?.1.as_array()?;
+            let default = decode.len() == transform.src_channels() * 2
+                && decode
+                    .iter()
+                    .enumerate()
+                    .all(|(i, value)| value.as_float().is_ok_and(|v| v == (i % 2) as f32));
+            if !default {
+                return Err(fail(
+                    "non-default Decode arrays require separate conversion",
+                ));
+            }
+        }
+        // lopdf 0.40 only interprets a direct DecodeParms dictionary. Reject other
+        // representations and predictors here instead of silently ignoring them.
+        if let Ok(params) = image.dict.get(b"DecodeParms") {
+            let params = params
+                .as_dict()
+                .map_err(|_| fail("unsupported DecodeParms representation"))?;
+            if let Ok(predictor) = params.get(b"Predictor") {
+                if predictor.as_i64()? != 1 {
+                    return Err(fail("image predictors are not supported yet"));
+                }
+            }
+        }
+        if image.dict.get(b"Filter").is_ok() {
+            let filters = image.filters()?;
+            if !(filters.is_empty() || filters == [b"FlateDecode".as_slice()]) {
+                return Err(fail(
+                    "only unfiltered or single FlateDecode image streams are supported",
+                ));
+            }
+        }
+        let width = usize::try_from(image.dict.get(b"Width")?.as_i64()?)
+            .map_err(|_| fail("invalid image width"))?;
+        let height = usize::try_from(image.dict.get(b"Height")?.as_i64()?)
+            .map_err(|_| fail("invalid image height"))?;
+        let count = width
+            .checked_mul(height)
+            .filter(|n| *n > 0)
+            .ok_or_else(|| fail("invalid image dimensions"))?;
+        let expected = count
+            .checked_mul(transform.src_channels())
+            .ok_or_else(|| fail("image sample count overflow"))?;
+        count
+            .checked_mul(transform.dst_channels())
+            .ok_or_else(|| fail("output sample count overflow"))?;
+        let pixels = image.get_plain_content()?;
+        if pixels.len() != expected {
+            return Err(fail(&format!(
+                "expected {expected} sample bytes, got {}",
+                pixels.len()
+            )));
+        }
+        let destination = match transform.output_color_space() {
+            ColorSpaceKind::Rgb => "DeviceRGB",
+            ColorSpaceKind::Cmyk => "DeviceCMYK",
+            ColorSpaceKind::Gray => "DeviceGray",
+            _ => return Err(fail("unsupported destination image color space")),
+        };
+        let mut converted = image.clone();
+        converted.set_plain_content(transform.convert(&pixels));
+        converted.dict.set("ColorSpace", destination);
+        converted.dict.remove(b"Decode");
+        converted.compress()?;
+        replacements.push((id, converted));
+    }
+    let count = u32::try_from(replacements.len())
+        .map_err(|_| crate::IccError::Image("too many image XObjects".into()))?;
+    for (id, image) in replacements {
+        doc.objects.insert(id, Object::Stream(image));
+    }
+    Ok(count)
+}
+
+/// Find resource-reachable images, including nested forms, once per object ID.
+/// Page Resources are inherited as a whole from the nearest ancestor.
+fn reachable_images(doc: &Document) -> crate::Result<std::collections::BTreeSet<lopdf::ObjectId>> {
+    use std::collections::BTreeSet;
+    let mut resources = Vec::new();
+    for page in doc.get_pages().values() {
+        let mut owner = *page;
+        let mut ancestors = BTreeSet::new();
+        loop {
+            if !ancestors.insert(owner) {
+                return Err(lopdf::Error::ReferenceCycle(owner).into());
+            }
+            let dict = doc.get_dictionary(owner)?;
+            if let Ok(resource) = dict.get(b"Resources") {
+                resources.push(doc.dereference(resource)?.1.as_dict()?);
+                break;
+            }
+            match dict.get(b"Parent") {
+                Ok(parent) => owner = parent.as_reference()?,
+                Err(_) => break,
+            }
+        }
+    }
+    let mut visited = BTreeSet::new();
+    let mut images = BTreeSet::new();
+    while let Some(resource) = resources.pop() {
+        let Ok(xobjects) = resource.get(b"XObject") else {
+            continue;
+        };
+        for (_, object) in doc.dereference(xobjects)?.1.as_dict()?.iter() {
+            let (id, object) = doc.dereference(object)?;
+            let id = id.ok_or_else(|| crate::IccError::Image("XObject must be indirect".into()))?;
+            if !visited.insert(id) {
+                continue;
+            }
+            let stream = object.as_stream()?;
+            match stream.dict.get(b"Subtype")?.as_name()? {
+                b"Image" => {
+                    images.insert(id);
+                }
+                b"Form" => {
+                    if let Ok(resource) = stream.dict.get(b"Resources") {
+                        resources.push(doc.dereference(resource)?.1.as_dict()?);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(images)
 }
 
 /// Flattens all `Separation` spot color uses to their device CMYK alternates across the
@@ -287,7 +472,7 @@ pub fn flatten_spot_colors(
                         continue;
                     };
                     let first = arr.first().and_then(|o| o.as_name().ok());
-                    if first == Some(b"Separation") || first == Some(b"DeviceN") {
+                    if first == Some(b"Separation") {
                         names.insert(String::from_utf8_lossy(name).to_string());
                     }
                 }
@@ -398,7 +583,7 @@ pub fn find_spot_colorspaces(doc: &Document) -> Vec<(String, String)> {
     spots
 }
 
-/// Deletes the `Separation`/`DeviceN` color space entries named in `spot_names` from the
+/// Deletes the `Separation` color space entries named in `spot_names` from the
 /// `/ColorSpace` subdictionary of `owner_id`'s resources.
 ///
 /// Run this *after* the matching `cs`/`scn` operators have been flattened to device CMYK so
@@ -448,9 +633,31 @@ fn remove_spot_colorspaces(
         _ => None,
     };
 
+    // DeviceN operators are preserved, so their definitions must also survive.
+    let removable: Vec<String> = resources_dict
+        .get(b"ColorSpace")
+        .ok()
+        .and_then(|cs| doc.dereference(cs).ok())
+        .and_then(|(_, cs)| cs.as_dict().ok())
+        .map(|cs| {
+            spot_names
+                .iter()
+                .filter(|name| {
+                    cs.get(name.as_bytes())
+                        .ok()
+                        .and_then(|value| doc.dereference(value).ok())
+                        .and_then(|(_, value)| value.as_array().ok())
+                        .and_then(|array| array.first())
+                        .and_then(|first| first.as_name().ok())
+                        == Some(b"Separation")
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
     let strip = |cs: &mut lopdf::Dictionary| -> u32 {
         let mut removed = 0;
-        for name in spot_names {
+        for name in &removable {
             if cs.remove(name.as_bytes()).is_some() {
                 removed += 1;
             }
@@ -1654,8 +1861,14 @@ mod tests {
         let removed = remove_spot_colorspaces(&mut doc, page_id, &spot_set(&["CS1", "DN1"]));
         assert_eq!(removed, 1, "only the Separation entry should be removed");
         let keys = page_colorspace_keys(&doc, page_id);
-        assert!(!keys.contains(&"CS1".to_string()), "Separation must be removed");
-        assert!(keys.contains(&"DN1".to_string()), "DeviceN metadata must survive");
+        assert!(
+            !keys.contains(&"CS1".to_string()),
+            "Separation must be removed"
+        );
+        assert!(
+            keys.contains(&"DN1".to_string()),
+            "DeviceN metadata must survive"
+        );
     }
 
     // ── flatten_spot_colors end-to-end metadata removal ───────────────────────
